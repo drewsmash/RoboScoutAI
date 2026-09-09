@@ -1,4 +1,4 @@
-from ramscout.updater import is_newer, normalize_version, preferred_asset_names, version_tuple
+from ramscout.updater import check_for_update, is_newer, normalize_version, preferred_asset_names, version_tuple
 
 
 def test_normalize_version_strips_v_prefix():
@@ -22,3 +22,33 @@ def test_preferred_assets_include_windows_or_mac(monkeypatch):
     assert "RamScoutAI-windows-x64.exe" in preferred_asset_names()
     monkeypatch.setattr("ramscout.updater.platform_key", lambda: "macos-arm64")
     assert "RamScoutAI-macos-arm64.zip" in preferred_asset_names()
+
+
+def test_missing_release_explains_next_step(monkeypatch):
+    class FakeResp:
+        status_code = 404
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr("ramscout.updater.httpx.Client", FakeClient)
+    info = check_for_update("0.4.0")
+    assert info.available is False
+    assert "published yet" in (info.error or "").lower()
+    assert "releases" in (info.release_url or "")
