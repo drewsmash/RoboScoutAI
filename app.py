@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,8 +22,9 @@ from ramscout.pipeline import (
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
+_UPLOAD_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
 
-app = FastAPI(title="RamScoutAI", version="0.2.0")
+app = FastAPI(title="RamScoutAI", version="0.3.0")
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
@@ -59,19 +61,24 @@ def game_config(year: int | None = None) -> dict:
     return public_game(year)
 
 
+def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
+    if crop_bottom <= crop_top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
+    top = min(max(crop_top, 0.0), 0.45)
+    bottom = min(max(crop_bottom, 0.5), 1.0)
+    if bottom <= top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
+    return top, bottom
+
+
 @app.post("/api/jobs")
 def create_job(body: StartRequest) -> dict:
     if body.demo:
         job = start_job(url=body.url or "demo://sample", demo=True, tba_key=body.tba_key)
         return job.public()
     if not body.url.strip():
-        raise HTTPException(400, "Paste a YouTube match video URL.")
-    if body.crop_bottom <= body.crop_top:
-        raise HTTPException(400, "Crop bottom must be below crop top.")
-    top = min(max(body.crop_top, 0.0), 0.45)
-    bottom = min(max(body.crop_bottom, 0.5), 1.0)
-    if bottom <= top:
-        raise HTTPException(400, "Crop bottom must be below crop top.")
+        raise HTTPException(400, "Paste a YouTube match video URL or upload a local file.")
+    top, bottom = _normalize_crop(body.crop_top, body.crop_bottom)
     job = start_job(
         url=body.url.strip(),
         tba_key=body.tba_key.strip() or os.environ.get("TBA_AUTH_KEY", ""),
@@ -80,6 +87,47 @@ def create_job(body: StartRequest) -> dict:
         crop_top=top,
         crop_bottom=bottom,
     )
+    return job.public()
+
+
+@app.post("/api/jobs/upload")
+async def create_job_upload(
+    file: UploadFile = File(...),
+    url: str = Form(""),
+    tba_key: str = Form(""),
+    event_key: str = Form(""),
+    match_key: str = Form(""),
+    crop_top: float = Form(0.10),
+    crop_bottom: float = Form(0.65),
+) -> dict:
+    """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
+    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in _UPLOAD_SUFFIXES:
+        raise HTTPException(400, "Upload an mp4/mkv/webm/mov match video.")
+    top, bottom = _normalize_crop(crop_top, crop_bottom)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = Path(tmp.name)
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+    meta_url = (url or "").strip() or f"file://{tmp_path}"
+    try:
+        job = start_job(
+            url=meta_url,
+            tba_key=(tba_key or "").strip() or os.environ.get("TBA_AUTH_KEY", ""),
+            event_key=(event_key or "").strip(),
+            match_key=(match_key or "").strip(),
+            crop_top=top,
+            crop_bottom=bottom,
+            local_video=tmp_path,
+        )
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return job.public()
 
 

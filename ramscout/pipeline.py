@@ -18,7 +18,7 @@ from ramscout.firstevents import resolve_firstevents
 from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import assign_by_start, majority_alliance, stitch_occlusions
-from ramscout.ingest import download_video, fetch_video_info
+from ramscout.ingest import download_video, fetch_video_info, store_uploaded_video
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
 from ramscout.titles import TitleHints, parse_match_title
@@ -170,6 +170,7 @@ def start_job(
     demo: bool = False,
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
+    local_video: Path | str | None = None,
 ) -> Job:
     job = STORE.create(
         url=url,
@@ -180,6 +181,10 @@ def start_job(
         crop_top=float(crop_top),
         crop_bottom=float(crop_bottom),
     )
+    if local_video:
+        dest = DATA / job.id
+        stored = store_uploaded_video(Path(local_video), dest)
+        STORE.update(job, video_path=str(stored))
     thread = threading.Thread(target=_run_job, args=(job.id,), daemon=True)
     thread.start()
     return job
@@ -293,18 +298,23 @@ def _run_real(job: Job) -> None:
             video_match["event_key"] = fe.get("event_key") or video_match.get("event_key")
             STORE.update(job, match=video_match)
 
-    STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
     dest = DATA / job.id
-    def dl_progress(message: str, pct: float) -> None:
-        STORE.set_progress(job, "downloading", message, 25 + pct * 0.25)
+    if job.video_path and Path(job.video_path).is_file():
+        STORE.set_progress(job, "downloading", "Using uploaded match video…", 45)
+        video_path = Path(job.video_path)
+    else:
+        STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
 
-    try:
-        video_path = download_video(job.url, dest, on_progress=dl_progress)
-    except Exception as exc:  # noqa: BLE001
-        # Keep scoreboard metadata even when YouTube blocks the file download.
-        STORE.update(job, match=video_match, game=public_game(hints.year))
-        raise RuntimeError(str(exc)) from exc
-    STORE.update(job, video_path=str(video_path))
+        def dl_progress(message: str, pct: float) -> None:
+            STORE.set_progress(job, "downloading", message, 25 + pct * 0.25)
+
+        try:
+            video_path = download_video(job.url, dest, on_progress=dl_progress)
+        except Exception as exc:  # noqa: BLE001
+            # Keep scoreboard metadata even when YouTube blocks the file download.
+            STORE.update(job, match=video_match, game=public_game(hints.year))
+            raise RuntimeError(str(exc)) from exc
+        STORE.update(job, video_path=str(video_path))
 
     STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 52)
     reading = read_overlay_from_video(video_path, existing=reading, year=hints.year or reading.year)

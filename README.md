@@ -30,7 +30,16 @@ For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project f
 
 A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
-If YouTube returns a bot / sign-in check (common on cloud VMs), export cookies from a signed-in browser to a Netscape `cookies.txt` and set `YTDLP_COOKIES=/path/to/cookies.txt`, or run the app on your laptop where `yt-dlp` can use browser cookies. Title metadata still loads via oEmbed when the download is blocked.
+### YouTube download (bot checks)
+
+Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI now tries several download paths:
+
+1. **yt-dlp** with modern player clients (`tv`, `mweb`, …) and the **WebPoClient PO-token** plugin (`yt-dlp-getpot-wpc`) when Chrome/Chromium is available  
+2. Your **`YTDLP_PROXY`** / `HTTPS_PROXY` residential proxy (recommended for servers)  
+3. An optional **auto-proxy ladder** (`YTDLP_AUTO_PROXY=1`, default on) for flaky public HTTP proxies when everything else is blocked  
+4. **Upload a local VOD** in the UI (or pass a local file path) — skips YouTube entirely
+
+Also supported: `YTDLP_COOKIES=/path/to/cookies.txt` or `YTDLP_BROWSER=chrome` on a signed-in machine. Title metadata still loads via oEmbed when the file download is blocked.
 
 ## Next year’s game
 

@@ -59,6 +59,27 @@ def test_analyze_requires_url():
     assert res.status_code == 400
 
 
+def test_upload_job_accepts_local_video(tmp_path):
+    # Tiny non-media payload is enough to exercise the upload route; the job will
+    # later fail OpenCV decode, which still proves multipart ingest works.
+    video = tmp_path / "match.mp4"
+    video.write_bytes(b"not-a-real-mp4")
+    with video.open("rb") as fh:
+        res = client.post(
+            "/api/jobs/upload",
+            data={
+                "url": "https://youtu.be/m9uLAGKtenM",
+                "crop_top": "0.10",
+                "crop_bottom": "0.65",
+            },
+            files={"file": ("match.mp4", fh, "video/mp4")},
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"]
+    assert body["status"] in {"queued", "resolving", "downloading", "error", "ready"}
+
+
 def test_crop_bottom_must_exceed_top():
     res = client.post("/api/jobs", json={"url": "https://youtu.be/dQw4w9WgXcQ", "crop_top": 0.6, "crop_bottom": 0.5})
     assert res.status_code == 400

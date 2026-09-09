@@ -125,6 +125,7 @@ body::before {
 input[type="url"],
 input[type="password"],
 input[type="text"],
+input[type="file"],
 input:not([type]) {
   width: 100%;
   background: var(--bg);
@@ -134,6 +135,10 @@ input:not([type]) {
   padding: 12px 16px;
   font: 500 15px var(--font-body);
   outline: none;
+}
+input[type="file"] {
+  border-radius: 14px;
+  padding: 10px 12px;
 }
 input:focus {
   border-color: var(--primary);

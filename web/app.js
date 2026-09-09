@@ -80,6 +80,8 @@ function saveTbaKey() {
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   saveTbaKey();
+  const fileInput = $("video-file");
+  const file = fileInput?.files?.[0] || null;
   await createJob({
     url: $("url").value.trim(),
     tba_key: $("tba-key").value.trim(),
@@ -88,6 +90,7 @@ $("start-form").addEventListener("submit", async (event) => {
     crop_top: Number($("crop-top").value || 0.1),
     crop_bottom: Number($("crop-bottom").value || 0.65),
     demo: false,
+    file,
   });
 });
 
@@ -163,11 +166,25 @@ $("cal-canvas").addEventListener("click", async (event) => {
 });
 
 async function createJob(payload) {
-  const res = await fetch("/api/jobs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let res;
+  if (payload.file) {
+    const form = new FormData();
+    form.append("file", payload.file);
+    form.append("url", payload.url || "");
+    form.append("tba_key", payload.tba_key || "");
+    form.append("event_key", payload.event_key || "");
+    form.append("match_key", payload.match_key || "");
+    form.append("crop_top", String(payload.crop_top ?? 0.1));
+    form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
+    res = await fetch("/api/jobs/upload", { method: "POST", body: form });
+  } else {
+    const { file: _file, ...body } = payload;
+    res = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Could not start job." }));
     alert(err.detail || "Could not start job.");

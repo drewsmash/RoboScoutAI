@@ -43,6 +43,10 @@
         <span>YouTube match video</span>
         <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
       </label>
+      <label class="field grow">
+        <span>Or upload a downloaded VOD</span>
+        <input id="video-file" name="video_file" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv" />
+      </label>
       <div class="composer-row">
         <label class="field">
           <span>TBA auth key</span>
@@ -76,7 +80,7 @@
           </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Scores come from the broadcast overlay when possible. Action counts are motion estimates. A robot-trained YOLO `.pt` is needed for tracking; TBA is optional for nicknames.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. If YouTube blocks the cloud download, upload the file you already saved, or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
   </section>
 
