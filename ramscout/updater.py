@@ -70,11 +70,14 @@ def preferred_asset_names() -> list[str]:
     if key.startswith("macos"):
         names = [
             f"RamScoutAI-{key}.zip",
+            "RamScoutAI-macos-arm64.zip",
             "RamScoutAI-macos.zip",
             "RamScoutAI-macos-universal.zip",
         ]
-        if key == "macos-arm64":
-            names.append("RamScoutAI-macos-x64.zip")
+        if key == "macos-x64":
+            # Intel Macs can fall back to the arm64 zip note in release notes;
+            # prefer any published mac zip.
+            names.extend(["RamScoutAI-macos-x64.zip"])
         return names
     return [f"RamScoutAI-{key}.tar.gz", "RamScoutAI-linux.tar.gz"]
 

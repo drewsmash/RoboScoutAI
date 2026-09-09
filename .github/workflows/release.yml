@@ -7,12 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to build (e.g. v0.4.1). Leave empty to use the pushed tag / create a draft from the current version."
+        description: "Version tag to build (e.g. v0.4.2). Leave empty to use the pushed tag / create a draft from the current version."
         required: false
         default: ""
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -22,15 +26,9 @@ jobs:
         include:
           - os: windows-latest
             artifact: RamScoutAI-windows-x64.exe
-            optional: false
           - os: macos-14
             artifact: RamScoutAI-macos-arm64.zip
-            optional: false
-          - os: macos-13
-            artifact: RamScoutAI-macos-x64.zip
-            optional: true
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.optional }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,7 +55,7 @@ jobs:
           Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
 
       - name: Package macOS zip
-        if: runner.os == 'macOS'
+        if: runner.os == 'MacOS' || runner.os == 'macOS'
         run: |
           mkdir -p dist/release
           cd dist
@@ -73,7 +71,6 @@ jobs:
 
   publish:
     needs: build
-    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -104,8 +101,8 @@ jobs:
           mkdir -p out
           find release-assets -type f -print -exec cp {} out/ \;
           ls -lah out
-          # Require at least Windows or one macOS build.
-          test -n "$(ls -A out 2>/dev/null)" || (echo "No desktop artifacts were produced" && exit 1)
+          test -f out/RamScoutAI-windows-x64.exe
+          test -f out/RamScoutAI-macos-arm64.zip
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -115,5 +112,12 @@ jobs:
           draft: false
           generate_release_notes: true
           files: out/*
+          body: |
+            Desktop builds for RamScoutAI.
+
+            - **Windows:** download `RamScoutAI-windows-x64.exe` and run it
+            - **Mac (Apple Silicon):** download `RamScoutAI-macos-arm64.zip`, unzip, then run `./RamScoutAI`
+
+            The in-app updater checks this release for newer versions.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
