@@ -741,8 +741,6 @@ function escapeHtml(value) {
 }
 
 loadTbaKey();
-initUpdater();
-initScoutTools();
 fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGame({
   year: 2026,
   name: "REBUILT",
@@ -1112,4 +1110,7 @@ async function initUpdater() {
   refresh(false);
   setInterval(() => refresh(false), 30 * 60 * 1000);
 }
+
+initUpdater();
+initScoutTools();
 drawField();
