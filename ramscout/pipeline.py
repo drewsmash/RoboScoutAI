@@ -1,0 +1,366 @@
+"""End-to-end job orchestration for a YouTube match VOD."""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+from ramscout.detect import find_local_model, save_jpeg, track_video
+from ramscout.events import Pose, build_cards, detect_events
+from ramscout.geometry import default_source_points, homography_from_corners
+from ramscout.identity import assign_by_start, majority_alliance
+from ramscout.ingest import download_video, fetch_video_info
+from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
+from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
+from ramscout.titles import parse_match_title
+
+log = logging.getLogger(__name__)
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "data" / "jobs"
+
+
+ProgressFn = Callable[[str, float], None]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class Job:
+    id: str
+    url: str
+    created_at: str
+    status: str = "queued"
+    progress: float = 0.0
+    message: str = "Waiting to start…"
+    error: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    video_info: dict[str, Any] | None = None
+    match: dict[str, Any] | None = None
+    assignments: dict[str, str] = field(default_factory=dict)
+    src_points: list[list[float]] | None = None
+    samples: list[dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    cards: list[dict[str, Any]] = field(default_factory=list)
+    frame_size: list[int] = field(default_factory=lambda: [1280, 720])
+    used_model: bool = False
+    demo: bool = False
+    tba_key: str = ""
+    event_key: str = ""
+    match_key: str = ""
+    video_path: str | None = None
+    frame_path: str | None = None
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "url": self.url,
+            "created_at": self.created_at,
+            "status": self.status,
+            "progress": self.progress,
+            "message": self.message,
+            "error": self.error,
+            "warnings": self.warnings,
+            "video_info": self.video_info,
+            "match": _public_match(self.match),
+            "assignments": self.assignments,
+            "src_points": self.src_points,
+            "samples": self.samples,
+            "events": self.events,
+            "cards": self.cards,
+            "frame_size": self.frame_size,
+            "used_model": self.used_model,
+            "demo": self.demo,
+            "has_video": bool(self.video_path),
+            "has_frame": bool(self.frame_path),
+        }
+
+
+def _public_match(match: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not match:
+        return None
+    copy = dict(match)
+    copy.pop("zebra", None)
+    return copy
+
+
+class JobStore:
+    def __init__(self) -> None:
+        self._jobs: dict[str, Job] = {}
+        self._lock = threading.Lock()
+
+    def create(self, **kwargs: Any) -> Job:
+        job = Job(id=uuid.uuid4().hex[:12], created_at=_now(), **kwargs)
+        with self._lock:
+            self._jobs[job.id] = job
+        (DATA / job.id).mkdir(parents=True, exist_ok=True)
+        return job
+
+    def get(self, job_id: str) -> Job | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def update(self, job: Job, **kwargs: Any) -> None:
+        with self._lock:
+            for key, value in kwargs.items():
+                setattr(job, key, value)
+
+    def set_progress(self, job: Job, status: str, message: str, progress: float) -> None:
+        self.update(job, status=status, message=message, progress=progress)
+
+
+STORE = JobStore()
+
+
+def start_job(
+    url: str,
+    tba_key: str = "",
+    event_key: str = "",
+    match_key: str = "",
+    demo: bool = False,
+) -> Job:
+    job = STORE.create(url=url, tba_key=tba_key, event_key=event_key, match_key=match_key, demo=demo)
+    thread = threading.Thread(target=_run_job, args=(job.id,), daemon=True)
+    thread.start()
+    return job
+
+
+def apply_calibration(job: Job, src_points: list[list[float]]) -> Job:
+    STORE.update(job, src_points=src_points)
+    _reproject_and_scout(job)
+    return job
+
+
+def apply_assignments(job: Job, assignments: dict[str, str]) -> Job:
+    merged = dict(job.assignments)
+    merged.update({str(k): str(v) for k, v in assignments.items()})
+    STORE.update(job, assignments=merged)
+    _reproject_and_scout(job)
+    return job
+
+
+def _run_job(job_id: str) -> None:
+    job = STORE.get(job_id)
+    if job is None:
+        return
+    try:
+        if job.demo:
+            _run_demo(job)
+            return
+        _run_real(job)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Job %s failed", job_id)
+        STORE.update(job, status="error", error=str(exc), message=str(exc), progress=0)
+
+
+def _run_demo(job: Job) -> None:
+    STORE.set_progress(job, "resolving", "Loading sample match…", 15)
+    STORE.update(job, video_info=DEMO_VIDEO, match=DEMO_MATCH)
+    STORE.set_progress(job, "scouting", "Building robot paths…", 70)
+    samples = demo_tracks()
+    assignments = {str(s["track_id"]): s["team"] for s in samples}
+    STORE.update(job, samples=samples, assignments=assignments, used_model=False, warnings=[
+        "Sample match — paths are simulated so you can explore the UI without a YouTube download."
+    ])
+    _reproject_and_scout(job)
+    STORE.set_progress(job, "ready", "Sample match is ready.", 100)
+
+
+def _run_real(job: Job) -> None:
+    STORE.set_progress(job, "resolving", "Reading YouTube metadata…", 8)
+    info = fetch_video_info(job.url)
+    STORE.update(job, video_info=info)
+    if info.get("is_live"):
+        raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
+
+    hints = parse_match_title(info.get("title") or "", job.url)
+    tba_key = job.tba_key.strip()
+    match_payload = None
+    if tba_key:
+        STORE.set_progress(job, "resolving", "Looking up the match on The Blue Alliance…", 18)
+        try:
+            with TBAClient(tba_key) as client:
+                found = resolve_match(client, hints, event_key=job.event_key or None, match_key=job.match_key or None)
+                if found:
+                    match_payload = enrich_match(client, found)
+                else:
+                    job.warnings.append("TBA could not match this video to an event. Enter an event/match key and re-run.")
+        except TBAError as exc:
+            job.warnings.append(str(exc))
+    else:
+        job.warnings.append("No TBA key — team names and official scores will be missing until you add one.")
+
+    STORE.update(job, match=match_payload)
+
+    STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
+    dest = DATA / job.id
+    def dl_progress(message: str, pct: float) -> None:
+        STORE.set_progress(job, "downloading", message, 25 + pct * 0.25)
+
+    video_path = download_video(job.url, dest, on_progress=dl_progress)
+    STORE.update(job, video_path=str(video_path))
+
+    STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
+    model = find_local_model([ROOT, ROOT / "models", Path.cwd()])
+    team_numbers = []
+    if match_payload:
+        team_numbers = [str(v["team_number"]) for v in match_payload.get("teams", {}).values()]
+
+    def track_progress(message: str, pct: float) -> None:
+        STORE.set_progress(job, "tracking", message, 55 + pct * 0.3)
+
+    result = track_video(
+        video_path,
+        src_points=job.src_points,
+        model_path=str(model) if model else None,
+        team_numbers=team_numbers or None,
+        frame_stride=5,
+        on_progress=track_progress,
+    )
+    frame_path = dest / "calibration.jpg"
+    save_jpeg(result["first_frame"], frame_path)
+    samples = result["samples"]
+    warnings = list(job.warnings) + list(result.get("warnings") or [])
+    if not model:
+        warnings.append("No robot detector weights found. Add a .pt file (robot-trained YOLO) to the project folder.")
+
+    blue, red = _alliance_teams(match_payload)
+    assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
+    # Prefer OCR team labels when present.
+    for sample in samples:
+        if sample.get("team"):
+            assignments[str(sample["track_id"])] = str(sample["team"])
+
+    src_points = job.src_points
+    if src_points is None:
+        fw, fh = result["frame_size"]
+        src_points = default_source_points(fw, fh).tolist()
+
+    STORE.update(
+        job,
+        samples=samples,
+        assignments=assignments,
+        warnings=warnings,
+        used_model=bool(result.get("used_model")),
+        frame_size=result.get("frame_size") or [1280, 720],
+        frame_path=str(frame_path),
+        src_points=src_points,
+    )
+    _reproject_and_scout(job)
+    STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
+
+
+def _reproject_and_scout(job: Job) -> None:
+    samples = list(job.samples)
+    if job.src_points and samples and job.video_path:
+        try:
+            H = homography_from_corners(job.src_points)
+            # Samples already live in field space from the original homography.
+            # Recalibration is applied only when the caller also re-runs tracking.
+            _ = H
+        except Exception as exc:  # noqa: BLE001
+            job.warnings.append(f"Calibration ignored: {exc}")
+
+    for sample in samples:
+        tid = str(sample.get("track_id"))
+        if tid in job.assignments:
+            sample["team"] = job.assignments[tid]
+
+    if not any(s.get("team") for s in samples) and job.match:
+        blue, red = _alliance_teams(job.match)
+        guessed = assign_by_start(samples, blue, red)
+        STORE.update(job, assignments={str(k): v for k, v in guessed.items()})
+        for sample in samples:
+            tid = int(sample["track_id"])
+            if tid in guessed:
+                sample["team"] = guessed[tid]
+
+    poses: list[Pose] = []
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for sample in samples:
+        grouped.setdefault(int(sample["track_id"]), []).append(sample)
+    for tid, group in grouped.items():
+        alliance = majority_alliance(group)
+        team = str(group[0].get("team") or job.assignments.get(str(tid)) or f"T{tid}")
+        for sample in group:
+            sample["alliance"] = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else alliance
+            sample["team"] = team
+            poses.append(
+                Pose(
+                    t=float(sample["t"]),
+                    x=float(sample["x"]),
+                    y=float(sample["y"]),
+                    team=team,
+                    alliance=sample["alliance"],
+                    track_id=tid,
+                )
+            )
+
+    nicknames = {}
+    if job.match:
+        for info in job.match.get("teams", {}).values():
+            nicknames[str(info.get("team_number"))] = info.get("nickname") or ""
+
+    events = detect_events(poses)
+    cards = build_cards(poses, events, nicknames=nicknames)
+    STORE.update(
+        job,
+        samples=samples,
+        events=[e.as_dict() for e in events],
+        cards=[c.as_dict() for c in cards],
+        status="ready" if job.status in {"ready", "scouting", "tracking"} else job.status,
+    )
+    _persist(job)
+
+
+def _alliance_teams(match: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    if not match:
+        return [], []
+    alliances = match.get("alliances") or {}
+    def nums(color: str) -> list[str]:
+        keys = alliances.get(color, {}).get("team_keys") or []
+        return [k.replace("frc", "") for k in keys]
+    return nums("blue"), nums("red")
+
+
+def _persist(job: Job) -> None:
+    dest = DATA / job.id / "result.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = job.public()
+    dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def export_csv(job: Job) -> str:
+    lines = ["team,alliance,nickname,hub_score_candidates,defense_time_s,climb_attempt,collection_time_s,path_length_in,avg_speed_in_s"]
+    for card in job.cards:
+        lines.append(
+            ",".join(
+                [
+                    str(card.get("team", "")),
+                    str(card.get("alliance", "")),
+                    json.dumps(card.get("nickname") or ""),
+                    str(card.get("hub_score_candidates", 0)),
+                    str(card.get("defense_time_s", 0)),
+                    str(card.get("climb_attempt", False)),
+                    str(card.get("collection_time_s", 0)),
+                    str(card.get("path_length_in", 0)),
+                    str(card.get("avg_speed_in_s", 0)),
+                ]
+            )
+        )
+    lines.append("")
+    lines.append("team,type,t,zone,confidence,detail")
+    for event in job.events:
+        detail = json.dumps(event.get("detail") or "")
+        lines.append(
+            f"{event.get('team')},{event.get('type')},{event.get('t')},{event.get('zone')},{event.get('confidence')},{detail}"
+        )
+    return "\n".join(lines) + "\n"
