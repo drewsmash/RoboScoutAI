@@ -145,6 +145,22 @@ input:focus {
   margin-top: 16px;
   flex-wrap: wrap;
 }
+.advanced {
+  margin-top: 14px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+.advanced summary { cursor: pointer; color: var(--ink-faint); }
+.advanced .composer-row { grid-template-columns: 1fr 1fr; }
+.broadcast-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.assign-field { min-width: 140px; }
+.assign-field select {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+}
 .hint {
   color: var(--ink-faint);
   font-size: 12px;
@@ -396,6 +412,7 @@ video, #cal-canvas {
 .swatch.auto { background: #fdd663; }
 .swatch.tele { background: #8ab4f8; }
 .swatch.end { background: #81c995; }
+.swatch.zebra { background: rgba(255,255,255,0.45); border: 1px dashed #c5c8ce; height: 0; }
 
 .robot-grid {
   display: grid;

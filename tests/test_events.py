@@ -24,3 +24,4 @@ def test_demo_cards_cover_six_robots():
     assert ramtech.hub_score_candidates >= 1
     assert ramtech.climb_attempt
     assert ramtech.path_length_in > 0
+    assert ramtech.auto_path or ramtech.teleop_path

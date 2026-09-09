@@ -63,7 +63,20 @@
         </button>
         <button type="button" class="btn tonal" id="demo-btn">Try a sample match</button>
       </div>
-      <p class="hint">Use a posted match VOD, not a live stream. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <details class="advanced">
+        <summary>Field crop (default 10–65% of frame height)</summary>
+        <div class="composer-row">
+          <label class="field">
+            <span>Crop top</span>
+            <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.10" />
+          </label>
+          <label class="field">
+            <span>Crop bottom</span>
+            <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
+          </label>
+        </div>
+      </details>
+      <p class="hint">Use a posted match VOD, not a live stream. Scores come from the broadcast overlay when possible. Action counts are motion estimates. A robot-trained YOLO `.pt` is needed for tracking; TBA is optional for nicknames.</p>
     </form>
   </section>
 
@@ -104,7 +117,11 @@
       <article class="panel video-panel">
         <header class="panel-head">
           <h2>Broadcast</h2>
-          <span class="chip" id="video-chip">No video</span>
+          <div class="broadcast-actions">
+            <button type="button" class="btn tonal small" id="cal-toggle" hidden>Calibrate field</button>
+            <button type="button" class="btn tonal small" id="video-toggle" hidden>Watch video</button>
+            <span class="chip" id="video-chip">No video</span>
+          </div>
         </header>
         <div class="video-frame">
           <video id="match-video" controls playsinline></video>
@@ -114,7 +131,11 @@
           <canvas id="cal-canvas" hidden></canvas>
         </div>
         <div class="cal-bar" id="cal-bar" hidden>
-          <p>Click the four field corners on the frame: top-left, top-right, bottom-right, bottom-left.</p>
+          <p id="cal-help">Click the four field corners on the frame: top-left, top-right, bottom-right, bottom-left.</p>
+          <label class="field assign-field" id="assign-wrap" hidden>
+            <span>Assign team</span>
+            <select id="assign-team"></select>
+          </label>
           <button type="button" class="btn tonal small" id="cal-reset">Reset corners</button>
         </div>
       </article>
@@ -133,6 +154,7 @@
           <span><i class="swatch auto"></i> Auto</span>
           <span><i class="swatch tele"></i> Teleop</span>
           <span><i class="swatch end"></i> Endgame</span>
+          <span><i class="swatch zebra"></i> Zebra</span>
           <span class="field-year" id="field-year">2026 REBUILT</span>
         </div>
       </article>

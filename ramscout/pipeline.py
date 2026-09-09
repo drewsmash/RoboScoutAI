@@ -15,8 +15,8 @@ from ramscout.broadcast import match_from_overlay, merge_tba, parse_broadcast_te
 from ramscout.detect import find_local_model, save_jpeg, track_video
 from ramscout.events import Pose, build_cards, detect_events
 from ramscout.gameconfig import public_game
-from ramscout.geometry import default_source_points, homography_from_corners
-from ramscout.identity import assign_by_start, majority_alliance
+from ramscout.geometry import default_source_points, reproject_samples
+from ramscout.identity import assign_by_start, majority_alliance, stitch_occlusions
 from ramscout.ingest import download_video, fetch_video_info
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
@@ -62,6 +62,10 @@ class Job:
     frame_path: str | None = None
     overlay: dict[str, Any] | None = None
     game: dict[str, Any] | None = None
+    crop_top: float = 0.10
+    crop_bottom: float = 0.65
+    user_calibrated: bool = False
+    seeds: list[dict[str, Any]] = field(default_factory=list)
 
     def public(self) -> dict[str, Any]:
         return {
@@ -75,6 +79,7 @@ class Job:
             "warnings": self.warnings,
             "video_info": self.video_info,
             "match": _public_match(self.match),
+            "zebra": _public_zebra((self.match or {}).get("zebra") if self.match else None),
             "overlay": self.overlay,
             "game": self.game or public_game(),
             "assignments": self.assignments,
@@ -82,11 +87,15 @@ class Job:
             "samples": self.samples,
             "events": self.events,
             "cards": self.cards,
+            "seeds": self.seeds,
             "frame_size": self.frame_size,
             "used_model": self.used_model,
             "demo": self.demo,
             "has_video": bool(self.video_path),
             "has_frame": bool(self.frame_path),
+            "user_calibrated": self.user_calibrated,
+            "crop_top": self.crop_top,
+            "crop_bottom": self.crop_bottom,
         }
 
 
@@ -96,6 +105,32 @@ def _public_match(match: dict[str, Any] | None) -> dict[str, Any] | None:
     copy = dict(match)
     copy.pop("zebra", None)
     return copy
+
+
+def _public_zebra(zebra: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not zebra:
+        return None
+    times = list(zebra.get("times") or [])
+    if not times:
+        return {"alliances": zebra.get("alliances") or {}}
+    stride = max(1, len(times) // 180)
+
+    def thin(values: list[Any]) -> list[Any]:
+        return values[::stride] if values else []
+
+    alliances: dict[str, Any] = {}
+    for color, robots in (zebra.get("alliances") or {}).items():
+        slim = []
+        for robot in robots or []:
+            slim.append(
+                {
+                    "team_key": robot.get("team_key"),
+                    "xs": thin(list(robot.get("xs") or [])),
+                    "ys": thin(list(robot.get("ys") or [])),
+                }
+            )
+        alliances[color] = slim
+    return {"times": thin(times), "alliances": alliances}
 
 
 class JobStore:
@@ -132,15 +167,25 @@ def start_job(
     event_key: str = "",
     match_key: str = "",
     demo: bool = False,
+    crop_top: float = 0.10,
+    crop_bottom: float = 0.65,
 ) -> Job:
-    job = STORE.create(url=url, tba_key=tba_key, event_key=event_key, match_key=match_key, demo=demo)
+    job = STORE.create(
+        url=url,
+        tba_key=tba_key,
+        event_key=event_key,
+        match_key=match_key,
+        demo=demo,
+        crop_top=float(crop_top),
+        crop_bottom=float(crop_bottom),
+    )
     thread = threading.Thread(target=_run_job, args=(job.id,), daemon=True)
     thread.start()
     return job
 
 
 def apply_calibration(job: Job, src_points: list[list[float]]) -> Job:
-    STORE.update(job, src_points=src_points)
+    STORE.update(job, src_points=src_points, user_calibrated=True)
     _reproject_and_scout(job)
     return job
 
@@ -205,7 +250,7 @@ def _run_real(job: Job) -> None:
     tba_key = job.tba_key.strip()
     tba_match = None
     if tba_key:
-        STORE.set_progress(job, "resolving", "Optional TBA nickname lookup…", 18)
+        STORE.set_progress(job, "resolving", "Optional TBA match lookup…", 18)
         try:
             with TBAClient(tba_key) as client:
                 found = resolve_match(client, hints, event_key=job.event_key or None, match_key=job.match_key or None)
@@ -244,14 +289,18 @@ def _run_real(job: Job) -> None:
         model_path=str(model) if model else None,
         team_numbers=team_numbers or None,
         frame_stride=5,
+        crop_top=job.crop_top,
+        crop_bottom=job.crop_bottom,
         on_progress=track_progress,
     )
     frame_path = dest / "calibration.jpg"
     save_jpeg(result["first_frame"], frame_path)
-    samples = result["samples"]
+    samples = stitch_occlusions(result["samples"])
     warnings = list(job.warnings) + list(result.get("warnings") or [])
     if not model:
-        warnings.append("No robot detector weights found. Add a .pt file (robot-trained YOLO) to the project folder.")
+        warnings.append("No robot detector weights found. Add a robot-trained YOLO .pt in the project folder or models/.")
+    elif not result.get("used_model"):
+        warnings.append("Detector did not run. Paths will be empty.")
 
     blue, red = _alliance_teams(video_match)
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
@@ -263,7 +312,7 @@ def _run_real(job: Job) -> None:
     src_points = job.src_points
     if src_points is None:
         fw, fh = result["frame_size"]
-        src_points = default_source_points(fw, fh).tolist()
+        src_points = default_source_points(fw, fh, job.crop_top, job.crop_bottom).tolist()
 
     STORE.update(
         job,
@@ -274,6 +323,7 @@ def _run_real(job: Job) -> None:
         frame_size=result.get("frame_size") or [1280, 720],
         frame_path=str(frame_path),
         src_points=src_points,
+        seeds=_seed_boxes(samples),
     )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
@@ -281,12 +331,9 @@ def _run_real(job: Job) -> None:
 
 def _reproject_and_scout(job: Job) -> None:
     samples = list(job.samples)
-    if job.src_points and samples and job.video_path:
+    if job.src_points and samples:
         try:
-            H = homography_from_corners(job.src_points)
-            # Samples already live in field space from the original homography.
-            # Recalibration is applied only when the caller also re-runs tracking.
-            _ = H
+            samples = reproject_samples(samples, job.src_points)
         except Exception as exc:  # noqa: BLE001
             job.warnings.append(f"Calibration ignored: {exc}")
 
@@ -337,6 +384,7 @@ def _reproject_and_scout(job: Job) -> None:
         samples=samples,
         events=[e.as_dict() for e in events],
         cards=[c.as_dict() for c in cards],
+        seeds=_seed_boxes(samples) or job.seeds,
         status="ready" if job.status in {"ready", "scouting", "tracking"} else job.status,
     )
     _persist(job)
@@ -350,6 +398,23 @@ def _alliance_teams(match: dict[str, Any] | None) -> tuple[list[str], list[str]]
         keys = alliances.get(color, {}).get("team_keys") or []
         return [k.replace("frc", "") for k in keys]
     return nums("blue"), nums("red")
+
+
+def _seed_boxes(samples: list[dict[str, Any]], t_max: float = 3.0) -> list[dict[str, Any]]:
+    seeds: dict[str, dict[str, Any]] = {}
+    for sample in samples:
+        if float(sample.get("t") or 0) > t_max:
+            continue
+        tid = str(sample.get("track_id"))
+        if tid in seeds or not sample.get("bbox"):
+            continue
+        seeds[tid] = {
+            "track_id": tid,
+            "bbox": sample.get("bbox"),
+            "alliance": sample.get("alliance") or "unknown",
+            "team": str(sample.get("team") or ""),
+        }
+    return list(seeds.values())
 
 
 def _persist(job: Job) -> None:

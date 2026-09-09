@@ -26,7 +26,9 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 Click **Try a sample match** to explore the UI without a download.
 
-For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`).
+For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). Default COCO / RT-DETR weights will follow people and other objects — the UI warns when that happens. Weight files are gitignored; do not commit them.
+
+A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
 ## Next year’s game
 

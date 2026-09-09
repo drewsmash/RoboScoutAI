@@ -53,6 +53,8 @@ def track_video(
     team_numbers: list[str] | None = None,
     frame_stride: int = 4,
     max_frames: int | None = None,
+    crop_top: float = 0.10,
+    crop_bottom: float = 0.65,
     on_progress: ProgressFn | None = None,
 ) -> dict[str, Any]:
     """Run detection + tracking. Returns field-space samples and warnings."""
@@ -67,16 +69,21 @@ def track_video(
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
+    cal_index = int(min(fps * 5.0, max(total * 0.08, 1))) if total else int(fps * 5.0)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, max(cal_index, 0))
     ok, first = cap.read()
     if not ok or first is None:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ok, first = cap.read()
+    if not ok or first is None:
         cap.release()
-        raise RuntimeError("Could not read the first video frame.")
+        raise RuntimeError("Could not read a calibration frame from the video.")
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     if homography is None:
-        pts = src_points or default_source_points(frame_w, frame_h).tolist()
+        pts = src_points or default_source_points(frame_w, frame_h, crop_top, crop_bottom).tolist()
         homography = homography_from_corners(pts)
-    y0, y1 = crop_bounds(frame_h)
+    y0, y1 = crop_bounds(frame_h, crop_top, crop_bottom)
 
     warnings: list[str] = []
     model = None
@@ -152,7 +159,7 @@ def track_video(
                 raw = ocr_digits(roi)
                 team = constrain_to_teams(raw, team_numbers) or ""
             feet.append([fx, fy])
-            meta.append((int(tid), alliance, team, [x1, y1b, x2, y2]))
+            meta.append((int(tid), alliance, team, [x1, y1b + y0, x2, y2 + y0]))
 
         if feet:
             mapped = project_points(feet, homography)
@@ -164,6 +171,8 @@ def track_video(
                         "track_id": tid,
                         "x": float(mx),
                         "y": float(my),
+                        "px": float(fx),
+                        "py": float(fy),
                         "alliance": alliance,
                         "team": team,
                         "bbox": bbox,
@@ -185,6 +194,7 @@ def track_video(
         "first_frame": calibration_jpeg,
         "homography": homography.tolist(),
         "used_model": bool(model is not None),
+        "crop": [crop_top, crop_bottom],
     }
 
 

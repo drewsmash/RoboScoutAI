@@ -54,6 +54,7 @@ class ScoutEvent:
     confidence: float
     detail: str
     period: str = ""
+    duration_s: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -158,7 +159,7 @@ def build_cards(
         card.hub_score_candidates = sum(1 for e in team_events if e["type"] == "hub_score_candidate")
         card.climb_attempt = any(e["type"] == "climb_attempt" for e in team_events)
         card.defense_time_s = round(
-            sum(e.get("t_end", e["t"]) - e["t"] for e in team_events if e["type"] == "defense"),
+            sum(float(e.get("duration_s") or 0) for e in team_events if e["type"] == "defense"),
             2,
         )
         # Defense events store duration in detail when t_end isn't present.
@@ -273,6 +274,7 @@ def _defense_events(path: list[Pose], all_poses: list[Pose]) -> list[ScoutEvent]
                         confidence=0.4,
                         detail=f"Opponent-half pressure for {duration:.1f}s.",
                         period=period_name(run_start),
+                        duration_s=round(duration, 2),
                     )
                 )
             run_start = None

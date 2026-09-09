@@ -60,3 +60,23 @@ def crop_bounds(frame_h: int, top: float = 0.10, bottom: float = 0.65) -> tuple[
     if y1 <= y0:
         y1 = min(frame_h, y0 + 1)
     return y0, y1
+
+
+def reproject_samples(samples: list[dict], src_points: Sequence[Sequence[float]]) -> list[dict]:
+    """Map stored full-frame feet (px, py) through a new homography."""
+    from ramscout.field import FIELD_LENGTH, FIELD_WIDTH
+
+    feet: list[list[float]] = []
+    indexes: list[int] = []
+    for i, sample in enumerate(samples):
+        if sample.get("px") is None or sample.get("py") is None:
+            continue
+        feet.append([float(sample["px"]), float(sample["py"])])
+        indexes.append(i)
+    if not feet:
+        return samples
+    mapped = project_points(feet, homography_from_corners(src_points))
+    for i, (x, y) in zip(indexes, mapped):
+        samples[i]["x"] = float(np.clip(x, 0, FIELD_LENGTH))
+        samples[i]["y"] = float(np.clip(y, 0, FIELD_WIDTH))
+    return samples

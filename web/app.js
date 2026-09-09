@@ -15,6 +15,9 @@ const state = {
   fieldImg: null,
   bots: { blue: null, red: null },
   landmarks: {},
+  calMode: false,
+  calJob: null,
+  selectedSeed: null,
 };
 
 function applyGame(game) {
@@ -82,6 +85,8 @@ $("start-form").addEventListener("submit", async (event) => {
     tba_key: $("tba-key").value.trim(),
     event_key: $("event-key").value.trim(),
     match_key: $("match-key").value.trim(),
+    crop_top: Number($("crop-top").value || 0.1),
+    crop_bottom: Number($("crop-bottom").value || 0.65),
     demo: false,
   });
 });
@@ -108,7 +113,25 @@ $("time-slider").addEventListener("input", (event) => {
 
 $("cal-reset").addEventListener("click", () => {
   state.calPoints = [];
+  state.selectedSeed = null;
   drawCal();
+  updateCalHelp();
+});
+
+$("cal-toggle")?.addEventListener("click", () => {
+  state.calMode = true;
+  if (state.job) renderJob(state.job);
+});
+$("video-toggle")?.addEventListener("click", () => {
+  state.calMode = false;
+  if (state.job) renderJob(state.job);
+});
+
+$("assign-team")?.addEventListener("change", async () => {
+  if (!state.job || !state.selectedSeed) return;
+  const team = $("assign-team").value.trim();
+  if (!team) return;
+  await postAssign({ [String(state.selectedSeed.track_id)]: team });
 });
 
 $("cal-canvas").addEventListener("click", async (event) => {
@@ -116,18 +139,27 @@ $("cal-canvas").addEventListener("click", async (event) => {
   const rect = canvas.getBoundingClientRect();
   const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
   const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
-  if (state.calPoints.length >= 4) state.calPoints = [];
-  state.calPoints.push([x, y]);
-  drawCal();
-  if (state.calPoints.length === 4 && state.job) {
-    const res = await fetch(`/api/jobs/${state.job.id}/calibrate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ src_points: state.calPoints }),
-    });
-    state.job = await res.json();
-    renderJob(state.job);
+  if (state.calPoints.length < 4) {
+    state.calPoints.push([x, y]);
+    drawCal();
+    updateCalHelp();
+    if (state.calPoints.length === 4 && state.job) {
+      const res = await fetch(`/api/jobs/${state.job.id}/calibrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ src_points: state.calPoints }),
+      });
+      state.job = await res.json();
+      renderJob(state.job);
+    }
+    return;
   }
+  const seed = hitSeed(x, y, state.job?.seeds || []);
+  if (!seed || !state.job) return;
+  state.selectedSeed = seed;
+  const next = cycleTeam(state.job, seed);
+  fillAssignSelect(state.job, next);
+  await postAssign({ [String(seed.track_id)]: next });
 });
 
 async function createJob(payload) {
@@ -201,7 +233,16 @@ function renderJob(job) {
   const video = $("match-video");
   const empty = $("video-empty");
   const cal = $("cal-canvas");
-  if (job.has_video) {
+  if (state.calJob !== job.id) {
+    state.calJob = job.id;
+    state.calPoints = (job.src_points && job.src_points.length === 4) ? job.src_points.map((p) => [...p]) : [];
+    state.calMode = Boolean(job.has_frame && !job.user_calibrated && !job.demo);
+    state.selectedSeed = null;
+  }
+  const showCal = Boolean(job.has_frame && (state.calMode || (!job.has_video && !job.demo)));
+  $("cal-toggle").hidden = !(job.has_frame && job.has_video && !showCal);
+  $("video-toggle").hidden = !(job.has_video && showCal);
+  if (job.has_video && !showCal) {
     video.hidden = false;
     empty.hidden = true;
     cal.hidden = true;
@@ -211,12 +252,14 @@ function renderJob(job) {
       video.dataset.src = job.id;
     }
     $("video-chip").textContent = "Match VOD";
-  } else if (job.has_frame) {
+  } else if (showCal) {
     video.hidden = true;
     empty.hidden = true;
     cal.hidden = false;
     $("cal-bar").hidden = false;
     $("video-chip").textContent = "Calibrate field";
+    fillAssignSelect(job);
+    updateCalHelp();
     loadCalFrame(job.id);
   } else {
     video.hidden = true;
@@ -395,6 +438,7 @@ function drawField() {
     ctx.fillRect(X(FIELD.L - FIELD.ALLIANCE), 0, X(FIELD.ALLIANCE), h);
   }
   drawLandmarks(ctx, X, Y);
+  drawZebra(ctx, X, Y, job.zebra);
 
   const job = state.job;
   if (!job) return;
@@ -414,6 +458,37 @@ function drawField() {
     if (!now) continue;
     drawBot(ctx, X(now.x), Y(now.y), alliance, team);
   }
+}
+
+function drawZebra(ctx, X, Y, zebra) {
+  if (!zebra?.alliances) return;
+  const inch = 39.3701;
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 2;
+  for (const [color, robots] of Object.entries(zebra.alliances)) {
+    ctx.strokeStyle = color === "red" ? "#f28b82" : "#e8eaed";
+    for (const robot of robots || []) {
+      const xs = robot.xs || [];
+      const ys = robot.ys || [];
+      const peak = Math.max(0, ...xs.filter((v) => v != null));
+      const scale = peak > 0 && peak < 30 ? inch : 1;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] == null || ys[i] == null) continue;
+        const px = X(xs[i] * scale);
+        const py = Y(ys[i] * scale);
+        if (!started) {
+          ctx.moveTo(px, py);
+          started = true;
+        } else ctx.lineTo(px, py);
+      }
+      if (started) ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function drawLandmarks(ctx, X, Y) {
@@ -522,6 +597,19 @@ function drawCal() {
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (calImage) ctx.drawImage(calImage, 0, 0);
+  const seeds = state.job?.seeds || [];
+  seeds.forEach((seed) => {
+    const box = seed.bbox || [];
+    if (box.length < 4) return;
+    const [x1, y1, x2, y2] = box;
+    const selected = state.selectedSeed && String(state.selectedSeed.track_id) === String(seed.track_id);
+    ctx.strokeStyle = seed.alliance === "red" ? "#f28b82" : "#8ab4f8";
+    ctx.lineWidth = selected ? 4 : 2;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = "700 14px Outfit, Roboto, sans-serif";
+    ctx.fillText(String(seed.team || seed.track_id), x1 + 4, Math.max(14, y1 - 6));
+  });
   ctx.fillStyle = "#a8c7fa";
   ctx.strokeStyle = "#a8c7fa";
   ctx.lineWidth = 3;
@@ -536,6 +624,61 @@ function drawCal() {
       ctx.stroke();
     }
   });
+}
+
+function hitSeed(x, y, seeds) {
+  for (const seed of seeds) {
+    const [x1, y1, x2, y2] = seed.bbox || [];
+    if (x >= x1 && x <= x2 && y >= y1 && y <= y2) return seed;
+  }
+  return null;
+}
+
+function matchTeams(job, alliance) {
+  const keys = job?.match?.alliances?.[alliance]?.team_keys || [];
+  return keys.map((key) => String(key).replace("frc", ""));
+}
+
+function cycleTeam(job, seed) {
+  const alliance = seed.alliance === "red" ? "red" : "blue";
+  const teams = matchTeams(job, alliance);
+  if (!teams.length) return String(seed.team || "");
+  const idx = teams.indexOf(String(seed.team || ""));
+  return teams[(idx + 1) % teams.length];
+}
+
+function fillAssignSelect(job, selected) {
+  const sel = $("assign-team");
+  const wrap = $("assign-wrap");
+  if (!sel || !wrap) return;
+  const teams = [...matchTeams(job, "blue"), ...matchTeams(job, "red")];
+  wrap.hidden = teams.length === 0 || state.calPoints.length < 4;
+  sel.innerHTML = teams.map((team) => `<option value="${team}">${team}</option>`).join("");
+  const value = selected || state.selectedSeed?.team;
+  if (value) sel.value = value;
+}
+
+function updateCalHelp() {
+  const help = $("cal-help");
+  if (!help) return;
+  if (state.calPoints.length < 4) {
+    help.textContent = `Click the four field corners (${state.calPoints.length}/4): top-left, top-right, bottom-right, bottom-left.`;
+  } else {
+    help.textContent = "Corners set. Click a boxed robot to cycle its team number.";
+  }
+  const wrap = $("assign-wrap");
+  if (wrap) wrap.hidden = state.calPoints.length < 4;
+}
+
+async function postAssign(assignments) {
+  if (!state.job) return;
+  const res = await fetch(`/api/jobs/${state.job.id}/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assignments }),
+  });
+  state.job = await res.json();
+  renderJob(state.job);
 }
 
 function escapeHtml(value) {

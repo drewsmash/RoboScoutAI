@@ -251,6 +251,10 @@ def merge_tba(video_match: dict[str, Any], tba_match: dict[str, Any] | None) -> 
         merged["score_breakdown"] = tba_match.get("score_breakdown")
     if tba_match.get("key"):
         merged["tba_key"] = tba_match.get("key")
+    if tba_match.get("zebra") and not merged.get("zebra"):
+        merged["zebra"] = tba_match.get("zebra")
+    if tba_match.get("videos") and not merged.get("videos"):
+        merged["videos"] = tba_match.get("videos")
     merged["source"] = source
     return merged
 

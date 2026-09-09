@@ -32,6 +32,8 @@ class StartRequest(BaseModel):
     event_key: str = ""
     match_key: str = ""
     demo: bool = False
+    crop_top: float = 0.10
+    crop_bottom: float = 0.65
 
 
 class CalibrateRequest(BaseModel):
@@ -64,11 +66,19 @@ def create_job(body: StartRequest) -> dict:
         return job.public()
     if not body.url.strip():
         raise HTTPException(400, "Paste a YouTube match video URL.")
+    if body.crop_bottom <= body.crop_top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
+    top = min(max(body.crop_top, 0.0), 0.45)
+    bottom = min(max(body.crop_bottom, 0.5), 1.0)
+    if bottom <= top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
     job = start_job(
         url=body.url.strip(),
         tba_key=body.tba_key.strip() or os.environ.get("TBA_AUTH_KEY", ""),
         event_key=body.event_key.strip(),
         match_key=body.match_key.strip(),
+        crop_top=top,
+        crop_bottom=bottom,
     )
     return job.public()
 

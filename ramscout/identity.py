@@ -51,12 +51,15 @@ def ocr_digits(crop_bgr: np.ndarray) -> str:
 
 
 def constrain_to_teams(raw: str, team_numbers: Iterable[int | str]) -> str | None:
+    """Map OCR digits onto the six match teams. Prefer an exact match."""
     allowed = {str(n) for n in team_numbers}
+    if not raw:
+        return None
     if raw in allowed:
         return raw
-    for team in allowed:
-        if team in raw or raw in team:
-            return team
+    hits = [team for team in allowed if team in raw]
+    if len(hits) == 1:
+        return hits[0]
     return None
 
 
@@ -105,3 +108,100 @@ def majority_alliance(samples: list[dict[str, Any]]) -> str:
         xs = [float(s["x"]) for s in samples]
         return "blue" if (sum(xs) / max(len(xs), 1)) < FIELD_LENGTH / 2 else "red"
     return votes.most_common(1)[0][0]
+
+
+def linear_assignment(cost: np.ndarray) -> list[tuple[int, int]]:
+    """Hungarian assignment; greedy fallback if SciPy is missing."""
+    if cost.size == 0:
+        return []
+    try:
+        from scipy.optimize import linear_sum_assignment
+
+        rows, cols = linear_sum_assignment(cost)
+        return list(zip(rows.tolist(), cols.tolist()))
+    except Exception:  # noqa: BLE001
+        pairs: list[tuple[int, int]] = []
+        used_r: set[int] = set()
+        used_c: set[int] = set()
+        order = sorted(
+            ((float(cost[i, j]), i, j) for i in range(cost.shape[0]) for j in range(cost.shape[1])),
+        )
+        for _, i, j in order:
+            if i in used_r or j in used_c:
+                continue
+            used_r.add(i)
+            used_c.add(j)
+            pairs.append((i, j))
+        return pairs
+
+
+def stitch_occlusions(
+    samples: list[dict[str, Any]],
+    max_gap_s: float = 2.5,
+    max_dist_in: float = 56.0,
+) -> list[dict[str, Any]]:
+    """Re-attach ByteTrack IDs that likely belong to the same robot after a gap."""
+    if len(samples) < 2:
+        return samples
+
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for sample in samples:
+        by_id.setdefault(int(sample["track_id"]), []).append(sample)
+    for group in by_id.values():
+        group.sort(key=lambda row: float(row["t"]))
+
+    fragments: list[dict[str, Any]] = []
+    for tid, group in by_id.items():
+        fragments.append(
+            {
+                "tid": tid,
+                "alliance": majority_alliance(group),
+                "t0": float(group[0]["t"]),
+                "t1": float(group[-1]["t"]),
+                "start": (float(group[0]["x"]), float(group[0]["y"])),
+                "end": (float(group[-1]["x"]), float(group[-1]["y"])),
+            }
+        )
+    fragments.sort(key=lambda item: item["t0"])
+
+    remap = {item["tid"]: item["tid"] for item in fragments}
+    claimed: set[int] = set()
+    for i, earlier in enumerate(fragments):
+        costs: list[tuple[float, int]] = []
+        for later in fragments[i + 1 :]:
+            if later["tid"] in claimed:
+                continue
+            if (
+                earlier["alliance"] in {"red", "blue"}
+                and later["alliance"] in {"red", "blue"}
+                and earlier["alliance"] != later["alliance"]
+            ):
+                continue
+            gap = later["t0"] - earlier["t1"]
+            if gap < 0 or gap > max_gap_s:
+                continue
+            dist = float(np.hypot(later["start"][0] - earlier["end"][0], later["start"][1] - earlier["end"][1]))
+            if dist > max_dist_in:
+                continue
+            costs.append((dist + gap * 10.0, later["tid"]))
+        if not costs:
+            continue
+        cost = np.array([[c[0] for c in costs]], dtype=float)
+        pairs = linear_assignment(cost)
+        if not pairs:
+            continue
+        _, col = pairs[0]
+        chosen = costs[col][1]
+        root = remap[earlier["tid"]]
+        remap[chosen] = root
+        claimed.add(chosen)
+        for tid, mapped in list(remap.items()):
+            if mapped == chosen:
+                remap[tid] = root
+
+    out: list[dict[str, Any]] = []
+    for sample in samples:
+        row = dict(sample)
+        row["track_id"] = remap.get(int(sample["track_id"]), sample["track_id"])
+        out.append(row)
+    return out
