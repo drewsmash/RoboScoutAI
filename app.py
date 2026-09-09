@@ -16,6 +16,12 @@ from pydantic import BaseModel, Field
 from ramscout import __version__
 from ramscout.gameconfig import public_game
 from ramscout.paths import is_frozen, web_dir
+from ramscout.picklist import (
+    aggregate_cards,
+    alliance_summary,
+    compare_teams,
+    suggest_picks,
+)
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
@@ -75,6 +81,17 @@ class CalibrateRequest(BaseModel):
 
 class AssignRequest(BaseModel):
     assignments: dict[str, str]
+
+
+class PicklistRequest(BaseModel):
+    cards: list[dict] = Field(default_factory=list)
+    already_picked: list[int] = Field(default_factory=list)
+    limit: int = 24
+
+
+class CompareRequest(BaseModel):
+    cards: list[dict] = Field(default_factory=list)
+    teams: list[int] = Field(default_factory=list)
 
 
 @app.get("/")
@@ -260,6 +277,31 @@ def job_frame(job_id: str) -> FileResponse:
     if job is None or not job.frame_path:
         raise HTTPException(404, "No calibration frame for this job.")
     return FileResponse(job.frame_path)
+
+
+@app.post("/api/picklist")
+def picklist(body: PicklistRequest) -> dict:
+    cards = aggregate_cards(body.cards) if body.cards else []
+    return suggest_picks(cards, already_picked=body.already_picked, limit=body.limit)
+
+
+@app.post("/api/compare")
+def compare(body: CompareRequest) -> dict:
+    if not body.teams:
+        raise HTTPException(400, "Provide at least one team number.")
+    cards = aggregate_cards(body.cards) if body.cards else []
+    return {
+        "compare": compare_teams(cards, body.teams),
+        "alliance": alliance_summary(cards, body.teams[:3]),
+    }
+
+
+@app.get("/api/jobs/{job_id}/picklist")
+def job_picklist(job_id: str, limit: int = 12) -> dict:
+    job = STORE.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job.")
+    return suggest_picks(job.cards or [], limit=limit)
 
 
 if __name__ == "__main__":

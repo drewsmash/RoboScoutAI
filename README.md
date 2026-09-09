@@ -48,6 +48,27 @@ The desktop UI shows the current version and an **Update** chip when a newer Git
 
 Desktop binaries are intentionally slim (no PyTorch). Demo mode, scorebug OCR, YouTube ingest, and field playback work out of the box. For YOLO robot tracking, run from source with `ultralytics` installed and drop a robot `.pt` in `models/`.
 
+### App icons & code signing
+
+Desktop builds use [`web/icons/app.ico`](web/icons/app.ico) / [`web/icons/app.icns`](web/icons/app.icns). The web UI ships a favicon, apple-touch icon, and PWA manifest.
+
+Unsigned Windows/macOS downloads often trigger SmartScreen or Gatekeeper. See **[`docs/SIGNING.md`](docs/SIGNING.md)** for:
+
+- How to run unsigned builds safely
+- GitHub Actions secrets for Authenticode + Apple Developer ID + notarization
+- Local `signtool` / `codesign` commands
+
+The release workflow signs automatically when those secrets are present and ships unsigned (with a warning) when they are not.
+
+### Pick list & scout book
+
+After analyzing matches, use **Pick list** in the app to:
+
+- Accumulate robots into a local scout book
+- Rank draft picks (1st / 2nd / 3rd round suggestions)
+- Compare alliance combinations
+- Keep team notes and a watchlist (stored in the browser)
+
 Optional env vars:
 
 - `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)

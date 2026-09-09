@@ -8,12 +8,23 @@ app and install ultralytics in a source tree for full tracking.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent
 block_cipher = None
+
+# Desktop app icon (Windows .ico / macOS .icns). Falls back gracefully if missing.
+if sys.platform == "win32":
+    APP_ICON = str(ROOT / "web" / "icons" / "app.ico")
+elif sys.platform == "darwin":
+    APP_ICON = str(ROOT / "web" / "icons" / "app.icns")
+else:
+    APP_ICON = str(ROOT / "web" / "icons" / "app.png")
+if not Path(APP_ICON).is_file():
+    APP_ICON = None
 
 datas = [
     (str(ROOT / "web"), "web"),
@@ -100,4 +111,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=APP_ICON,
 )

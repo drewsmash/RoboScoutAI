@@ -18,6 +18,7 @@ const state = {
   calMode: false,
   calJob: null,
   selectedSeed: null,
+  picklist: null,
 };
 
 function applyGame(game) {
@@ -299,6 +300,10 @@ function renderJob(job) {
   renderTimeline(job);
   renderWarnings(job);
   drawField();
+  if (job.status === "ready") {
+    updateScoutbookMeta();
+    refreshPicklist();
+  }
 }
 
 function renderTeams(elId, match, color) {
@@ -340,6 +345,11 @@ function renderRobots(job) {
         <div class="stat"><b>${Number(card.defense_time_s || 0).toFixed(0)}s</b><span>Defense</span></div>
         <div class="stat"><b>${Number(card.path_length_in || 0).toFixed(0)} in</b><span>Path length</span></div>
       </div>
+      <div class="pick-actions">
+        <button type="button" data-pick="${escapeHtml(card.team)}">Add to pick list</button>
+        <button type="button" data-watch="${escapeHtml(card.team)}">Watch</button>
+        <button type="button" data-note="${escapeHtml(card.team)}">Note</button>
+      </div>
       <label class="field">
         <span>Team override</span>
         <input class="team-input" data-track="${escapeHtml(card.team)}" value="${escapeHtml(card.team)}" />
@@ -347,6 +357,24 @@ function renderRobots(job) {
     `;
     grid.appendChild(el);
   }
+  grid.querySelectorAll("[data-pick]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addCurrentMatchToBook(false);
+      refreshPicklist();
+      $("cmp-a").value = String(btn.dataset.pick);
+      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  grid.querySelectorAll("[data-watch]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleWatch(Number(btn.dataset.watch)));
+  });
+  grid.querySelectorAll("[data-note]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("note-team").value = String(btn.dataset.note);
+      $("note-text").focus();
+      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
   grid.querySelectorAll(".team-input").forEach((input) => {
     input.addEventListener("change", async () => {
       if (!state.job) return;
@@ -714,12 +742,299 @@ function escapeHtml(value) {
 
 loadTbaKey();
 initUpdater();
+initScoutTools();
 fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGame({
   year: 2026,
   name: "REBUILT",
   field_image: "/static/fields/2026.png",
   robot_icons: { blue: "/static/robots/blue.png", red: "/static/robots/red.png" },
 }));
+
+/* ---- Scout book / pick list (localStorage) ---- */
+
+const BOOK_KEY = "ramscout.scoutBook";
+const NOTES_KEY = "ramscout.teamNotes";
+const WATCH_KEY = "ramscout.watchlist";
+const EXCLUDE_KEY = "ramscout.pickedExclude";
+
+function loadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function saveJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadBook() {
+  return loadJson(BOOK_KEY, { matches: [], cards: [] });
+}
+
+function saveBook(book) {
+  saveJson(BOOK_KEY, book);
+}
+
+function loadNotes() {
+  return loadJson(NOTES_KEY, {});
+}
+
+function loadWatch() {
+  return new Set(loadJson(WATCH_KEY, []));
+}
+
+function saveWatch(set) {
+  saveJson(WATCH_KEY, [...set]);
+}
+
+function loadExcluded() {
+  return loadJson(EXCLUDE_KEY, []);
+}
+
+function excludeTeam(remove, team) {
+  const list = loadExcluded().filter((t) => Number(t) !== Number(team));
+  if (!remove) list.push(Number(team));
+  saveJson(EXCLUDE_KEY, list);
+}
+
+function addCurrentMatchToBook(announce = true) {
+  const job = state.job;
+  if (!job || job.status !== "ready" || !(job.cards || []).length) {
+    if (announce) alert("Analyze a match first, then add it to the scout book.");
+    return false;
+  }
+  const book = loadBook();
+  const matchKey = job.match?.key || job.id;
+  if (book.matches.includes(matchKey)) {
+    if (announce) alert(`Match ${matchKey} is already in the scout book.`);
+    return false;
+  }
+  book.matches.push(matchKey);
+  for (const card of job.cards) {
+    book.cards.push({
+      ...card,
+      _match: matchKey,
+      _job: job.id,
+    });
+  }
+  saveBook(book);
+  if (announce) {
+    updateScoutbookMeta();
+    refreshPicklist();
+  }
+  return true;
+}
+
+function updateScoutbookMeta() {
+  const el = $("scoutbook-meta");
+  if (!el) return;
+  const book = loadBook();
+  const teams = new Set(book.cards.map((c) => String(c.team)));
+  if (!book.matches.length) {
+    el.textContent = "No matches in scout book yet. Analyze a match, then Add match to scout book.";
+    return;
+  }
+  el.textContent = `${book.matches.length} match${book.matches.length === 1 ? "" : "es"} · ${teams.size} teams scouted`;
+}
+
+async function refreshPicklist() {
+  const book = loadBook();
+  const cards = book.cards.length ? book.cards : (state.job?.cards || []);
+  const excluded = loadExcluded();
+  const res = await fetch("/api/picklist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cards, already_picked: excluded, limit: 24 }),
+  });
+  if (!res.ok) return;
+  state.picklist = await res.json();
+  renderPicklist(state.picklist);
+  updateScoutbookMeta();
+}
+
+function renderPicklist(data) {
+  const rounds = $("pick-rounds");
+  const ranked = $("pick-ranked");
+  if (!rounds || !ranked) return;
+  const watch = loadWatch();
+  const sections = [
+    ["1st round", data.first_round || []],
+    ["2nd round", data.second_round || []],
+    ["3rd round", data.third_round || []],
+  ];
+  rounds.innerHTML = sections.map(([label, rows]) => `
+    <div class="pick-round">
+      <div class="round-label">${label}</div>
+      ${rows.length ? rows.map((row) => `
+        <div class="pick-chip">
+          <b>${escapeHtml(row.team)}</b>
+          <span class="why">${escapeHtml((row.reasons || [])[0] || "")}</span>
+        </div>
+      `).join("") : `<div class="pick-chip"><span class="why">Need more scout data</span></div>`}
+    </div>
+  `).join("");
+
+  ranked.innerHTML = (data.ranked || []).map((row) => `
+    <li class="${watch.has(row.team) ? "watched" : ""}">
+      <span class="rank">#${row.rank}</span>
+      <span class="team-n">${escapeHtml(row.team)}</span>
+      <span>${escapeHtml((row.reasons || []).join(" · "))}</span>
+      <span class="score">${Number(row.score).toFixed(1)}</span>
+      <button type="button" data-exclude="${row.team}">Mark taken</button>
+    </li>
+  `).join("") || `<li><span>Analyze matches and add them to the scout book to build a draft board.</span></li>`;
+
+  ranked.querySelectorAll("[data-exclude]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      excludeTeam(false, Number(btn.dataset.exclude));
+      refreshPicklist();
+    });
+  });
+}
+
+function renderNotes() {
+  const root = $("notes-list");
+  if (!root) return;
+  const notes = loadNotes();
+  const watch = loadWatch();
+  const teams = [...new Set([...Object.keys(notes), ...watch].map(String))].sort((a, b) => Number(a) - Number(b));
+  if (!teams.length) {
+    root.innerHTML = `<li><div class="note-team">No notes yet</div><div>Save a note or watchlist a team from a robot card.</div></li>`;
+    return;
+  }
+  root.innerHTML = teams.map((team) => `
+    <li>
+      <div class="note-team">
+        <span>${escapeHtml(team)}</span>
+        ${watch.has(Number(team)) ? `<span class="watched-dot" title="On watchlist">★</span>` : ""}
+      </div>
+      <div>${escapeHtml(notes[team] || "On watchlist")}</div>
+    </li>
+  `).join("");
+}
+
+function toggleWatch(team) {
+  const set = loadWatch();
+  const n = Number(team);
+  if (set.has(n)) set.delete(n);
+  else set.add(n);
+  saveWatch(set);
+  renderNotes();
+  refreshPicklist();
+}
+
+async function runCompare() {
+  const teams = [$("cmp-a")?.value, $("cmp-b")?.value, $("cmp-c")?.value]
+    .map((v) => Number(String(v || "").trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const grid = $("compare-grid");
+  const summary = $("alliance-summary");
+  if (!teams.length) {
+    if (grid) grid.innerHTML = "";
+    if (summary) summary.textContent = "Enter at least one team number.";
+    return;
+  }
+  const book = loadBook();
+  const cards = book.cards.length ? book.cards : (state.job?.cards || []);
+  const res = await fetch("/api/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cards, teams }),
+  });
+  if (!res.ok) {
+    if (summary) summary.textContent = "Compare failed.";
+    return;
+  }
+  const body = await res.json();
+  if (grid) {
+    grid.innerHTML = (body.compare?.teams || []).map((row) => {
+      if (!row.found) {
+        return `<div class="compare-card"><div class="team-n">${escapeHtml(row.team)}</div><div class="nick">Not in scout book</div></div>`;
+      }
+      return `
+        <div class="compare-card">
+          <div class="team-n">${escapeHtml(row.team)}</div>
+          <div class="nick">${escapeHtml(row.nickname || "")}</div>
+          <div class="row"><span>Hubs / match</span><b>${row.hubs_per_match}</b></div>
+          <div class="row"><span>Climb rate</span><b>${Math.round(row.climb_rate * 100)}%</b></div>
+          <div class="row"><span>Defense</span><b>${row.defense_s_per_match}s</b></div>
+          <div class="row"><span>Draft score</span><b>${row.score}</b></div>
+        </div>
+      `;
+    }).join("");
+  }
+  const a = body.alliance || {};
+  if (summary) {
+    summary.innerHTML = a.complete
+      ? `Alliance totals · <strong>${a.combined_hubs_per_match}</strong> hubs/match · avg climb <strong>${Math.round((a.avg_climb_rate || 0) * 100)}%</strong>`
+      : `Missing scout data for: ${(a.missing || []).join(", ") || "—"}`;
+  }
+}
+
+function exportPicklist() {
+  const data = state.picklist;
+  if (!data?.ranked?.length) {
+    alert("No ranked teams yet.");
+    return;
+  }
+  const lines = ["rank,team,score,hubs_per_match,climb_rate,reasons"];
+  for (const row of data.ranked) {
+    lines.push([
+      row.rank,
+      row.team,
+      row.score,
+      row.hubs_per_match,
+      row.climb_rate,
+      `"${(row.reasons || []).join("; ").replaceAll('"', "'")}"`,
+    ].join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ramscout-picklist.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function initScoutTools() {
+  $("nav-scoutbook")?.addEventListener("click", () => {
+    $("workspace").hidden = false;
+    $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $("add-match-book")?.addEventListener("click", () => addCurrentMatchToBook(true));
+  $("refresh-picks")?.addEventListener("click", () => refreshPicklist());
+  $("export-picklist")?.addEventListener("click", () => exportPicklist());
+  $("clear-scoutbook")?.addEventListener("click", () => {
+    if (!window.confirm("Clear scout book, exclusions, and keep notes/watchlist?")) return;
+    saveBook({ matches: [], cards: [] });
+    saveJson(EXCLUDE_KEY, []);
+    refreshPicklist();
+  });
+  $("run-compare")?.addEventListener("click", () => runCompare());
+  $("save-note")?.addEventListener("click", () => {
+    const team = String($("note-team")?.value || "").trim();
+    const text = String($("note-text")?.value || "").trim();
+    if (!team) return;
+    const notes = loadNotes();
+    if (text) notes[team] = text;
+    else delete notes[team];
+    saveJson(NOTES_KEY, notes);
+    $("note-text").value = "";
+    renderNotes();
+  });
+  $("watch-team")?.addEventListener("click", () => {
+    const team = Number($("note-team")?.value || 0);
+    if (!team) return;
+    toggleWatch(team);
+  });
+  updateScoutbookMeta();
+  renderNotes();
+  refreshPicklist();
+}
 
 async function initUpdater() {
   const versionChip = $("version-chip");

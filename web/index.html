@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RamScoutAI</title>
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0e0e10" />
+  <meta name="application-name" content="RamScoutAI" />
+  <meta name="apple-mobile-web-app-title" content="RamScoutAI" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/static/favicon.png" type="image/png" sizes="32x32" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@380;500;650;750&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -15,20 +21,14 @@
   <div class="grain" aria-hidden="true"></div>
   <header class="topbar">
     <div class="brand">
-      <span class="mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="28" height="28">
-          <rect x="2" y="8" width="28" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <circle cx="8" cy="16" r="2.2" fill="#8ab4f8"/>
-          <circle cx="16" cy="16" r="2.2" fill="#f28b82"/>
-          <circle cx="24" cy="16" r="2.2" fill="#8ab4f8"/>
-        </svg>
-      </span>
+      <img class="mark-img" src="/static/icons/icon-64.png" width="36" height="36" alt="" />
       <div>
         <div class="wordmark">RamScoutAI</div>
         <div class="tagline" id="game-tagline">FRC auto-scout from match video</div>
       </div>
     </div>
     <div class="top-actions">
+      <button type="button" class="chip ghost" id="nav-scoutbook" title="Open pick list &amp; scout book">Pick list</button>
       <button type="button" class="chip ghost" id="version-chip" title="Check for updates">v…</button>
       <button type="button" class="chip update" id="update-chip" hidden>Update available</button>
       <span class="chip ghost">Team 59</span>
@@ -179,10 +179,59 @@
         <div class="export-row">
           <a class="btn tonal small" id="export-json" href="#">Export JSON</a>
           <a class="btn tonal small" id="export-csv" href="#">Export CSV</a>
+          <button type="button" class="btn tonal small" id="add-match-book">Add match to scout book</button>
         </div>
       </header>
       <div class="timeline" id="timeline"></div>
       <ul class="warnings" id="warnings"></ul>
+    </section>
+
+    <section class="scout-tools" id="scout-tools">
+      <header class="section-head">
+        <h2>Pick list &amp; scout book</h2>
+        <p>Accumulate matches, rank draft picks, compare alliances, and keep team notes — all local to this browser.</p>
+      </header>
+
+      <div class="tools-layout">
+        <div class="tool-block">
+          <div class="tool-head">
+            <h3>Draft board</h3>
+            <div class="export-row">
+              <button type="button" class="btn tonal small" id="refresh-picks">Refresh ranks</button>
+              <button type="button" class="btn tonal small" id="export-picklist">Export pick list</button>
+              <button type="button" class="btn tonal small" id="clear-scoutbook">Clear book</button>
+            </div>
+          </div>
+          <p class="tool-meta" id="scoutbook-meta">No matches in scout book yet.</p>
+          <div class="pick-rounds" id="pick-rounds"></div>
+          <ol class="pick-ranked" id="pick-ranked"></ol>
+        </div>
+
+        <div class="tool-block">
+          <h3>Alliance compare</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team A</span><input id="cmp-a" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Team B</span><input id="cmp-b" inputmode="numeric" placeholder="254" /></label>
+            <label class="field"><span>Team C</span><input id="cmp-c" inputmode="numeric" placeholder="1678" /></label>
+          </div>
+          <button type="button" class="btn tonal small" id="run-compare">Compare</button>
+          <div class="compare-grid" id="compare-grid"></div>
+          <div class="alliance-summary" id="alliance-summary"></div>
+        </div>
+
+        <div class="tool-block">
+          <h3>Team notes &amp; watchlist</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="note-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field grow"><span>Note</span><input id="note-text" placeholder="Strong intake, slow climb…" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="save-note">Save note</button>
+            <button type="button" class="btn tonal small" id="watch-team">Toggle watchlist</button>
+          </div>
+          <ul class="notes-list" id="notes-list"></ul>
+        </div>
+      </div>
     </section>
   </main>
 
