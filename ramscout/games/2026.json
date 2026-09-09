@@ -1,0 +1,35 @@
+{
+  "year": 2026,
+  "name": "REBUILT",
+  "field_image": "/static/fields/2026.png",
+  "robot_icons": {
+    "blue": "/static/robots/blue.png",
+    "red": "/static/robots/red.png"
+  },
+  "field": {
+    "length_in": 651.2,
+    "width_in": 317.7,
+    "alliance_depth_in": 158.6
+  },
+  "timing": {
+    "auto_end_s": 20,
+    "endgame_start_s": 130,
+    "match_end_s": 160
+  },
+  "overlay": {
+    "top_band": [0.0, 0.14],
+    "bottom_band": [0.82, 1.0]
+  },
+  "landmarks": {
+    "blue_hub": {"x": 162.8, "y": 158.85, "label": "Hub"},
+    "red_hub": {"x": 488.4, "y": 158.85, "label": "Hub"},
+    "blue_tower": {"x": 36.0, "y": 120.7, "label": "Tower"},
+    "red_tower": {"x": 615.2, "y": 120.7, "label": "Tower"}
+  },
+  "upgrade": {
+    "copy_this_file_to": "ramscout/games/YYYY.json",
+    "add_field_png": "web/fields/YYYY.png",
+    "add_robot_pngs": "Reuse web/robots/blue.png and web/robots/red.png, or drop year-specific icons and point robot_icons at them.",
+    "then": "Update field inches, auto/endgame timing, overlay crop bands if the scorebug moved, landmarks to match the new PNG, and review ramscout/events.py for new scoring locations."
+  }
+}

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+data/jobs/
+*.mp4
+*.mov
+*.mkv
+*.pt
+*.onnx
+*.engine
+.DS_Store
+web/.DS_Store
