@@ -213,6 +213,11 @@ input:focus {
   gap: 6px;
   margin-top: 4px;
 }
+.source-chips .chip {
+  background: var(--surface-high);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
 
 .workspace {
   max-width: 1280px;
@@ -415,13 +420,13 @@ video, #cal-canvas {
 .robot-ident { display: flex; gap: 10px; align-items: center; }
 .bot-thumb-wrap {
   position: relative;
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   flex-shrink: 0;
 }
 .bot-thumb {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
   background: #111318;
   border-radius: 10px;
@@ -430,10 +435,10 @@ video, #cal-canvas {
 .bot-num {
   position: absolute;
   left: 50%;
-  top: 16%;
+  top: 18%;
   transform: translateX(-50%);
   font-family: var(--font-display);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: -0.04em;
   color: #0e0e10;

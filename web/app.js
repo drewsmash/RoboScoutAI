@@ -441,7 +441,7 @@ function drawLandmarks(ctx, X, Y) {
 
 function drawBot(ctx, x, y, alliance, team) {
   const img = state.bots[alliance] || state.bots.blue;
-  const size = 54;
+  const size = 58;
   if (img) {
     ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
   } else {
