@@ -55,25 +55,25 @@ class FieldPoint:
 
 def zone_name(x: float, y: float) -> str:
     """Named occupancy zone for a field point."""
+    if _near(x, y, BLUE_HUB, HUB_SCORE_RADIUS):
+        return "blue_hub"
+    if _near(x, y, RED_HUB, HUB_SCORE_RADIUS):
+        return "red_hub"
+    if _near(x, y, BLUE_TOWER, TOWER_RADIUS):
+        return "blue_tower"
+    if _near(x, y, RED_TOWER, TOWER_RADIUS):
+        return "red_tower"
+    if _near(x, y, BLUE_DEPOT, 40):
+        return "blue_depot"
+    if _near(x, y, RED_DEPOT, 40):
+        return "red_depot"
+    if _near(x, y, BLUE_OUTPOST, 36):
+        return "blue_outpost"
+    if _near(x, y, RED_OUTPOST, 36):
+        return "red_outpost"
     if x < ALLIANCE_DEPTH:
-        if _near(x, y, BLUE_TOWER, TOWER_RADIUS):
-            return "blue_tower"
-        if _near(x, y, BLUE_HUB, HUB_SCORE_RADIUS):
-            return "blue_hub"
-        if _near(x, y, BLUE_DEPOT, 40):
-            return "blue_depot"
-        if _near(x, y, BLUE_OUTPOST, 36):
-            return "blue_outpost"
         return "blue_alliance"
     if x > FIELD_LENGTH - ALLIANCE_DEPTH:
-        if _near(x, y, RED_TOWER, TOWER_RADIUS):
-            return "red_tower"
-        if _near(x, y, RED_HUB, HUB_SCORE_RADIUS):
-            return "red_hub"
-        if _near(x, y, RED_DEPOT, 40):
-            return "red_depot"
-        if _near(x, y, RED_OUTPOST, 36):
-            return "red_outpost"
         return "red_alliance"
     return "neutral"
 
