@@ -11,8 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ramscout.broadcast import match_from_overlay, merge_tba, parse_broadcast_text, read_overlay_from_video
 from ramscout.detect import find_local_model, save_jpeg, track_video
 from ramscout.events import Pose, build_cards, detect_events
+from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, homography_from_corners
 from ramscout.identity import assign_by_start, majority_alliance
 from ramscout.ingest import download_video, fetch_video_info
@@ -58,6 +60,8 @@ class Job:
     match_key: str = ""
     video_path: str | None = None
     frame_path: str | None = None
+    overlay: dict[str, Any] | None = None
+    game: dict[str, Any] | None = None
 
     def public(self) -> dict[str, Any]:
         return {
@@ -71,6 +75,8 @@ class Job:
             "warnings": self.warnings,
             "video_info": self.video_info,
             "match": _public_match(self.match),
+            "overlay": self.overlay,
+            "game": self.game or public_game(),
             "assignments": self.assignments,
             "src_points": self.src_points,
             "samples": self.samples,
@@ -162,13 +168,23 @@ def _run_job(job_id: str) -> None:
 
 
 def _run_demo(job: Job) -> None:
-    STORE.set_progress(job, "resolving", "Loading sample match…", 15)
-    STORE.update(job, video_info=DEMO_VIDEO, match=DEMO_MATCH)
+    STORE.set_progress(job, "resolving", "Reading the sample broadcast overlay…", 15)
+    reading = parse_broadcast_text(DEMO_VIDEO["title"], DEMO_VIDEO["description"])
+    match = merge_tba(match_from_overlay(reading), DEMO_MATCH)
+    match["key"] = DEMO_MATCH["key"]
+    match["event_key"] = DEMO_MATCH["event_key"]
+    STORE.update(
+        job,
+        video_info=DEMO_VIDEO,
+        match=match,
+        overlay=reading.as_dict(),
+        game=public_game(reading.year),
+    )
     STORE.set_progress(job, "scouting", "Building robot paths…", 70)
     samples = demo_tracks()
     assignments = {str(s["track_id"]): s["team"] for s in samples}
     STORE.update(job, samples=samples, assignments=assignments, used_model=False, warnings=[
-        "Sample match — paths are simulated so you can explore the UI without a YouTube download."
+        "Sample match — scores and teams were parsed from the broadcast title/overlay text. Paths are simulated."
     ])
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Sample match is ready.", 100)
@@ -182,23 +198,23 @@ def _run_real(job: Job) -> None:
         raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
 
     hints = parse_match_title(info.get("title") or "", job.url)
+    reading = parse_broadcast_text(info.get("title") or "", info.get("description") or "", job.url)
+    video_match = match_from_overlay(reading)
+    STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(hints.year or reading.year))
+
     tba_key = job.tba_key.strip()
-    match_payload = None
+    tba_match = None
     if tba_key:
-        STORE.set_progress(job, "resolving", "Looking up the match on The Blue Alliance…", 18)
+        STORE.set_progress(job, "resolving", "Optional TBA nickname lookup…", 18)
         try:
             with TBAClient(tba_key) as client:
                 found = resolve_match(client, hints, event_key=job.event_key or None, match_key=job.match_key or None)
                 if found:
-                    match_payload = enrich_match(client, found)
-                else:
-                    job.warnings.append("TBA could not match this video to an event. Enter an event/match key and re-run.")
+                    tba_match = enrich_match(client, found)
         except TBAError as exc:
             job.warnings.append(str(exc))
     else:
-        job.warnings.append("No TBA key — team names and official scores will be missing until you add one.")
-
-    STORE.update(job, match=match_payload)
+        job.warnings.append("TBA skipped. Scores and teams come from the match video overlay and YouTube title.")
 
     STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
     dest = DATA / job.id
@@ -208,11 +224,16 @@ def _run_real(job: Job) -> None:
     video_path = download_video(job.url, dest, on_progress=dl_progress)
     STORE.update(job, video_path=str(video_path))
 
+    STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 52)
+    reading = read_overlay_from_video(video_path, existing=reading, year=hints.year or reading.year)
+    video_match = merge_tba(match_from_overlay(reading), tba_match)
+    STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(reading.year or hints.year))
+
     STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
     model = find_local_model([ROOT, ROOT / "models", Path.cwd()])
     team_numbers = []
-    if match_payload:
-        team_numbers = [str(v["team_number"]) for v in match_payload.get("teams", {}).values()]
+    if video_match:
+        team_numbers = [str(v["team_number"]) for v in video_match.get("teams", {}).values() if v.get("team_number")]
 
     def track_progress(message: str, pct: float) -> None:
         STORE.set_progress(job, "tracking", message, 55 + pct * 0.3)
@@ -232,7 +253,7 @@ def _run_real(job: Job) -> None:
     if not model:
         warnings.append("No robot detector weights found. Add a .pt file (robot-trained YOLO) to the project folder.")
 
-    blue, red = _alliance_teams(match_payload)
+    blue, red = _alliance_teams(video_match)
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
     # Prefer OCR team labels when present.
     for sample in samples:

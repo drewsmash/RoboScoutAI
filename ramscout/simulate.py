@@ -44,12 +44,19 @@ DEMO_MATCH = {
         "frc238": {"key": "frc238", "team_number": 238, "nickname": "Crusaders", "alliance": "red"},
     },
     "zebra": None,
+    "source": {"scores": "video", "teams": "video", "channels": ["youtube_title", "youtube_description"]},
 }
 
 DEMO_VIDEO = {
     "id": "demo",
     "title": "2026 New Hampshire District Event - Qualification Match 12",
-    "description": "Sample REBUILT match used to preview RamScoutAI without a download.",
+    "description": (
+        "Qualification Match 12 at the 2026 New Hampshire District Event.\n"
+        "Blue Alliance: 195, 230, 177\n"
+        "Red Alliance: 59, 319, 238\n"
+        "Final score: Blue 148, Red 131\n"
+        "Read from the match broadcast overlay."
+    ),
     "duration": 165,
     "uploader": "FIRST Robotics Competition",
     "webpage_url": "",

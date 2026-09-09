@@ -206,6 +206,14 @@ input:focus {
 .chip.blue { background: var(--blue-deep); color: var(--blue); }
 .chip.red { background: var(--red-deep); color: var(--red); }
 
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .workspace {
   max-width: 1280px;
   margin: 0 auto;
@@ -368,7 +376,10 @@ video, #cal-canvas {
   padding: 10px 8px 4px;
   color: var(--ink-muted);
   font-size: 12px;
+  align-items: center;
+  flex-wrap: wrap;
 }
+.legend .field-year { margin-left: auto; color: var(--ink-faint); }
 .swatch {
   display: inline-block;
   width: 18px;
@@ -400,6 +411,35 @@ video, #cal-canvas {
   justify-content: space-between;
   align-items: start;
   gap: 8px;
+}
+.robot-ident { display: flex; gap: 10px; align-items: center; }
+.bot-thumb-wrap {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+.bot-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  background: #111318;
+  border-radius: 10px;
+  padding: 2px;
+}
+.bot-num {
+  position: absolute;
+  left: 50%;
+  top: 16%;
+  transform: translateX(-50%);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  color: #0e0e10;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+  pointer-events: none;
+  line-height: 1;
 }
 .robot-card h3 {
   margin: 0;

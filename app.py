@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ramscout.gameconfig import public_game
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
@@ -49,6 +50,11 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/game")
+def game_config(year: int | None = None) -> dict:
+    return public_game(year)
 
 
 @app.post("/api/jobs")

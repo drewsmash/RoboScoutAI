@@ -36,11 +36,27 @@ def test_demo_job_returns_scout_cards():
     assert len(job["cards"]) == 6
     assert job["match"]["key"] == "2026nhdur_qm12"
     assert any(event["type"] == "hub_score_candidate" for event in job["events"])
-    csv = client.get(f"/api/jobs/{job_id}/export.csv")
-    assert csv.status_code == 200
-    assert "hub_score_candidates" in csv.text
+    assert job["match"]["source"]["scores"] == "video"
+    assert job["game"]["field_image"].endswith("2026.png")
+    field = client.get("/static/fields/2026.png")
+    assert field.status_code == 200
+    assert field.content[:8] == b"\x89PNG\r\n\x1a\n"
+    bot = client.get("/static/robots/blue.png")
+    assert bot.status_code == 200
+    assert bot.content[:8] == b"\x89PNG\r\n\x1a\n"
+    red = client.get("/static/robots/red.png")
+    assert red.status_code == 200
+    assert red.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_analyze_requires_url():
     res = client.post("/api/jobs", json={"url": ""})
     assert res.status_code == 400
+
+
+def test_game_endpoint():
+    res = client.get("/api/game")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "REBUILT"
+    assert "blue_hub" in body["landmarks"]

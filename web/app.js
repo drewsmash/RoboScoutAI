@@ -12,7 +12,58 @@ const state = {
   t: 0,
   lastTs: 0,
   calPoints: [],
+  fieldImg: null,
+  bots: { blue: null, red: null },
+  landmarks: {},
 };
+
+function applyGame(game) {
+  if (!game) return;
+  if (game.length_in) FIELD.L = game.length_in;
+  if (game.width_in) FIELD.W = game.width_in;
+  if (game.alliance_depth_in) FIELD.ALLIANCE = game.alliance_depth_in;
+  state.landmarks = game.landmarks || {};
+  const tag = $("game-tagline");
+  if (tag && game.name) {
+    tag.textContent = `FRC ${game.year} ${game.name} · auto-scout from match video`;
+  }
+  const yearEl = $("field-year");
+  if (yearEl && game.name) yearEl.textContent = `${game.year} ${game.name}`;
+  const slider = $("time-slider");
+  if (slider && game.match_end_s) slider.max = String(game.match_end_s);
+  loadAsset("field", game.field_image, (img) => {
+    state.fieldImg = img;
+    drawField();
+  });
+  const icons = game.robot_icons || {};
+  loadAsset("blueBot", icons.blue || "/static/robots/blue.png", (img) => {
+    state.bots.blue = img;
+    drawField();
+  });
+  loadAsset("redBot", icons.red || "/static/robots/red.png", (img) => {
+    state.bots.red = img;
+    drawField();
+  });
+}
+
+function loadAsset(key, src, onload) {
+  if (!src) return;
+  if (state[`_src_${key}`] === src && state[`_img_${key}`]) {
+    onload(state[`_img_${key}`]);
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    state[`_src_${key}`] = src;
+    state[`_img_${key}`] = img;
+    onload(img);
+  };
+  img.onerror = () => {
+    state[`_src_${key}`] = src;
+    state[`_img_${key}`] = null;
+  };
+  img.src = src;
+}
 
 function loadTbaKey() {
   const saved = localStorage.getItem("ramscout.tbaKey") || "";
@@ -120,7 +171,8 @@ function renderJob(job) {
 
   const match = job.match;
   const info = job.video_info;
-  $("match-title").textContent = info?.title || "Match video";
+  applyGame(job.game);
+  $("match-title").textContent = info?.title || match?.source?.channels?.[0] || "Match video";
   if (match) {
     $("scoreboard").hidden = false;
     $("match-key-label").textContent = match.key || "Match";
@@ -129,6 +181,19 @@ function renderJob(job) {
     $("winner-label").textContent = match.winning_alliance
       ? `${match.winning_alliance.toUpperCase()} alliance win`
       : "";
+    const src = match.source || {};
+    const scoreSrc = src.scores === "tba" ? "Scores from TBA" : "Scores from video";
+    $("score-source").textContent = scoreSrc;
+    const overlayEl = $("overlay-source");
+    const channels = src.channels || job.overlay?.sources || [];
+    if (overlayEl) {
+      if (channels.length) {
+        overlayEl.hidden = false;
+        overlayEl.textContent = channels.map(labelChannel).join(" · ");
+      } else {
+        overlayEl.hidden = true;
+      }
+    }
     renderTeams("blue-teams", match, "blue");
     renderTeams("red-teams", match, "red");
   }
@@ -193,9 +258,15 @@ function renderRobots(job) {
     el.className = "robot-card";
     el.innerHTML = `
       <header>
-        <div>
-          <h3>${escapeHtml(card.team)}</h3>
-          <div class="nick">${escapeHtml(card.nickname || "")}</div>
+        <div class="robot-ident">
+          <div class="bot-thumb-wrap">
+            <img class="bot-thumb" alt="" src="${card.alliance === "red" ? "/static/robots/red.png" : "/static/robots/blue.png"}" />
+            <span class="bot-num">${escapeHtml(card.team)}</span>
+          </div>
+          <div>
+            <h3>${escapeHtml(card.team)}</h3>
+            <div class="nick">${escapeHtml(card.nickname || "")}</div>
+          </div>
         </div>
         <span class="chip ${card.alliance}">${card.alliance}</span>
       </header>
@@ -265,6 +336,15 @@ function renderWarnings(job) {
   }
 }
 
+function labelChannel(value) {
+  return ({
+    youtube_title: "YouTube title",
+    youtube_description: "description",
+    video_scorebug: "scorebug",
+    overlay_unreadable: "overlay unread",
+  })[value] || value;
+}
+
 function labelStatus(status) {
   return ({
     queued: "Queued",
@@ -281,11 +361,12 @@ function tick(now) {
   if (!state.playing) return;
   const dt = (now - state.lastTs) / 1000;
   state.lastTs = now;
-  state.t = Math.min(MATCH_END, state.t + dt * 4);
+  const end = Number(state.job?.game?.match_end_s || MATCH_END);
+  state.t = Math.min(end, state.t + dt * 4);
   $("time-slider").value = String(state.t);
   $("time-label").textContent = `${state.t.toFixed(1)}s`;
   drawField();
-  if (state.t < MATCH_END) requestAnimationFrame(tick);
+  if (state.t < end) requestAnimationFrame(tick);
   else {
     state.playing = false;
     $("play-btn").textContent = "▶";
@@ -303,34 +384,22 @@ function drawField() {
   const X = (x) => x * sx;
   const Y = (y) => y * sy;
 
-  ctx.fillStyle = "#102018";
-  ctx.fillRect(0, 0, w, h);
-  const blueZone = ctx.createLinearGradient(0, 0, X(FIELD.ALLIANCE), 0);
-  blueZone.addColorStop(0, "rgba(138,180,248,0.16)");
-  blueZone.addColorStop(1, "rgba(138,180,248,0.02)");
-  ctx.fillStyle = blueZone;
-  ctx.fillRect(0, 0, X(FIELD.ALLIANCE), h);
-  const redZone = ctx.createLinearGradient(w, 0, X(FIELD.L - FIELD.ALLIANCE), 0);
-  redZone.addColorStop(0, "rgba(242,139,130,0.16)");
-  redZone.addColorStop(1, "rgba(242,139,130,0.02)");
-  ctx.fillStyle = redZone;
-  ctx.fillRect(X(FIELD.L - FIELD.ALLIANCE), 0, X(FIELD.ALLIANCE), h);
-
-  ctx.strokeStyle = "rgba(232,234,237,0.18)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(4, 4, w - 8, h - 8);
-  ctx.beginPath();
-  ctx.moveTo(X(FIELD.L / 2), 8);
-  ctx.lineTo(X(FIELD.L / 2), h - 8);
-  ctx.stroke();
-
-  drawHub(ctx, X, Y, 158.6, FIELD.W / 2, "#8ab4f8");
-  drawHub(ctx, X, Y, FIELD.L - 158.6, FIELD.W / 2, "#f28b82");
-  drawTower(ctx, X, Y, 28, FIELD.W * 0.38, "#8ab4f8");
-  drawTower(ctx, X, Y, FIELD.L - 28, FIELD.W * 0.38, "#f28b82");
+  if (state.fieldImg) {
+    ctx.drawImage(state.fieldImg, 0, 0, w, h);
+  } else {
+    ctx.fillStyle = "#102018";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(138,180,248,0.16)";
+    ctx.fillRect(0, 0, X(FIELD.ALLIANCE), h);
+    ctx.fillStyle = "rgba(242,139,130,0.16)";
+    ctx.fillRect(X(FIELD.L - FIELD.ALLIANCE), 0, X(FIELD.ALLIANCE), h);
+  }
+  drawLandmarks(ctx, X, Y);
 
   const job = state.job;
   if (!job) return;
+  const autoEnd = Number(job.game?.auto_end_s || AUTO_END);
+  const endgameStart = Number(job.game?.endgame_start_s || ENDGAME_START);
   const byTeam = {};
   for (const sample of job.samples || []) {
     const team = sample.team || `T${sample.track_id}`;
@@ -340,45 +409,64 @@ function drawField() {
     samples.sort((a, b) => a.t - b.t);
     const alliance = samples[0]?.alliance || "blue";
     const color = alliance === "red" ? "#f28b82" : "#8ab4f8";
-    drawPath(ctx, X, Y, samples, state.t, color);
+    drawPath(ctx, X, Y, samples, state.t, color, autoEnd, endgameStart);
     const now = lastAt(samples, state.t);
     if (!now) continue;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    const mx = X(now.x) - 8;
-    const my = Y(now.y) - 8;
-    if (typeof ctx.roundRect === "function") ctx.roundRect(mx, my, 16, 16, 4);
-    else ctx.rect(mx, my, 16, 16);
-    ctx.fill();
-    ctx.fillStyle = "#0e0e10";
-    ctx.font = "600 12px Outfit, Roboto, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(String(team), X(now.x), Y(now.y) + 4);
+    drawBot(ctx, X(now.x), Y(now.y), alliance, team);
   }
 }
 
-function drawHub(ctx, X, Y, x, y, color) {
+function drawLandmarks(ctx, X, Y) {
+  const marks = state.landmarks || {};
   ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.strokeRect(X(x) - 18, Y(y) - 18, 36, 36);
+  ctx.font = "600 11px Outfit, Roboto, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const mark of Object.values(marks)) {
+    if (mark == null || mark.x == null || mark.y == null) continue;
+    const px = X(mark.x);
+    const py = Y(mark.y);
+    ctx.strokeStyle = "rgba(232, 234, 237, 0.28)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    if (mark.label) {
+      ctx.fillStyle = "rgba(232, 234, 237, 0.72)";
+      ctx.fillText(String(mark.label), px, py - 26);
+    }
+  }
   ctx.restore();
 }
 
-function drawTower(ctx, X, Y, x, y, color) {
-  ctx.save();
-  ctx.strokeStyle = color;
+function drawBot(ctx, x, y, alliance, team) {
+  const img = state.bots[alliance] || state.bots.blue;
+  const size = 54;
+  if (img) {
+    ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
+  } else {
+    ctx.fillStyle = alliance === "red" ? "#c62828" : "#1565c0";
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(x - 18, y - 18, 36, 36, 6);
+    else ctx.rect(x - 18, y - 18, 36, 36);
+    ctx.fill();
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(x - 12, y - 16, 24, 8);
+    ctx.fillRect(x - 12, y + 8, 24, 8);
+  }
+  const label = String(team);
+  ctx.font = `800 ${label.length > 3 ? 9 : 11}px Outfit, Roboto, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(X(x), Y(y) - 22);
-  ctx.lineTo(X(x) + 16, Y(y) + 16);
-  ctx.lineTo(X(x) - 16, Y(y) + 16);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.restore();
+  ctx.strokeStyle = "rgba(248, 250, 252, 0.95)";
+  ctx.fillStyle = "#0e0e10";
+  const plateY = y - size * 0.36;
+  ctx.strokeText(label, x, plateY);
+  ctx.fillText(label, x, plateY);
 }
 
-function drawPath(ctx, X, Y, samples, t, color) {
+function drawPath(ctx, X, Y, samples, t, color, autoEnd, endgameStart) {
   if (samples.length < 2) return;
   ctx.lineWidth = 3;
   ctx.lineJoin = "round";
@@ -393,9 +481,9 @@ function drawPath(ctx, X, Y, samples, t, color) {
       started = true;
     } else ctx.lineTo(px, py);
   }
-  const period = t < AUTO_END ? "#fdd663" : t >= ENDGAME_START ? "#81c995" : color;
+  const period = t < autoEnd ? "#fdd663" : t >= endgameStart ? "#81c995" : color;
   ctx.strokeStyle = period;
-  ctx.globalAlpha = 0.85;
+  ctx.globalAlpha = 0.9;
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
@@ -459,4 +547,10 @@ function escapeHtml(value) {
 }
 
 loadTbaKey();
+fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGame({
+  year: 2026,
+  name: "REBUILT",
+  field_image: "/static/fields/2026.png",
+  robot_icons: { blue: "/static/robots/blue.png", red: "/static/robots/red.png" },
+}));
 drawField();

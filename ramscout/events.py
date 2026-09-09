@@ -1,4 +1,9 @@
-"""REBUILT auto-scout event heuristics from field-space trajectories."""
+"""REBUILT auto-scout event heuristics from field-space trajectories.
+
+Scoring locations (Hub, Tower, depot) are 2026-specific. For a new season:
+copy ramscout/games/2026.json to YYYY.json, add web/fields/YYYY.png, then
+update the constants in ramscout/field.py and the dwell/radius rules here.
+"""
 
 from __future__ import annotations
 

@@ -25,7 +25,7 @@
       </span>
       <div>
         <div class="wordmark">RamScoutAI</div>
-        <div class="tagline">FRC 2026 REBUILT · auto-scout from match video</div>
+        <div class="tagline" id="game-tagline">FRC auto-scout from match video</div>
       </div>
     </div>
     <div class="top-actions">
@@ -36,7 +36,7 @@
 
   <section class="composer" id="composer">
     <h1>Watch the match. Scout every robot.</h1>
-    <p class="lede">Paste a recorded FRC match YouTube link. RamScoutAI pulls Blue Alliance data, follows each robot on the field, and estimates hub, defense, and climb actions.</p>
+    <p class="lede">Paste a recorded FRC match YouTube link. RamScoutAI reads the scorebug and teams from the video, follows each robot on the field map, and estimates hub, defense, and climb actions. TBA is optional for nicknames.</p>
 
     <form id="start-form" class="composer-card" autocomplete="off">
       <label class="field grow">
@@ -63,7 +63,7 @@
         </button>
         <button type="button" class="btn tonal" id="demo-btn">Try a sample match</button>
       </div>
-      <p class="hint">Use a posted match VOD, not a live stream. Action counts are estimates from motion, not official TBA scores.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
   </section>
 
@@ -88,6 +88,10 @@
         <div class="match-key" id="match-key-label">Match</div>
         <div class="match-title" id="match-title"></div>
         <div class="winner" id="winner-label"></div>
+        <div class="source-chips">
+          <span class="chip ghost" id="score-source">From video</span>
+          <span class="chip ghost" id="overlay-source" hidden></span>
+        </div>
       </div>
       <div class="alliance red">
         <div class="alliance-label">Red</div>
@@ -129,6 +133,7 @@
           <span><i class="swatch auto"></i> Auto</span>
           <span><i class="swatch tele"></i> Teleop</span>
           <span><i class="swatch end"></i> Endgame</span>
+          <span class="field-year" id="field-year">2026 REBUILT</span>
         </div>
       </article>
     </section>
@@ -155,7 +160,7 @@
   </main>
 
   <footer class="foot">
-    Built for Ramtech 59 · Not affiliated with FIRST · Official scores come from The Blue Alliance
+    Built for Ramtech 59 · Not affiliated with FIRST · Scores are read from the match video when possible
   </footer>
 
   <script src="/static/app.js" type="module"></script>
