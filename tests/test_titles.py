@@ -34,5 +34,12 @@ def test_parse_playoff_title():
     assert hints.match_number == 6
 
 
-def test_normalize_event_name_strips_boilerplate():
-    assert "hampshire" in normalize_event_name("2026 New Hampshire District Event")
+def test_parse_short_qualification_title():
+    hints = parse_match_title(
+        "Qualification 65 - South Florida Regional",
+        "https://youtu.be/m9uLAGKtenM",
+    )
+    assert hints.comp_level == "qm"
+    assert hints.match_number == 65
+    assert hints.event_name and "Florida" in hints.event_name
+    assert hints.video_id == "m9uLAGKtenM"

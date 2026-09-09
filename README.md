@@ -30,6 +30,8 @@ For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project f
 
 A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
+If YouTube returns a bot / sign-in check (common on cloud VMs), export cookies from a signed-in browser to a Netscape `cookies.txt` and set `YTDLP_COOKIES=/path/to/cookies.txt`, or run the app on your laptop where `yt-dlp` can use browser cookies. Title metadata still loads via oEmbed when the download is blocked.
+
 ## Next year’s game
 
 Game art and timing live in year files, not in the UI:

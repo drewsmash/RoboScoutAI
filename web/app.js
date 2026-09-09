@@ -214,7 +214,11 @@ function renderJob(job) {
       ? `${match.winning_alliance.toUpperCase()} alliance win`
       : "";
     const src = match.source || {};
-    const scoreSrc = src.scores === "tba" ? "Scores from TBA" : "Scores from video";
+    const scoreSrc = (
+      src.scores === "tba" ? "Scores from TBA"
+      : src.scores === "firstevents" ? "Scores from FIRST Events"
+      : "Scores from video"
+    );
     $("score-source").textContent = scoreSrc;
     const overlayEl = $("overlay-source");
     const channels = src.channels || job.overlay?.sources || [];
@@ -380,11 +384,13 @@ function renderWarnings(job) {
 }
 
 function labelChannel(value) {
+  if (String(value).includes("frc-events.firstinspires.org")) return "FIRST Event Web";
   return ({
     youtube_title: "YouTube title",
     youtube_description: "description",
     video_scorebug: "scorebug",
     overlay_unreadable: "overlay unread",
+    firstevents: "FIRST Events",
   })[value] || value;
 }
 

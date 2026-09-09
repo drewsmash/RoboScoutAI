@@ -14,13 +14,14 @@ from typing import Any, Callable
 from ramscout.broadcast import match_from_overlay, merge_tba, parse_broadcast_text, read_overlay_from_video
 from ramscout.detect import find_local_model, save_jpeg, track_video
 from ramscout.events import Pose, build_cards, detect_events
+from ramscout.firstevents import resolve_firstevents
 from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import assign_by_start, majority_alliance, stitch_occlusions
 from ramscout.ingest import download_video, fetch_video_info
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
-from ramscout.titles import parse_match_title
+from ramscout.titles import TitleHints, parse_match_title
 
 log = logging.getLogger(__name__)
 
@@ -239,10 +240,30 @@ def _run_real(job: Job) -> None:
     STORE.set_progress(job, "resolving", "Reading YouTube metadata…", 8)
     info = fetch_video_info(job.url)
     STORE.update(job, video_info=info)
+    if info.get("warning"):
+        job.warnings.append(str(info["warning"]))
     if info.get("is_live"):
         raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
 
     hints = parse_match_title(info.get("title") or "", job.url)
+    # FIRST short titles like "Qualification 65 - South Florida Regional" omit the year.
+    year = hints.year
+    if year is None and job.event_key[:4].isdigit() if job.event_key else False:
+        year = int(job.event_key[:4])
+    if year is None:
+        from ramscout.gameconfig import DEFAULT_YEAR
+
+        year = DEFAULT_YEAR
+    if year != hints.year:
+        hints = TitleHints(
+            year=year,
+            event_name=hints.event_name,
+            comp_level=hints.comp_level,
+            set_number=hints.set_number,
+            match_number=hints.match_number,
+            video_id=hints.video_id,
+            title=hints.title,
+        )
     reading = parse_broadcast_text(info.get("title") or "", info.get("description") or "", job.url)
     video_match = match_from_overlay(reading)
     STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(hints.year or reading.year))
@@ -261,12 +282,28 @@ def _run_real(job: Job) -> None:
     else:
         job.warnings.append("TBA skipped. Scores and teams come from the match video overlay and YouTube title.")
 
+    if not tba_match:
+        STORE.set_progress(job, "resolving", "Looking up FIRST Event Web results…", 20)
+        event_key = job.event_key or (job.match_key.split("_")[0] if job.match_key else None)
+        fe = resolve_firstevents(hints, event_key=event_key)
+        if fe:
+            video_match = merge_tba(video_match, fe)
+            video_match["source"] = fe.get("source") or video_match.get("source")
+            video_match["key"] = fe.get("key") or video_match.get("key")
+            video_match["event_key"] = fe.get("event_key") or video_match.get("event_key")
+            STORE.update(job, match=video_match)
+
     STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
     dest = DATA / job.id
     def dl_progress(message: str, pct: float) -> None:
         STORE.set_progress(job, "downloading", message, 25 + pct * 0.25)
 
-    video_path = download_video(job.url, dest, on_progress=dl_progress)
+    try:
+        video_path = download_video(job.url, dest, on_progress=dl_progress)
+    except Exception as exc:  # noqa: BLE001
+        # Keep scoreboard metadata even when YouTube blocks the file download.
+        STORE.update(job, match=video_match, game=public_game(hints.year))
+        raise RuntimeError(str(exc)) from exc
     STORE.update(job, video_path=str(video_path))
 
     STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 52)

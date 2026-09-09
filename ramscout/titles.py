@@ -10,7 +10,7 @@ _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 _YEAR_RE = re.compile(r"\b(20[1-3]\d)\b")
 _QM_RE = re.compile(
-    r"\b(?:qualification(?:s)?\s+match|quals?\.?|qual(?:ification)?s?)\s*#?\s*(\d+)\b",
+    r"\b(?:qualification(?:s)?\s+match|quals?\.?|qual(?:ification)?s?|qualification)\s*#?\s*(\d+)\b",
     re.IGNORECASE,
 )
 _PLAYOFF_MATCH_RE = re.compile(r"\bplayoff(?:s)?\s+match\s*#?\s*(\d+)\b", re.IGNORECASE)
@@ -24,7 +24,11 @@ _SF_RE = re.compile(
     re.IGNORECASE,
 )
 _EVENT_DASH_RE = re.compile(
-    r"(20[1-3]\d)\s+(.+?)\s+[-–—]\s+(qualification|quals?|playoff|quarter|semi|final).+",
+    r"(?:(20[1-3]\d)\s+)?(.+?)\s+[-–—]\s+(qualification|quals?|playoff|quarter|semi|final).+",
+    re.IGNORECASE,
+)
+_EVENT_TRAILING_RE = re.compile(
+    r"^(?:qualification(?:s)?\s+(?:match\s+)?\d+|quals?\s+\d+)\s+[-–—]\s+(.+)$",
     re.IGNORECASE,
 )
 _EVENT_SUFFIX_RE = re.compile(
@@ -126,6 +130,9 @@ def _extract_event_name(text: str) -> str | None:
     dash = _EVENT_DASH_RE.search(text)
     if dash:
         return _clean_event_name(dash.group(2))
+    trailing = _EVENT_TRAILING_RE.search(text)
+    if trailing:
+        return _clean_event_name(trailing.group(1))
     suffix = _EVENT_SUFFIX_RE.search(text)
     if suffix:
         return _clean_event_name(suffix.group(1))
