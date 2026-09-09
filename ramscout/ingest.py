@@ -194,7 +194,7 @@ def _download_via_auto_proxy(
         sys.executable,
         "-m",
         "yt_dlp",
-        "--no-plugins",
+        "--no-plugin-dirs",
         "--no-warnings",
         "--retries",
         "2",

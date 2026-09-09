@@ -246,7 +246,10 @@ def _run_real(job: Job) -> None:
     info = fetch_video_info(job.url)
     STORE.update(job, video_info=info)
     if info.get("warning"):
-        job.warnings.append(str(info["warning"]))
+        warning = str(info["warning"])
+        if job.video_path and Path(job.video_path).is_file():
+            warning = "YouTube metadata used oEmbed fallback (player API blocked). Analyzing the uploaded VOD."
+        job.warnings.append(warning)
     if info.get("is_live"):
         raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
 
