@@ -35,11 +35,15 @@ GitHub Actions (`.github/workflows/release.yml`) builds:
 Publish the first downloadable builds by pushing a version tag (this creates the GitHub Release the in-app updater looks for):
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
-Until that release exists, Check for updates will say the desktop files are not published yet — that is expected.
+Until that release exists, Check for updates will say the desktop files are not published yet — that is expected. The release uploads:
+
+- `RamScoutAI-windows-x64.exe`
+- `RamScoutAI-macos-arm64.zip` (Apple Silicon)
+- `RamScoutAI-macos-x64.zip` when an Intel macOS runner is available
 
 The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
 

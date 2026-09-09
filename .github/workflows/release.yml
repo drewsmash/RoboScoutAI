@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to build (e.g. v0.4.0). Leave empty to use the pushed tag / create a draft from the current version."
+        description: "Version tag to build (e.g. v0.4.1). Leave empty to use the pushed tag / create a draft from the current version."
         required: false
         default: ""
 
@@ -22,11 +22,15 @@ jobs:
         include:
           - os: windows-latest
             artifact: RamScoutAI-windows-x64.exe
+            optional: false
           - os: macos-14
             artifact: RamScoutAI-macos-arm64.zip
+            optional: false
           - os: macos-13
             artifact: RamScoutAI-macos-x64.zip
+            optional: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,6 +73,7 @@ jobs:
 
   publish:
     needs: build
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -91,6 +96,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets
+          merge-multiple: true
 
       - name: Flatten assets
         shell: bash
@@ -98,13 +104,15 @@ jobs:
           mkdir -p out
           find release-assets -type f -print -exec cp {} out/ \;
           ls -lah out
+          # Require at least Windows or one macOS build.
+          test -n "$(ls -A out 2>/dev/null)" || (echo "No desktop artifacts were produced" && exit 1)
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: RamScoutAI ${{ steps.meta.outputs.tag }}
-          draft: ${{ github.event_name == 'workflow_dispatch' && github.ref_type != 'tag' }}
+          draft: false
           generate_release_notes: true
           files: out/*
         env:
