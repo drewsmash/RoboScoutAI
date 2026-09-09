@@ -51,7 +51,12 @@ Desktop binaries are intentionally slim (no PyTorch). Demo mode, scorebug OCR, Y
 Optional env vars:
 
 - `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)
+- `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
 - `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
+
+Because this repository is private, open the release while signed into GitHub to download:
+
+https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.2
 
 
 Click **Try a sample match** to explore the UI without a download.

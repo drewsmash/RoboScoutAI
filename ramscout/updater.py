@@ -49,6 +49,14 @@ def github_repo() -> str:
     return (os.environ.get("RAMSCOUT_GITHUB_REPO") or DEFAULT_REPO).strip()
 
 
+def github_token() -> str:
+    for key in ("RAMSCOUT_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def platform_key() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -75,9 +83,7 @@ def preferred_asset_names() -> list[str]:
             "RamScoutAI-macos-universal.zip",
         ]
         if key == "macos-x64":
-            # Intel Macs can fall back to the arm64 zip note in release notes;
-            # prefer any published mac zip.
-            names.extend(["RamScoutAI-macos-x64.zip"])
+            names.append("RamScoutAI-macos-x64.zip")
         return names
     return [f"RamScoutAI-{key}.tar.gz", "RamScoutAI-linux.tar.gz"]
 
@@ -101,6 +107,17 @@ def is_newer(latest: str, current: str) -> bool:
     return version_tuple(latest) > version_tuple(current)
 
 
+def _api_headers(version: str, *, download: bool = False) -> dict[str, str]:
+    headers = {
+        "User-Agent": f"RamScoutAI/{version}",
+        "Accept": "application/octet-stream" if download else "application/vnd.github+json",
+    }
+    token = github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def check_for_update(current: str | None = None, timeout: float = 15.0) -> UpdateInfo:
     current_version = normalize_version(current or __version__)
     info = UpdateInfo(
@@ -111,22 +128,22 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
     )
     repo = github_repo()
     url = f"https://api.github.com/repos/{repo}/releases/latest"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": f"RamScoutAI/{current_version}",
-    }
-    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=_api_headers(current_version)) as client:
             res = client.get(url)
             if res.status_code == 404:
-                info.error = (
-                    "No desktop release is published yet. "
-                    f"After the first GitHub Release is created at https://github.com/{repo}/releases, "
-                    "Windows/macOS downloads will appear here."
-                )
+                if github_token():
+                    info.error = (
+                        "No desktop release is published yet. "
+                        f"Open https://github.com/{repo}/releases after the first tagged build finishes."
+                    )
+                else:
+                    info.error = (
+                        f"Could not read releases for {repo}. "
+                        "If the GitHub repo is private, download while signed in at "
+                        f"https://github.com/{repo}/releases "
+                        "or set RAMSCOUT_GITHUB_TOKEN for in-app updates."
+                    )
                 info.release_url = f"https://github.com/{repo}/releases"
                 return _store(info)
             res.raise_for_status()
@@ -154,7 +171,11 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
 
     info.available = True
     info.asset_name = asset.get("name") or ""
-    info.asset_url = asset.get("browser_download_url") or ""
+    # Private repos need the API asset URL + token; public repos can use the browser URL.
+    if github_token() and asset.get("url"):
+        info.asset_url = str(asset.get("url"))
+    else:
+        info.asset_url = str(asset.get("browser_download_url") or asset.get("url") or "")
     return _store(info)
 
 
@@ -171,10 +192,7 @@ def download_update(info: UpdateInfo | None = None, dest_dir: Path | None = None
     target_dir = dest_dir or (app_dir() / "updates")
     target_dir.mkdir(parents=True, exist_ok=True)
     dest = target_dir / (update.asset_name or "RamScoutAI-update.bin")
-    headers = {"User-Agent": f"RamScoutAI/{__version__}", "Accept": "application/octet-stream"}
-    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = _api_headers(__version__, download=True)
     with httpx.stream("GET", update.asset_url, headers=headers, follow_redirects=True, timeout=120.0) as res:
         res.raise_for_status()
         with dest.open("wb") as fh:
@@ -204,7 +222,6 @@ def _pick_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | None:
     for name in preferred_asset_names():
         if name in by_name:
             return by_name[name]
-    # Fuzzy fallback.
     key = platform_key().split("-")[0]
     for name, asset in by_name.items():
         lower = name.lower()

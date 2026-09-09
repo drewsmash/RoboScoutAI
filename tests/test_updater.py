@@ -48,7 +48,8 @@ def test_missing_release_explains_next_step(monkeypatch):
             return FakeResp()
 
     monkeypatch.setattr("ramscout.updater.httpx.Client", FakeClient)
+    monkeypatch.setattr("ramscout.updater.github_token", lambda: "")
     info = check_for_update("0.4.0")
     assert info.available is False
-    assert "published yet" in (info.error or "").lower()
+    assert "private" in (info.error or "").lower() or "releases" in (info.error or "").lower()
     assert "releases" in (info.release_url or "")
