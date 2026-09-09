@@ -713,10 +713,67 @@ function escapeHtml(value) {
 }
 
 loadTbaKey();
+initUpdater();
 fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGame({
   year: 2026,
   name: "REBUILT",
   field_image: "/static/fields/2026.png",
   robot_icons: { blue: "/static/robots/blue.png", red: "/static/robots/red.png" },
 }));
+
+async function initUpdater() {
+  const versionChip = $("version-chip");
+  const updateChip = $("update-chip");
+  if (!versionChip || !updateChip) return;
+
+  async function refresh(force = false) {
+    try {
+      const res = await fetch(force ? "/api/updates/check" : "/api/version");
+      const data = await res.json();
+      const version = data.version || data.current_version || "?";
+      versionChip.textContent = `v${version}`;
+      const update = data.update || data;
+      const available = Boolean(update?.available);
+      updateChip.hidden = !available;
+      if (available) {
+        updateChip.textContent = `Update ${update.latest_version}`;
+        updateChip.dataset.releaseUrl = update.release_url || "";
+        updateChip.dataset.canApply = update.asset_url && data.frozen ? "1" : "0";
+      }
+    } catch (_err) {
+      versionChip.textContent = "v?";
+    }
+  }
+
+  versionChip.addEventListener("click", () => refresh(true));
+  updateChip.addEventListener("click", async () => {
+    if (updateChip.dataset.canApply === "1") {
+      updateChip.textContent = "Downloading…";
+      updateChip.disabled = true;
+      try {
+        const res = await fetch("/api/updates/download", { method: "POST" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(body.detail || "Update failed.");
+          updateChip.disabled = false;
+          updateChip.textContent = "Update available";
+          return;
+        }
+        if (body.open_url) {
+          window.open(body.open_url, "_blank", "noopener");
+        }
+        alert(body.message || "Update started.");
+      } catch (_err) {
+        alert("Update failed.");
+        updateChip.disabled = false;
+      }
+      return;
+    }
+    const url = updateChip.dataset.releaseUrl;
+    if (url) window.open(url, "_blank", "noopener");
+  });
+
+  refresh(false);
+  setInterval(() => refresh(false), 30 * 60 * 1000);
+}
 drawField();

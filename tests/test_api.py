@@ -11,7 +11,18 @@ client = TestClient(app)
 def test_health():
     res = client.get("/api/health")
     assert res.status_code == 200
-    assert res.json()["status"] == "ok"
+    body = res.json()
+    assert body["status"] == "ok"
+    assert "version" in body
+
+
+def test_version_endpoint():
+    res = client.get("/api/version")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["version"]
+    assert "repo" in body
+    assert "platform" in body
 
 
 def test_index_serves_dark_ui():
@@ -19,6 +30,8 @@ def test_index_serves_dark_ui():
     assert res.status_code == 200
     assert "RamScoutAI" in res.text
     assert "color-scheme" in res.text
+    assert "upload" in res.text.lower()
+    assert "update-chip" in res.text
 
 
 def test_demo_job_returns_scout_cards():

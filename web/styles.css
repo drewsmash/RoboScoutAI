@@ -75,7 +75,17 @@ body::before {
   letter-spacing: -0.03em;
 }
 .tagline { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
-.top-actions { display: flex; gap: 8px; }
+.top-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.chip.update {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  color: var(--primary);
+  cursor: pointer;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+button.chip {
+  appearance: none;
+  font: inherit;
+}
 
 .composer {
   max-width: 860px;

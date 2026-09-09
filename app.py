@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -11,7 +13,9 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ramscout import __version__
 from ramscout.gameconfig import public_game
+from ramscout.paths import is_frozen, web_dir
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
@@ -19,12 +23,33 @@ from ramscout.pipeline import (
     export_csv,
     start_job,
 )
+from ramscout.updater import (
+    UpdateInfo,
+    apply_downloaded_update,
+    check_for_update,
+    download_update,
+    github_repo,
+    last_check,
+    platform_key,
+)
 
-ROOT = Path(__file__).resolve().parent
-WEB = ROOT / "web"
+WEB = web_dir()
 _UPLOAD_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
 
-app = FastAPI(title="RamScoutAI", version="0.3.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    def worker() -> None:
+        try:
+            check_for_update()
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="RamScoutAI", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
@@ -53,7 +78,51 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/version")
+def version() -> dict:
+    cached = last_check()
+    return {
+        "version": __version__,
+        "frozen": is_frozen(),
+        "platform": platform_key(),
+        "repo": github_repo(),
+        "update": cached,
+    }
+
+
+@app.get("/api/updates/check")
+def updates_check() -> dict:
+    return check_for_update().as_dict()
+
+
+@app.post("/api/updates/download")
+def updates_download() -> dict:
+    info = UpdateInfo(**(last_check() or check_for_update().as_dict()))
+    if not info.available:
+        raise HTTPException(400, info.error or "No update available.")
+    if not info.asset_url:
+        return {
+            "ok": False,
+            "open_url": info.release_url,
+            "message": "Open the GitHub release page to download this update.",
+            "update": info.as_dict(),
+        }
+    if not is_frozen():
+        return {
+            "ok": False,
+            "open_url": info.release_url,
+            "message": "Source installs update with git pull. Desktop builds can auto-apply.",
+            "update": info.as_dict(),
+        }
+    try:
+        package = download_update(info)
+        message = apply_downloaded_update(package)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc)) from exc
+    return {"ok": True, "message": message, "update": info.as_dict(), "restarting": True}
 
 
 @app.get("/api/game")
@@ -188,6 +257,6 @@ def job_frame(job_id: str) -> FileResponse:
 
 
 if __name__ == "__main__":
-    import uvicorn
+    from desktop.main import main
 
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), reload=True)
+    raise SystemExit(main())

@@ -1,0 +1,111 @@
+name: Release desktop builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.4.0). Leave empty to use the pushed tag / create a draft from the current version."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: RamScoutAI-windows-x64.exe
+          - os: macos-14
+            artifact: RamScoutAI-macos-arm64.zip
+          - os: macos-13
+            artifact: RamScoutAI-macos-x64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-desktop.txt
+
+      - name: Build with PyInstaller
+        run: python -m PyInstaller --noconfirm --clean packaging/ramscout.spec
+
+      - name: Package Windows exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/release | Out-Null
+          Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
+
+      - name: Package macOS zip
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist/release
+          cd dist
+          chmod +x RamScoutAI
+          zip -9 "release/${{ matrix.artifact }}" RamScoutAI
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(python -c 'from ramscout import __version__; print(__version__)')"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten assets
+        shell: bash
+        run: |
+          mkdir -p out
+          find release-assets -type f -print -exec cp {} out/ \;
+          ls -lah out
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: RamScoutAI ${{ steps.meta.outputs.tag }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && github.ref_type != 'tag' }}
+          generate_release_notes: true
+          files: out/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

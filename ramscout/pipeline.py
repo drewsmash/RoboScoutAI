@@ -19,14 +19,14 @@ from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import assign_by_start, majority_alliance, stitch_occlusions
 from ramscout.ingest import download_video, fetch_video_info, store_uploaded_video
+from ramscout.paths import jobs_dir, models_dirs
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
 from ramscout.titles import TitleHints, parse_match_title
 
 log = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data" / "jobs"
+DATA = jobs_dir()
 
 
 ProgressFn = Callable[[str, float], None]
@@ -325,7 +325,7 @@ def _run_real(job: Job) -> None:
     STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(reading.year or hints.year))
 
     STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
-    model = find_local_model([ROOT, ROOT / "models", Path.cwd()])
+    model = find_local_model(models_dirs())
     team_numbers = []
     if video_match:
         team_numbers = [str(v["team_number"]) for v in video_match.get("teams", {}).values() if v.get("team_number")]

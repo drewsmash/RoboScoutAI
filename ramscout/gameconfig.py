@@ -7,7 +7,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-GAMES_DIR = Path(__file__).resolve().parent / "games"
+from ramscout.paths import bundle_root
+
+GAMES_DIR = bundle_root() / "ramscout" / "games"
 DEFAULT_YEAR = 2026
 
 

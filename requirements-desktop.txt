@@ -1,0 +1,2 @@
+# Extra packages used only for desktop packaging / frozen builds.
+pyinstaller>=6.10.0

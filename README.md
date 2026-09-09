@@ -13,16 +13,41 @@ Paste a recorded FRC match VOD (not a live stream). RamScoutAI:
 
 Action counts are **heuristics**. Confirm anything you put on a pick list.
 
-## Run
+## Desktop builds (Windows / macOS)
+
+RamScoutAI can ship as a local desktop app that opens in your browser:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+# from source
+python desktop/main.py
+
+# or package on the target OS
+pip install -r requirements.txt -r requirements-desktop.txt
+bash packaging/build.sh
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+GitHub Actions (`.github/workflows/release.yml`) builds:
+
+- `RamScoutAI-windows-x64.exe`
+- `RamScoutAI-macos-arm64.zip`
+- `RamScoutAI-macos-x64.zip`
+
+Push a version tag to publish a release the app can update from:
+
+```bash
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
+
+Desktop binaries are intentionally slim (no PyTorch). Demo mode, scorebug OCR, YouTube ingest, and field playback work out of the box. For YOLO robot tracking, run from source with `ultralytics` installed and drop a robot `.pt` in `models/`.
+
+Optional env vars:
+
+- `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)
+- `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
+
 
 Click **Try a sample match** to explore the UI without a download.
 
