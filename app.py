@@ -44,6 +44,12 @@ async def lifespan(_app: FastAPI):
             check_for_update()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            from ramscout.detect import ensure_detector_weights
+
+            ensure_detector_weights()
+        except Exception:  # noqa: BLE001
+            pass
 
     threading.Thread(target=worker, daemon=True).start()
     yield

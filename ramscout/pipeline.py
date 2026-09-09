@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ramscout.broadcast import match_from_overlay, merge_tba, parse_broadcast_text, read_overlay_from_video
-from ramscout.detect import find_local_model, save_jpeg, track_video
+from ramscout.detect import ensure_detector_weights, find_local_model, save_jpeg, track_video
 from ramscout.events import Pose, build_cards, detect_events
 from ramscout.firstevents import resolve_firstevents
 from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
-from ramscout.identity import assign_by_start, majority_alliance, stitch_occlusions
+from ramscout.identity import assign_by_start, keep_top_tracks, majority_alliance, stitch_occlusions
 from ramscout.ingest import download_video, fetch_video_info, store_uploaded_video
 from ramscout.paths import jobs_dir, models_dirs
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
@@ -321,11 +321,12 @@ def _run_real(job: Job) -> None:
 
     STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 52)
     reading = read_overlay_from_video(video_path, existing=reading, year=hints.year or reading.year)
-    video_match = merge_tba(match_from_overlay(reading), tba_match)
+    # Keep FIRST/TBA teams if overlay OCR did not recover them.
+    video_match = merge_tba(match_from_overlay(reading), tba_match or video_match)
     STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(reading.year or hints.year))
 
     STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
-    model = find_local_model(models_dirs())
+    model = find_local_model(models_dirs()) or ensure_detector_weights()
     team_numbers = []
     if video_match:
         team_numbers = [str(v["team_number"]) for v in video_match.get("teams", {}).values() if v.get("team_number")]
@@ -338,7 +339,7 @@ def _run_real(job: Job) -> None:
         src_points=job.src_points,
         model_path=str(model) if model else None,
         team_numbers=team_numbers or None,
-        frame_stride=5,
+        frame_stride=3,
         crop_top=job.crop_top,
         crop_bottom=job.crop_bottom,
         on_progress=track_progress,
@@ -346,13 +347,17 @@ def _run_real(job: Job) -> None:
     frame_path = dest / "calibration.jpg"
     save_jpeg(result["first_frame"], frame_path)
     samples = stitch_occlusions(result["samples"])
-    warnings = list(job.warnings) + list(result.get("warnings") or [])
-    if not model:
-        warnings.append("No robot detector weights found. Add a robot-trained YOLO .pt in the project folder or models/.")
-    elif not result.get("used_model"):
-        warnings.append("Detector did not run. Paths will be empty.")
-
     blue, red = _alliance_teams(video_match)
+    samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6) or 6)
+    warnings = list(job.warnings) + list(result.get("warnings") or [])
+    if not samples:
+        warnings.append(
+            "Tracking produced no robot paths. Click the four field corners on the broadcast frame, "
+            "widen the field crop, or upload a clearer wide-angle VOD."
+        )
+    elif not result.get("used_model"):
+        warnings.append("Detector weights unavailable — scouting used motion tracking only.")
+
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
     # Prefer OCR team labels when present.
     for sample in samples:
@@ -387,19 +392,33 @@ def _reproject_and_scout(job: Job) -> None:
         except Exception as exc:  # noqa: BLE001
             job.warnings.append(f"Calibration ignored: {exc}")
 
+    blue, red = _alliance_teams(job.match)
+    if blue or red:
+        samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6))
+
     for sample in samples:
         tid = str(sample.get("track_id"))
         if tid in job.assignments:
             sample["team"] = job.assignments[tid]
 
-    if not any(s.get("team") for s in samples) and job.match:
-        blue, red = _alliance_teams(job.match)
+    if (blue or red) and (not job.assignments or not any(s.get("team") for s in samples)):
         guessed = assign_by_start(samples, blue, red)
         STORE.update(job, assignments={str(k): v for k, v in guessed.items()})
         for sample in samples:
             tid = int(sample["track_id"])
             if tid in guessed:
                 sample["team"] = guessed[tid]
+    elif blue or red:
+        # Refresh assignments for any unmapped tracks after pruning.
+        guessed = assign_by_start(samples, blue, red)
+        merged = dict(job.assignments)
+        for tid, team in guessed.items():
+            merged.setdefault(str(tid), team)
+        STORE.update(job, assignments=merged)
+        for sample in samples:
+            tid = str(sample["track_id"])
+            if tid in merged:
+                sample["team"] = merged[tid]
 
     poses: list[Pose] = []
     grouped: dict[int, list[dict[str, Any]]] = {}
@@ -407,7 +426,10 @@ def _reproject_and_scout(job: Job) -> None:
         grouped.setdefault(int(sample["track_id"]), []).append(sample)
     for tid, group in grouped.items():
         alliance = majority_alliance(group)
-        team = str(group[0].get("team") or job.assignments.get(str(tid)) or f"T{tid}")
+        team = str(group[0].get("team") or job.assignments.get(str(tid)) or "")
+        if not team:
+            # Last resort: still scout unnamed tracks so the UI is not empty.
+            team = f"T{tid}"
         for sample in group:
             sample["alliance"] = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else alliance
             sample["team"] = team
