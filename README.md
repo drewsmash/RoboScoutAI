@@ -22,7 +22,7 @@ RamScoutAI can ship as a local desktop app that opens in your browser:
 python desktop/main.py
 
 # or package on the target OS
-pip install -r requirements.txt -r requirements-desktop.txt
+pip install -r requirements-desktop.txt
 bash packaging/build.sh
 ```
 
@@ -32,12 +32,14 @@ GitHub Actions (`.github/workflows/release.yml`) builds:
 - `RamScoutAI-macos-arm64.zip`
 - `RamScoutAI-macos-x64.zip`
 
-Push a version tag to publish a release the app can update from:
+Publish the first downloadable builds by pushing a version tag (this creates the GitHub Release the in-app updater looks for):
 
 ```bash
 git tag v0.4.0
 git push origin v0.4.0
 ```
+
+Until that release exists, Check for updates will say the desktop files are not published yet — that is expected.
 
 The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
 

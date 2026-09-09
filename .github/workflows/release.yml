@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip wheel
-          python -m pip install -r requirements.txt
+          # Slim freeze set — skip ultralytics/torch so CI stays fast and artifacts stay downloadable.
           python -m pip install -r requirements-desktop.txt
 
       - name: Build with PyInstaller

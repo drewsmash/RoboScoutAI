@@ -119,7 +119,12 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
             res = client.get(url)
             if res.status_code == 404:
-                info.error = "No GitHub releases published yet."
+                info.error = (
+                    "No desktop release is published yet. "
+                    f"After the first GitHub Release is created at https://github.com/{repo}/releases, "
+                    "Windows/macOS downloads will appear here."
+                )
+                info.release_url = f"https://github.com/{repo}/releases"
                 return _store(info)
             res.raise_for_status()
             payload = res.json()
@@ -136,8 +141,12 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
 
     asset = _pick_asset(payload.get("assets") or [])
     if asset is None:
-        info.error = f"Update {latest} exists, but no build for {info.platform} was attached."
-        info.available = True
+        info.error = (
+            f"Release {latest} exists, but the {info.platform} desktop file is not attached yet. "
+            f"Check https://github.com/{repo}/releases for Windows/macOS assets."
+        )
+        info.available = False
+        info.release_url = payload.get("html_url") or f"https://github.com/{repo}/releases"
         return _store(info)
 
     info.available = True

@@ -745,7 +745,28 @@ async function initUpdater() {
     }
   }
 
-  versionChip.addEventListener("click", () => refresh(true));
+  versionChip.addEventListener("click", async () => {
+    await refresh(true);
+    try {
+      const res = await fetch("/api/updates/check");
+      const update = await res.json();
+      if (update.available) return;
+      if (update.error) {
+        const open = update.release_url
+          ? `\n\nOpen releases? ${update.release_url}`
+          : "";
+        if (update.release_url && window.confirm(`${update.error}${open}`)) {
+          window.open(update.release_url, "_blank", "noopener");
+        } else if (!update.release_url) {
+          alert(update.error);
+        }
+      } else {
+        alert(`RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
+      }
+    } catch (_err) {
+      alert("Could not check GitHub for updates.");
+    }
+  });
   updateChip.addEventListener("click", async () => {
     if (updateChip.dataset.canApply === "1") {
       updateChip.textContent = "Downloading…";
