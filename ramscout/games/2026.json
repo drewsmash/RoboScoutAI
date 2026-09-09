@@ -21,10 +21,10 @@
     "bottom_band": [0.82, 1.0]
   },
   "landmarks": {
-    "blue_hub": {"x": 158.6, "y": 158.85, "label": "Hub"},
-    "red_hub": {"x": 492.6, "y": 158.85, "label": "Hub"},
-    "blue_tower": {"x": 28.0, "y": 120.7, "label": "Tower"},
-    "red_tower": {"x": 623.2, "y": 120.7, "label": "Tower"}
+    "blue_hub": {"x": 162.8, "y": 158.85, "label": "Hub"},
+    "red_hub": {"x": 488.4, "y": 158.85, "label": "Hub"},
+    "blue_tower": {"x": 36.0, "y": 120.7, "label": "Tower"},
+    "red_tower": {"x": 615.2, "y": 120.7, "label": "Tower"}
   },
   "upgrade": {
     "copy_this_file_to": "ramscout/games/YYYY.json",
