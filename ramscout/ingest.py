@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import unquote, urlparse
@@ -46,6 +49,8 @@ _CLIENT_STRATEGIES: tuple[tuple[str, ...], ...] = (
 
 _FORMAT = "bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/b[height<=720]/b"
 _FORMAT_COMPACT = "18/b[height<=480]/b[height<=720]/b"
+_AUTO_PROXY_ATTEMPTS = 30
+_AUTO_PROXY_TIMEOUT_S = 90.0
 
 
 def fetch_video_info(url: str) -> dict[str, Any]:
@@ -123,23 +128,26 @@ def download_video(url: str, dest_dir: Path, on_progress: ProgressFn | None = No
         if on_progress:
             on_progress(f"Downloading via {strategy.label}…", 5.0)
         try:
-            info = _ytdlp_extract(
-                url,
-                download=False,
-                strategy=strategy,
-                compact=strategy.use_proxy,
-            )
-            if info.get("is_live") or info.get("live_status") == "is_live":
-                raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
-            info = _ytdlp_extract(
-                url,
-                download=True,
-                strategy=strategy,
-                outtmpl=outtmpl,
-                progress_hooks=[_progress_hook(on_progress)],
-                compact=strategy.use_proxy,
-            )
-            path = _locate_download(dest_dir, outtmpl, info)
+            if strategy.label.startswith("auto-proxy"):
+                path = _download_via_auto_proxy(url, dest_dir, strategy, on_progress)
+            else:
+                info = _ytdlp_extract(
+                    url,
+                    download=False,
+                    strategy=strategy,
+                    compact=strategy.use_proxy,
+                )
+                if info.get("is_live") or info.get("live_status") == "is_live":
+                    raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
+                info = _ytdlp_extract(
+                    url,
+                    download=True,
+                    strategy=strategy,
+                    outtmpl=outtmpl,
+                    progress_hooks=[_progress_hook(on_progress)],
+                    compact=strategy.use_proxy,
+                )
+                path = _locate_download(dest_dir, outtmpl, info)
             if on_progress:
                 on_progress(f"Download complete ({strategy.label}).", 100.0)
             log.info("Downloaded %s via %s", path.name, strategy.label)
@@ -169,6 +177,63 @@ def download_video(url: str, dest_dir: Path, on_progress: ProgressFn | None = No
             continue
 
     raise RuntimeError(_friendly_youtube_error("; ".join(errors[-3:]) if errors else "unknown error"))
+
+
+def _download_via_auto_proxy(
+    url: str,
+    dest_dir: Path,
+    strategy: _Strategy,
+    on_progress: ProgressFn | None,
+) -> Path:
+    """One-shot yt-dlp CLI through a proxy with a hard kill timeout."""
+    proxy = strategy.proxy or ""
+    if "://" not in proxy:
+        proxy = f"http://{proxy}"
+    outtmpl = str(dest_dir / "%(id)s.%(ext)s")
+    cmd = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--no-plugins",
+        "--no-warnings",
+        "--retries",
+        "2",
+        "--socket-timeout",
+        "15",
+        "--proxy",
+        proxy,
+        "--extractor-args",
+        "youtube:player_client=tv,android_vr",
+        "-f",
+        _FORMAT_COMPACT,
+        "-o",
+        outtmpl,
+        "--merge-output-format",
+        "mp4",
+        url,
+    ]
+    cookies = (os.environ.get("YTDLP_COOKIES") or "").strip()
+    if cookies and Path(cookies).is_file():
+        cmd[3:3] = ["--cookies", cookies]
+    if on_progress:
+        on_progress(f"Trying proxy {proxy}…", 8.0)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_AUTO_PROXY_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"auto-proxy timed out after {_AUTO_PROXY_TIMEOUT_S:.0f}s") from exc
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "yt-dlp failed").strip()
+        raise RuntimeError(err[-400:])
+    for found in sorted(dest_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if found.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"} and found.is_file() and found.stat().st_size > 100_000:
+            return found
+    raise RuntimeError("auto-proxy finished but no usable video file was written")
 
 
 def store_uploaded_video(upload_path: Path, dest_dir: Path, preferred_name: str | None = None) -> Path:
@@ -202,11 +267,11 @@ def _iter_download_strategies(download: bool) -> Iterable[_Strategy]:
         yield _Strategy(f"direct/{label}", clients, None)
 
     if download and _auto_proxy_enabled():
-        for i, proxy in enumerate(_discover_proxies()):
+        proxies = _discover_proxies()
+        random.shuffle(proxies)
+        for i, proxy in enumerate(proxies[:_AUTO_PROXY_ATTEMPTS]):
             # Compact progressive formats survive flaky free proxies better.
             yield _Strategy(f"auto-proxy#{i}/tv+android_vr", ("tv", "android_vr"), proxy)
-            if i >= 11:
-                break
 
 
 def _configured_proxy() -> str | None:
@@ -225,9 +290,9 @@ def _auto_proxy_enabled() -> bool:
 def _discover_proxies() -> list[str]:
     """Best-effort public proxy candidates for cloud / datacenter IPs."""
     urls = [
-        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all",
+        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=us&ssl=all&anonymity=all",
+        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=elite",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-        "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
     ]
     found: list[str] = []
     seen: set[str] = set()
@@ -269,6 +334,7 @@ def _ytdlp_opts(
         "noprogress": True,
         "retries": 8,
         "fragment_retries": 8,
+        "socket_timeout": 20 if strategy.proxy else 30,
         "extractor_args": {"youtube": {"player_client": list(strategy.clients)}},
         "js_runtimes": {"deno": {}},
     }

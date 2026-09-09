@@ -38,19 +38,20 @@ def test_download_tries_proxy_after_direct_block(monkeypatch, tmp_path):
     calls = []
 
     def fake_extract(url, *, download, strategy, outtmpl=None, progress_hooks=None, compact=False):
-        calls.append(strategy.label)
-        if strategy.proxy:
-            if download:
-                path = Path(outtmpl.replace("%(id)s", "vid").replace("%(ext)s", "mp4"))
-                path.write_bytes(b"ok")
-                return {"id": "vid", "ext": "mp4", "requested_downloads": [{"filepath": str(path)}]}
-            return {"id": "vid", "title": "Qualification 1", "is_live": False}
+        calls.append(("extract", strategy.label))
         raise RuntimeError("Sign in to confirm you’re not a bot")
 
+    def fake_auto(url, dest_dir, strategy, on_progress):
+        calls.append(("auto", strategy.label))
+        path = dest_dir / "vid.mp4"
+        path.write_bytes(b"ok" * 60_000)
+        return path
+
     monkeypatch.setattr("ramscout.ingest._ytdlp_extract", fake_extract)
+    monkeypatch.setattr("ramscout.ingest._download_via_auto_proxy", fake_auto)
     monkeypatch.setattr("ramscout.ingest._configured_proxy", lambda: None)
     monkeypatch.setattr("ramscout.ingest._auto_proxy_enabled", lambda: True)
     monkeypatch.setattr("ramscout.ingest._discover_proxies", lambda: ["1.2.3.4:8080"])
     path = download_video("https://youtu.be/m9uLAGKtenM", tmp_path / "out")
     assert path.exists()
-    assert any(label.startswith("auto-proxy") for label in calls)
+    assert any(kind == "auto" for kind, _ in calls)
