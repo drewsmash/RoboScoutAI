@@ -437,11 +437,11 @@ function drawField() {
     ctx.fillStyle = "rgba(242,139,130,0.16)";
     ctx.fillRect(X(FIELD.L - FIELD.ALLIANCE), 0, X(FIELD.ALLIANCE), h);
   }
+  const job = state.job;
+  if (!job) return;
   drawLandmarks(ctx, X, Y);
   drawZebra(ctx, X, Y, job.zebra);
 
-  const job = state.job;
-  if (!job) return;
   const autoEnd = Number(job.game?.auto_end_s || AUTO_END);
   const endgameStart = Number(job.game?.endgame_start_s || ENDGAME_START);
   const byTeam = {};
