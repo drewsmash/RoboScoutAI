@@ -288,7 +288,10 @@ def _run_real(job: Job) -> None:
         except TBAError as exc:
             job.warnings.append(str(exc))
     else:
-        job.warnings.append("TBA skipped. Scores and teams come from the match video overlay and YouTube title.")
+        job.warnings.append(
+            "No TBA key provided — teams and scores are read from the match video overlay and YouTube title. "
+            "Paste a TBA auth key only if you want nicknames / official extras."
+        )
 
     if not tba_match:
         STORE.set_progress(job, "resolving", "Looking up FIRST Event Web results…", 20)
@@ -356,7 +359,10 @@ def _run_real(job: Job) -> None:
             "widen the field crop, or upload a clearer wide-angle VOD."
         )
     elif not result.get("used_model"):
-        warnings.append("Detector weights unavailable — scouting used motion tracking only.")
+        warnings.append(
+            "Neural detector unavailable in this build — OpenCV motion tracking filled the path overlay. "
+            "For stronger robot detection: `pip install ultralytics` and/or drop a robot-trained .pt in models/."
+        )
 
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
     # Prefer OCR team labels when present.

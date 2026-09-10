@@ -48,15 +48,16 @@ def test_motion_tracking_produces_paths_and_scout_cards(tmp_path):
     video = _write_moving_robots(tmp_path / "bots.mp4")
     result = track_video(
         video,
-        model_path=None,  # force motion-only path through ensure; still may load weights
+        motion_only=True,
         frame_stride=2,
         crop_top=0.05,
         crop_bottom=0.95,
         max_frames=50,
     )
-    # Even if YOLO loads, motion/YOLO should see moving colored blocks.
     samples = stitch_occlusions(result["samples"])
     assert len(samples) > 20, f"expected tracks, got {len(samples)} warnings={result['warnings']}"
+    assert result["used_model"] is False
+    assert result["motion_hits"] > 0
 
     blue = ["59", "2383", "11138"]
     red = ["179", "5472", "9201"]
@@ -82,3 +83,23 @@ def test_motion_tracking_produces_paths_and_scout_cards(tmp_path):
     cards = build_cards(poses, events)
     assert len(cards) >= 3
     assert sum(c.path_length_in for c in cards) > 0
+
+
+def test_track_video_without_ultralytics(tmp_path, monkeypatch):
+    """Desktop slim builds omit ultralytics — paths must still populate."""
+    import ramscout.detect as detect
+
+    monkeypatch.setattr(detect, "ultralytics_available", lambda: False)
+    video = _write_moving_robots(tmp_path / "bots2.mp4", frames=60)
+    result = detect.track_video(
+        video,
+        frame_stride=2,
+        crop_top=0.05,
+        crop_bottom=0.95,
+        max_frames=40,
+    )
+    assert result["used_model"] is False
+    assert len(result["samples"]) > 10
+    assert any("Ultralytics is not installed" in w or "motion" in w.lower() for w in result["warnings"])
+    assert "Path overlay will be empty" not in " ".join(result["warnings"])
+    assert "Detector did not run" not in " ".join(result["warnings"])

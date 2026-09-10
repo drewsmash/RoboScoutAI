@@ -1,8 +1,9 @@
 """Robot detection and tracking on a recorded match video.
 
-Uses Ultralytics YOLO when weights are available (auto-downloads a nano COCO
-model into models/), and falls back to OpenCV motion blobs so scouting still
-gets field paths when the neural detector misses robots.
+Uses Ultralytics YOLO when it is installed and weights are available.
+Otherwise (and as a supplement) uses OpenCV motion / background-subtraction
+blobs so scouting still gets field paths — including in slim desktop builds
+that intentionally omit PyTorch/ultralytics.
 """
 
 from __future__ import annotations
@@ -29,6 +30,15 @@ _WEIGHT_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yo
 _FALLBACK_CLASSES = [0, 2, 3, 5, 7, 32, 36]  # person, car, motorcycle, bus, truck, sports ball, skateboard
 
 
+def ultralytics_available() -> bool:
+    try:
+        import ultralytics  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 def find_local_model(search_dirs: list[Path] | None = None) -> Path | None:
     dirs = search_dirs or models_dirs()
     for folder in dirs:
@@ -45,7 +55,14 @@ def find_local_model(search_dirs: list[Path] | None = None) -> Path | None:
 
 
 def ensure_detector_weights() -> Path | None:
-    """Return a usable .pt path, downloading YOLO nano into models/ if needed."""
+    """Return a usable .pt path when Ultralytics can load it.
+
+    Slim desktop builds omit ultralytics/torch on purpose — skip the download
+    and let OpenCV motion tracking handle paths instead.
+    """
+    if not ultralytics_available():
+        return None
+
     existing = find_local_model()
     if existing is not None:
         return existing
@@ -70,12 +87,10 @@ def ensure_detector_weights() -> Path | None:
         from ultralytics import YOLO
 
         model = YOLO(_DEFAULT_WEIGHT)
-        # Ultralytics may have cached/downloaded next to CWD.
         for candidate in [Path(_DEFAULT_WEIGHT).resolve(), Path.cwd() / _DEFAULT_WEIGHT, dest]:
             if candidate.is_file() and candidate.stat().st_size > 1000:
                 if candidate.resolve() != dest.resolve():
                     dest.write_bytes(candidate.read_bytes())
-                # Touch the model so weights stay warm.
                 _ = model.names
                 return dest if dest.is_file() else candidate
     except Exception as exc:  # noqa: BLE001
@@ -102,6 +117,88 @@ def robot_class_ids(model) -> list[int] | None:
     return ids or None
 
 
+class MotionTracker:
+    """OpenCV motion + background-subtraction tracker for broadcast FOV robots."""
+
+    def __init__(self) -> None:
+        self.prev_gray: np.ndarray | None = None
+        self.subtractor = None
+        self.tracks: dict[int, dict[str, float]] = {}
+        self.next_id = 9000
+        self.warm_frames = 0
+
+    def detect(self, cropped: np.ndarray, frame_w: int, frame_h: int) -> list[dict[str, Any]]:
+        import cv2
+
+        if self.subtractor is None:
+            self.subtractor = cv2.createBackgroundSubtractorMOG2(
+                history=90,
+                varThreshold=24,
+                detectShadows=False,
+            )
+
+        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        fg = self.subtractor.apply(cropped, learningRate=0.02 if self.warm_frames < 12 else 0.005)
+        _, fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
+
+        if self.prev_gray is not None and self.prev_gray.shape == gray.shape:
+            delta = cv2.absdiff(self.prev_gray, gray)
+            _, diff = cv2.threshold(delta, 16, 255, cv2.THRESH_BINARY)
+            mask = cv2.bitwise_or(fg, diff)
+        else:
+            mask = fg
+
+        self.prev_gray = gray
+        self.warm_frames += 1
+
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        centroids: list[tuple[float, float, list[float]]] = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            if not _plausible_robot_size(float(w), float(h), frame_w, frame_h):
+                continue
+            cx, cy = x + w * 0.5, y + h * 0.5
+            centroids.append((cx, cy, [float(x), float(y), float(x + w), float(y + h)]))
+
+        # Prefer larger blobs first (robots over scorebug flicker).
+        centroids.sort(key=lambda row: (row[2][2] - row[2][0]) * (row[2][3] - row[2][1]), reverse=True)
+        centroids = centroids[:8]
+
+        match_radius = max(56.0, min(frame_w, frame_h) * 0.08)
+        used_tracks: set[int] = set()
+        assigned: list[dict[str, Any]] = []
+        for cx, cy, bbox in centroids:
+            best_id = None
+            best_dist = match_radius
+            for tid, state in self.tracks.items():
+                if tid in used_tracks:
+                    continue
+                dist = ((state["x"] - cx) ** 2 + (state["y"] - cy) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_id = tid
+            if best_id is None:
+                best_id = self.next_id
+                self.next_id += 1
+            used_tracks.add(best_id)
+            self.tracks[best_id] = {"x": cx, "y": cy, "age": 0.0}
+            assigned.append({"track_id": best_id, "bbox": bbox, "source": "motion"})
+
+        stale = [tid for tid in self.tracks if tid not in used_tracks]
+        for tid in stale:
+            self.tracks[tid]["age"] = self.tracks[tid].get("age", 0.0) + 1.0
+            if self.tracks[tid]["age"] > 10:
+                self.tracks.pop(tid, None)
+
+        return assigned
+
+
 def track_video(
     video_path: Path,
     homography: np.ndarray | None = None,
@@ -113,8 +210,13 @@ def track_video(
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
     on_progress: ProgressFn | None = None,
+    motion_only: bool = False,
 ) -> dict[str, Any]:
-    """Run detection + tracking. Returns field-space samples and warnings."""
+    """Run detection + tracking. Returns field-space samples and warnings.
+
+    Always attempts OpenCV motion tracking so paths are produced even when
+    Ultralytics/YOLO is not installed (desktop slim builds).
+    """
     import cv2
 
     cap = cv2.VideoCapture(str(video_path))
@@ -147,7 +249,16 @@ def track_video(
     warnings: list[str] = []
     model = None
     class_filter: list[int] | None = None
-    resolved_weights = model_path or (str(ensure_detector_weights() or "") or None)
+    can_yolo = (not motion_only) and ultralytics_available()
+    resolved_weights = None
+    if can_yolo:
+        resolved_weights = model_path or (str(ensure_detector_weights() or "") or None)
+    elif not motion_only:
+        warnings.append(
+            "Ultralytics is not installed — using OpenCV motion tracking for robot paths. "
+            "Install with `pip install ultralytics` (or drop a robot .pt in models/) for better detection."
+        )
+
     if resolved_weights:
         try:
             model, family = load_detector(resolved_weights)
@@ -159,17 +270,13 @@ def track_video(
                     f"plus motion fallback. Drop a robot-trained .pt in models/ for better results."
                 )
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"Could not load detector ({exc}). Falling back to motion tracking.")
+            warnings.append(f"Could not load detector ({exc}). Using OpenCV motion tracking for paths.")
             model = None
-    else:
-        warnings.append("No detector weights available. Using OpenCV motion tracking only.")
 
     samples: list[dict[str, Any]] = []
     frame_index = 0
     processed = 0
-    motion_prev = None
-    motion_tracks: dict[int, dict[str, float]] = {}
-    next_motion_id = 9000
+    motion = MotionTracker()
     yolo_hits = 0
     motion_hits = 0
 
@@ -225,22 +332,15 @@ def track_video(
                 if processed == 0:
                     warnings.append(f"YOLO tracking error ({exc}); relying on motion fallback.")
 
-        if len(detections) < 2:
-            motion_dets, motion_prev, motion_tracks, next_motion_id = _motion_detect(
-                cropped,
-                motion_prev,
-                motion_tracks,
-                next_motion_id,
-                crop_w,
-                crop_h,
-            )
-            # Prefer YOLO IDs; fill gaps with motion blobs.
-            if not detections:
-                detections = motion_dets
-                motion_hits += len(motion_dets)
-            elif len(detections) < 4:
-                detections = _merge_detections(detections, motion_dets)
-                motion_hits += max(0, len(detections) - yolo_hits)
+        # Always refresh motion; use it when YOLO is thin or absent.
+        motion_dets = motion.detect(cropped, crop_w, crop_h)
+        if not detections:
+            detections = motion_dets
+            motion_hits += len(motion_dets)
+        elif len(detections) < 4:
+            before = len(detections)
+            detections = _merge_detections(detections, motion_dets)
+            motion_hits += max(0, len(detections) - before)
 
         feet: list[list[float]] = []
         meta: list[tuple[int, str, str, list[float], float, float]] = []
@@ -284,9 +384,12 @@ def track_video(
 
     cap.release()
     if not samples:
-        warnings.append("No robot tracks found in the video crop. Recalibrate the four field corners or widen the crop.")
+        warnings.append(
+            "No robot tracks found in the video crop. Recalibrate the four field corners, "
+            "widen the field crop (Advanced), or upload a clearer wide-angle VOD."
+        )
     elif yolo_hits == 0 and motion_hits > 0:
-        warnings.append("Used motion-blob tracking (YOLO found no robots). Paths are approximate.")
+        warnings.append("Tracked robots with OpenCV motion (no YOLO). Paths are approximate — confirm before pick lists.")
 
     return {
         "samples": samples,
@@ -310,75 +413,19 @@ def save_jpeg(frame_bgr: np.ndarray, path: Path, quality: int = 85) -> None:
 
 
 def _plausible_robot_size(bw: float, bh: float, frame_w: int, frame_h: int) -> bool:
-    if bw <= 4 or bh <= 4:
+    if bw <= 3 or bh <= 3:
         return False
     # Reject tiny noise and huge scorebug/overlay boxes.
-    if bw > frame_w * 0.35 or bh > frame_h * 0.55:
+    if bw > frame_w * 0.40 or bh > frame_h * 0.60:
         return False
-    if bw * bh < (frame_w * frame_h) * 0.0004:
+    area = bw * bh
+    frame_area = max(frame_w * frame_h, 1)
+    if area < frame_area * 0.00025:
+        return False
+    if area > frame_area * 0.18:
         return False
     aspect = bw / max(bh, 1.0)
-    return 0.35 <= aspect <= 3.5
-
-
-def _motion_detect(
-    cropped: np.ndarray,
-    prev_gray: np.ndarray | None,
-    tracks: dict[int, dict[str, float]],
-    next_id: int,
-    frame_w: int,
-    frame_h: int,
-) -> tuple[list[dict[str, Any]], np.ndarray, dict[int, dict[str, float]], int]:
-    import cv2
-
-    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    detections: list[dict[str, Any]] = []
-    if prev_gray is None or prev_gray.shape != gray.shape:
-        return detections, gray, tracks, next_id
-
-    delta = cv2.absdiff(prev_gray, gray)
-    _, mask = cv2.threshold(delta, 18, 255, cv2.THRESH_BINARY)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=2)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    centroids: list[tuple[float, float, list[float]]] = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if not _plausible_robot_size(float(w), float(h), frame_w, frame_h):
-            continue
-        cx, cy = x + w * 0.5, y + h * 0.5
-        centroids.append((cx, cy, [float(x), float(y), float(x + w), float(y + h)]))
-
-    # Greedy match to existing motion tracks.
-    used_tracks: set[int] = set()
-    assigned: list[dict[str, Any]] = []
-    for cx, cy, bbox in centroids:
-        best_id = None
-        best_dist = 80.0
-        for tid, state in tracks.items():
-            if tid in used_tracks:
-                continue
-            dist = ((state["x"] - cx) ** 2 + (state["y"] - cy) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_id = tid
-        if best_id is None:
-            best_id = next_id
-            next_id += 1
-        used_tracks.add(best_id)
-        tracks[best_id] = {"x": cx, "y": cy, "age": 0}
-        assigned.append({"track_id": best_id, "bbox": bbox, "source": "motion"})
-
-    # Age out stale tracks.
-    stale = [tid for tid, state in tracks.items() if tid not in used_tracks]
-    for tid in stale:
-        tracks[tid]["age"] = tracks[tid].get("age", 0) + 1
-        if tracks[tid]["age"] > 8:
-            tracks.pop(tid, None)
-
-    return assigned, gray, tracks, next_id
+    return 0.28 <= aspect <= 4.0
 
 
 def _merge_detections(

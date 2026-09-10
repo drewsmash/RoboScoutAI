@@ -46,7 +46,12 @@ Until that release exists, Check for updates will say the desktop files are not 
 
 The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
 
-Desktop binaries are intentionally slim (no PyTorch). Demo mode, scorebug OCR, YouTube ingest, and field playback work out of the box. For YOLO robot tracking, run from source with `ultralytics` installed and drop a robot `.pt` in `models/`.
+Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **OpenCV motion tracking** still work — robot paths are approximate without YOLO. For stronger neural detection, run from source:
+
+```bash
+pip install -r requirements.txt   # includes ultralytics
+# optional: drop a robot-trained .pt in models/
+```
 
 ### App icons & code signing
 
@@ -82,7 +87,7 @@ https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.2
 
 Click **Try a sample match** to explore the UI without a download.
 
-For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). If none is present, RamScoutAI auto-downloads YOLO nano weights and also runs an OpenCV motion-blob fallback so scout cards are still produced. Default COCO weights may follow people/vehicles — the UI warns when that happens.
+For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RamScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
 
 A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
