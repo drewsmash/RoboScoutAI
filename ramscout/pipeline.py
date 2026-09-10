@@ -67,6 +67,11 @@ class Job:
     crop_bottom: float = 0.65
     user_calibrated: bool = False
     seeds: list[dict[str, Any]] = field(default_factory=list)
+    tracker_mode: str = "auto"
+    openai_key: str = ""
+    google_key: str = ""
+    tracker_strategies: list[str] = field(default_factory=list)
+    source_hits: dict[str, int] = field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
         return {
@@ -97,6 +102,9 @@ class Job:
             "user_calibrated": self.user_calibrated,
             "crop_top": self.crop_top,
             "crop_bottom": self.crop_bottom,
+            "tracker_mode": self.tracker_mode,
+            "tracker_strategies": self.tracker_strategies,
+            "source_hits": self.source_hits,
         }
 
 
@@ -171,6 +179,9 @@ def start_job(
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
     local_video: Path | str | None = None,
+    tracker_mode: str = "auto",
+    openai_key: str = "",
+    google_key: str = "",
 ) -> Job:
     job = STORE.create(
         url=url,
@@ -180,6 +191,9 @@ def start_job(
         demo=demo,
         crop_top=float(crop_top),
         crop_bottom=float(crop_bottom),
+        tracker_mode=(tracker_mode or "auto").strip().lower() or "auto",
+        openai_key=openai_key or "",
+        google_key=google_key or "",
     )
     if local_video:
         dest = DATA / job.id
@@ -346,6 +360,9 @@ def _run_real(job: Job) -> None:
         crop_top=job.crop_top,
         crop_bottom=job.crop_bottom,
         on_progress=track_progress,
+        tracker_mode=job.tracker_mode or "auto",
+        openai_key=job.openai_key,
+        google_key=job.google_key,
     )
     frame_path = dest / "calibration.jpg"
     save_jpeg(result["first_frame"], frame_path)
@@ -356,12 +373,12 @@ def _run_real(job: Job) -> None:
     if not samples:
         warnings.append(
             "Tracking produced no robot paths. Click the four field corners on the broadcast frame, "
-            "widen the field crop, or upload a clearer wide-angle VOD."
+            "widen the field crop, try another tracking mode, or upload a clearer wide-angle VOD."
         )
     elif not result.get("used_model"):
         warnings.append(
-            "Neural detector unavailable in this build — OpenCV motion tracking filled the path overlay. "
-            "For stronger robot detection: `pip install ultralytics` and/or drop a robot-trained .pt in models/."
+            "Neural/cloud detectors did not contribute — OpenCV local strategies filled the path overlay. "
+            "For stronger detection: install ultralytics, or add an OpenAI / Google API key."
         )
 
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
@@ -385,6 +402,8 @@ def _run_real(job: Job) -> None:
         frame_path=str(frame_path),
         src_points=src_points,
         seeds=_seed_boxes(samples),
+        tracker_strategies=list(result.get("strategies") or []),
+        source_hits=dict(result.get("source_hits") or {}),
     )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)

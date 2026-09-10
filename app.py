@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ramscout import __version__
+from ramscout.detect import TRACKER_MODES, list_strategies
 from ramscout.gameconfig import public_game
 from ramscout.paths import is_frozen, web_dir
 from ramscout.picklist import (
@@ -73,6 +74,9 @@ class StartRequest(BaseModel):
     demo: bool = False
     crop_top: float = 0.10
     crop_bottom: float = 0.65
+    tracker_mode: str = "auto"
+    openai_key: str = ""
+    google_key: str = ""
 
 
 class CalibrateRequest(BaseModel):
@@ -153,6 +157,23 @@ def game_config(year: int | None = None) -> dict:
     return public_game(year)
 
 
+@app.get("/api/trackers")
+def trackers() -> dict:
+    """List tracking modes and which strategies are available on this machine."""
+    return {
+        "modes": [
+            {"id": key, "label": meta["label"], "description": meta["description"], "strategies": meta["strategies"]}
+            for key, meta in TRACKER_MODES.items()
+        ],
+        "strategies": list_strategies(),
+        "env_hints": {
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
+            "yolo": "pip install ultralytics (+ optional models/*.pt)",
+        },
+    }
+
+
 def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
     if crop_bottom <= crop_top:
         raise HTTPException(400, "Crop bottom must be below crop top.")
@@ -178,6 +199,11 @@ def create_job(body: StartRequest) -> dict:
         match_key=body.match_key.strip(),
         crop_top=top,
         crop_bottom=bottom,
+        tracker_mode=body.tracker_mode.strip() or "auto",
+        openai_key=body.openai_key.strip() or os.environ.get("OPENAI_API_KEY", ""),
+        google_key=body.google_key.strip()
+        or os.environ.get("GOOGLE_API_KEY", "")
+        or os.environ.get("GEMINI_API_KEY", ""),
     )
     return job.public()
 
@@ -191,6 +217,9 @@ async def create_job_upload(
     match_key: str = Form(""),
     crop_top: float = Form(0.10),
     crop_bottom: float = Form(0.65),
+    tracker_mode: str = Form("auto"),
+    openai_key: str = Form(""),
+    google_key: str = Form(""),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
     suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -214,6 +243,11 @@ async def create_job_upload(
             crop_top=top,
             crop_bottom=bottom,
             local_video=tmp_path,
+            tracker_mode=(tracker_mode or "auto").strip() or "auto",
+            openai_key=(openai_key or "").strip() or os.environ.get("OPENAI_API_KEY", ""),
+            google_key=(google_key or "").strip()
+            or os.environ.get("GOOGLE_API_KEY", "")
+            or os.environ.get("GEMINI_API_KEY", ""),
         )
     finally:
         try:

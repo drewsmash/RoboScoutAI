@@ -46,7 +46,21 @@ Until that release exists, Check for updates will say the desktop files are not 
 
 The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
 
-Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **OpenCV motion tracking** still work — robot paths are approximate without YOLO. For stronger neural detection, run from source:
+Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
+
+| Mode | What it uses |
+| --- | --- |
+| `auto` | YOLO (if installed) + bumper color + motion + optical flow + OpenAI/Gemini when keyed |
+| `local` | Offline only (YOLO optional + OpenCV) |
+| `motion` / `color` | No neural net |
+| `openai` / `gemini` / `cloud` | Cloud vision keyframes + local fill between frames |
+
+API keys (optional, also in the UI Advanced panel):
+
+- `OPENAI_API_KEY`
+- `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+
+For stronger local neural detection from source:
 
 ```bash
 pip install -r requirements.txt   # includes ultralytics

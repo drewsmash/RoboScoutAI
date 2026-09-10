@@ -48,6 +48,7 @@ hiddenimports = [
     "multipart",
     "yt_dlp",
     "ramscout",
+    "ramscout.trackers",
     "desktop",
     "desktop.main",
     "app",

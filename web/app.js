@@ -72,15 +72,34 @@ function loadAsset(key, src, onload) {
 function loadTbaKey() {
   const saved = localStorage.getItem("ramscout.tbaKey") || "";
   $("tba-key").value = saved;
+  const openai = localStorage.getItem("ramscout.openaiKey") || "";
+  const google = localStorage.getItem("ramscout.googleKey") || "";
+  const mode = localStorage.getItem("ramscout.trackerMode") || "auto";
+  if ($("openai-key")) $("openai-key").value = openai;
+  if ($("google-key")) $("google-key").value = google;
+  if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
+    $("tracker-mode").value = mode;
+  }
 }
 
-function saveTbaKey() {
+function saveScoutKeys() {
   localStorage.setItem("ramscout.tbaKey", $("tba-key").value.trim());
+  if ($("openai-key")) localStorage.setItem("ramscout.openaiKey", $("openai-key").value.trim());
+  if ($("google-key")) localStorage.setItem("ramscout.googleKey", $("google-key").value.trim());
+  if ($("tracker-mode")) localStorage.setItem("ramscout.trackerMode", $("tracker-mode").value);
+}
+
+function trackerPayload() {
+  return {
+    tracker_mode: $("tracker-mode")?.value || "auto",
+    openai_key: $("openai-key")?.value.trim() || "",
+    google_key: $("google-key")?.value.trim() || "",
+  };
 }
 
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  saveTbaKey();
+  saveScoutKeys();
   const fileInput = $("video-file");
   const file = fileInput?.files?.[0] || null;
   await createJob({
@@ -90,13 +109,14 @@ $("start-form").addEventListener("submit", async (event) => {
     match_key: $("match-key").value.trim(),
     crop_top: Number($("crop-top").value || 0.1),
     crop_bottom: Number($("crop-bottom").value || 0.65),
+    ...trackerPayload(),
     demo: false,
     file,
   });
 });
 
 $("demo-btn").addEventListener("click", async () => {
-  saveTbaKey();
+  saveScoutKeys();
   await createJob({ url: "", tba_key: $("tba-key").value.trim(), demo: true });
 });
 
@@ -177,6 +197,9 @@ async function createJob(payload) {
     form.append("match_key", payload.match_key || "");
     form.append("crop_top", String(payload.crop_top ?? 0.1));
     form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
+    form.append("tracker_mode", payload.tracker_mode || "auto");
+    form.append("openai_key", payload.openai_key || "");
+    form.append("google_key", payload.google_key || "");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
     const { file: _file, ...body } = payload;
@@ -241,9 +264,15 @@ function renderJob(job) {
     const overlayEl = $("overlay-source");
     const channels = src.channels || job.overlay?.sources || [];
     if (overlayEl) {
-      if (channels.length) {
+      const trackBits = [];
+      if (job.tracker_mode) trackBits.push(`Track: ${job.tracker_mode}`);
+      const hits = job.source_hits || {};
+      const hitNames = Object.keys(hits).filter((k) => hits[k] > 0);
+      if (hitNames.length) trackBits.push(hitNames.join("+"));
+      const parts = [...channels.map(labelChannel), ...trackBits];
+      if (parts.length) {
         overlayEl.hidden = false;
-        overlayEl.textContent = channels.map(labelChannel).join(" · ");
+        overlayEl.textContent = parts.join(" · ");
       } else {
         overlayEl.hidden = true;
       }

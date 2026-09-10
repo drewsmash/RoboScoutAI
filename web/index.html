@@ -68,8 +68,35 @@
         </button>
         <button type="button" class="btn tonal" id="demo-btn">Try a sample match</button>
       </div>
-      <details class="advanced">
-        <summary>Field crop (default 10–65% of frame height)</summary>
+      <details class="advanced" open>
+        <summary>Tracking &amp; field crop</summary>
+        <div class="composer-row">
+          <label class="field grow">
+            <span>Tracking mode</span>
+            <select id="tracker-mode" name="tracker_mode">
+              <option value="auto" selected>Auto (local + cloud if keyed)</option>
+              <option value="local">Local only (OpenCV + YOLO)</option>
+              <option value="motion">Motion blobs (no detector)</option>
+              <option value="color">Bumper color + motion</option>
+              <option value="yolo">YOLO neural</option>
+              <option value="openai">OpenAI Vision</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="cloud">Cloud ensemble</option>
+              <option value="all">Everything available</option>
+            </select>
+          </label>
+        </div>
+        <p class="tool-meta" id="tracker-help">Uses motion, bumper color, optical flow, and YOLO when installed. Add API keys below to enable OpenAI / Gemini keyframe vision.</p>
+        <div class="composer-row">
+          <label class="field grow">
+            <span>OpenAI API key</span>
+            <input id="openai-key" name="openai_key" type="password" placeholder="Optional · sk-… · saved in this browser" autocomplete="off" />
+          </label>
+          <label class="field grow">
+            <span>Google / Gemini API key</span>
+            <input id="google-key" name="google_key" type="password" placeholder="Optional · saved in this browser" autocomplete="off" />
+          </label>
+        </div>
         <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
@@ -81,7 +108,7 @@
           </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. If YouTube blocks the cloud download, upload the file you already saved, or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. If YouTube blocks the cloud download, upload the file you already saved, or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates. Tracking can use OpenCV, YOLO, OpenAI, or Gemini — pick a mode above.</p>
     </form>
   </section>
 
