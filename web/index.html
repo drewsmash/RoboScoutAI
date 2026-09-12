@@ -75,6 +75,7 @@
             <span>Tracking mode</span>
             <select id="tracker-mode" name="tracker_mode">
               <option value="auto" selected>Auto (local + cloud if keyed)</option>
+              <option value="potato">Potato — no AI (OpenCV only)</option>
               <option value="local">Local only (OpenCV + YOLO)</option>
               <option value="motion">Motion blobs (no detector)</option>
               <option value="color">Bumper color + motion</option>
@@ -86,7 +87,7 @@
             </select>
           </label>
         </div>
-        <p class="tool-meta" id="tracker-help">Uses motion, bumper color, optical flow, and YOLO when installed. Add API keys below to enable OpenAI / Gemini keyframe vision.</p>
+        <p class="tool-meta" id="tracker-help">Potato mode needs no models or API keys — just OpenCV motion/color/flow. Auto uses YOLO/cloud when present and always keeps potato as fallback. The browser can also run a JS frame-diff if server tracks are empty.</p>
         <div class="composer-row">
           <label class="field grow">
             <span>OpenAI API key</span>

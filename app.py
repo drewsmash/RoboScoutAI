@@ -26,6 +26,7 @@ from ramscout.picklist import (
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
+    apply_browser_tracks,
     apply_calibration,
     export_csv,
     start_job,
@@ -85,6 +86,13 @@ class CalibrateRequest(BaseModel):
 
 class AssignRequest(BaseModel):
     assignments: dict[str, str]
+
+
+class BrowserTracksRequest(BaseModel):
+    """Pixel-space feet from the browser potato tracker (no AI)."""
+
+    samples: list[dict] = Field(default_factory=list)
+    replace: bool = False
 
 
 class PicklistRequest(BaseModel):
@@ -279,6 +287,17 @@ def assign(job_id: str, body: AssignRequest) -> dict:
     if job is None:
         raise HTTPException(404, "Unknown job.")
     return apply_assignments(job, body.assignments).public()
+
+
+@app.post("/api/jobs/{job_id}/browser-tracks")
+def browser_tracks(job_id: str, body: BrowserTracksRequest) -> dict:
+    """Ingest dumb browser frame-diff tracks (potato fallback, no models)."""
+    job = STORE.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job.")
+    if job.status not in {"ready", "tracking", "scouting"}:
+        raise HTTPException(400, "Job is not ready for browser tracks yet.")
+    return apply_browser_tracks(job, body.samples, replace=body.replace).public()
 
 
 @app.get("/api/jobs/{job_id}/export.json")

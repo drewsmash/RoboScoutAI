@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+
 from ramscout.broadcast import match_from_overlay, merge_tba, parse_broadcast_text, read_overlay_from_video
 from ramscout.detect import ensure_detector_weights, find_local_model, save_jpeg, track_video
 from ramscout.events import Pose, build_cards, detect_events
@@ -409,6 +411,85 @@ def _run_real(job: Job) -> None:
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
 
 
+def apply_browser_tracks(
+    job: Job,
+    raw_samples: list[dict[str, Any]],
+    *,
+    replace: bool = False,
+) -> Job:
+    """Merge browser potato (JS frame-diff) samples into a finished job."""
+    from ramscout.field import FIELD_LENGTH, FIELD_WIDTH
+    from ramscout.geometry import homography_from_corners, project_points
+
+    cleaned: list[dict[str, Any]] = []
+    for row in raw_samples or []:
+        try:
+            px = float(row["px"])
+            py = float(row["py"])
+            t = float(row.get("t") or 0.0)
+            tid = int(row.get("track_id") or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        alliance = row.get("alliance") if row.get("alliance") in {"red", "blue"} else (
+            "blue" if px < (job.frame_size[0] if job.frame_size else 1280) * 0.5 else "red"
+        )
+        cleaned.append(
+            {
+                "t": round(t, 3),
+                "frame": int(row.get("frame") or 0),
+                "track_id": tid,
+                "x": float(row.get("x") or 0.0),
+                "y": float(row.get("y") or 0.0),
+                "px": px,
+                "py": py,
+                "alliance": alliance,
+                "team": str(row.get("team") or ""),
+                "bbox": list(row.get("bbox") or []),
+                "source": "browser_potato",
+            }
+        )
+    if not cleaned:
+        return job
+
+    fw = int(job.frame_size[0]) if job.frame_size else 1280
+    fh = int(job.frame_size[1]) if job.frame_size else 720
+    src = job.src_points or default_source_points(fw, fh, job.crop_top, job.crop_bottom).tolist()
+    try:
+        H = homography_from_corners(src)
+        feet = [[s["px"], s["py"]] for s in cleaned]
+        mapped = project_points(feet, H)
+        for sample, (mx, my) in zip(cleaned, mapped):
+            sample["x"] = float(np.clip(mx, 0, FIELD_LENGTH))
+            sample["y"] = float(np.clip(my, 0, FIELD_WIDTH))
+    except Exception as exc:  # noqa: BLE001
+        job.warnings.append(f"Browser potato projection failed: {exc}")
+        # Linear fallback so the UI still gets something.
+        for sample in cleaned:
+            sample["x"] = float(np.clip(sample["px"] / max(fw, 1) * FIELD_LENGTH, 0, FIELD_LENGTH))
+            sample["y"] = float(np.clip(sample["py"] / max(fh, 1) * FIELD_WIDTH, 0, FIELD_WIDTH))
+
+    if replace or not job.samples:
+        merged = cleaned
+    else:
+        merged = list(job.samples) + cleaned
+
+    hits = dict(job.source_hits or {})
+    hits["browser_potato"] = hits.get("browser_potato", 0) + len(cleaned)
+    warnings = list(job.warnings or [])
+    note = f"Browser potato added {len(cleaned)} motion samples (no AI)."
+    if note not in warnings:
+        warnings.append(note)
+    STORE.update(
+        job,
+        samples=merged,
+        source_hits=hits,
+        warnings=warnings,
+        used_model=False if replace else job.used_model,
+    )
+    _reproject_and_scout(job)
+    return job
+
+
 def _reproject_and_scout(job: Job) -> None:
     samples = list(job.samples)
     if job.src_points and samples:
@@ -419,7 +500,15 @@ def _reproject_and_scout(job: Job) -> None:
 
     blue, red = _alliance_teams(job.match)
     if blue or red:
-        samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6))
+        # Never drop browser-potato tracks — they are the intentional dumb fallback.
+        potato = [s for s in samples if s.get("source") == "browser_potato"]
+        pruned = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6))
+        kept_ids = {int(s["track_id"]) for s in pruned}
+        potato_ids = {int(s["track_id"]) for s in potato}
+        missing = potato_ids - kept_ids
+        if missing:
+            pruned.extend(s for s in potato if int(s["track_id"]) in missing)
+        samples = pruned
 
     for sample in samples:
         tid = str(sample.get("track_id"))

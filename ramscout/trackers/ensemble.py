@@ -13,11 +13,25 @@ from ramscout.trackers.types import Detection, TrackerContext
 from ramscout.trackers.utils import merge_detections
 from ramscout.trackers.yolo import YoloTracker
 
+# Pure OpenCV strategies — no models, no API keys, works on low-end machines.
+POTATO_STRATEGIES: list[str] = ["motion", "color", "optical_flow"]
+
 TRACKER_MODES: dict[str, dict[str, Any]] = {
+    "potato": {
+        "label": "Potato (no AI)",
+        "strategies": list(POTATO_STRATEGIES),
+        "description": (
+            "Dumb fallback: OpenCV motion blobs + bumper color + optical flow. "
+            "No YOLO, no API keys. Browser can also run a JS frame-diff fallback."
+        ),
+    },
     "auto": {
         "label": "Auto (recommended)",
         "strategies": ["yolo", "color", "motion", "optical_flow", "openai", "gemini"],
-        "description": "Use every available local method; add cloud vision when API keys are set.",
+        "description": (
+            "Use every available method; silently skips missing YOLO/API keys and "
+            "always keeps potato OpenCV trackers so paths are never empty by design."
+        ),
     },
     "local": {
         "label": "Local only",
@@ -113,9 +127,15 @@ def resolve_strategies(
                     f"Tracker '{name}' unavailable for this run "
                     f"({getattr(tracker, 'description', name)})."
                 )
-    # Always keep at least motion so paths are never empty by design.
-    if not any(t.name == "motion" for t in selected):
-        selected.append(pool["motion"])
+    # Always keep potato OpenCV trackers so paths are never empty by design.
+    for name in POTATO_STRATEGIES:
+        if not any(getattr(t, "name", "") == name for t in selected):
+            selected.append(pool[name])
+            if mode != "potato" and name == "motion":
+                warnings.append(
+                    "Falling back to potato OpenCV trackers (motion/color/flow) — "
+                    "no model or API key required."
+                )
     for tracker in selected:
         tracker.reset()
     return selected, warnings

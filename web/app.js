@@ -3,6 +3,8 @@ const AUTO_END = 20;
 const ENDGAME_START = 130;
 const MATCH_END = 160;
 
+import { runBrowserPotato, shouldRunBrowserPotato } from "./potato.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -19,6 +21,8 @@ const state = {
   calJob: null,
   selectedSeed: null,
   picklist: null,
+  potatoJobs: new Set(),
+  potatoRunning: false,
 };
 
 function applyGame(game) {
@@ -332,6 +336,7 @@ function renderJob(job) {
   if (job.status === "ready") {
     updateScoutbookMeta();
     refreshPicklist();
+    maybeRunBrowserPotato(job);
   }
 }
 
@@ -1143,3 +1148,58 @@ async function initUpdater() {
 initUpdater();
 initScoutTools();
 drawField();
+
+async function maybeRunBrowserPotato(job) {
+  if (!shouldRunBrowserPotato(job)) return;
+  if (state.potatoJobs.has(job.id) || state.potatoRunning) return;
+  const video = $("match-video");
+  if (!video || video.hidden || !job.has_video) return;
+  // Ensure video URL is set before seeking.
+  if (video.dataset.src !== job.id) {
+    video.src = `/api/jobs/${job.id}/video`;
+    video.dataset.src = job.id;
+  }
+  state.potatoJobs.add(job.id);
+  state.potatoRunning = true;
+  const msg = $("progress-message");
+  const panel = $("progress-panel");
+  const status = $("progress-status");
+  const fill = $("progress-fill");
+  if (panel) panel.hidden = false;
+  if (status) status.textContent = "Browser potato";
+  try {
+    const samples = await runBrowserPotato(video, {
+      cropTop: job.crop_top ?? 0.1,
+      cropBottom: job.crop_bottom ?? 0.65,
+      durationHint: (job.game && job.game.match_end_s) || 150,
+      onProgress: (pct, text) => {
+        if (fill) fill.style.width = `${Math.max(4, pct)}%`;
+        if (msg) msg.textContent = text;
+      },
+    });
+    if (!samples.length) {
+      if (msg) msg.textContent = "Browser potato found no motion blobs.";
+      return;
+    }
+    const replace = (job.tracker_mode || "").toLowerCase() === "potato" && (job.samples || []).length < 8;
+    const res = await fetch(`/api/jobs/${job.id}/browser-tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ samples, replace }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (msg) msg.textContent = err.detail || "Browser potato upload failed.";
+      return;
+    }
+    const updated = await res.json();
+    state.job = updated;
+    renderJob(updated);
+  } catch (err) {
+    console.warn("browser potato failed", err);
+    if (msg) msg.textContent = "Browser potato skipped (video not ready).";
+  } finally {
+    state.potatoRunning = false;
+    if (panel && state.job?.status === "ready") panel.hidden = true;
+  }
+}

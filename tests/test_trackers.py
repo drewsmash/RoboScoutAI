@@ -43,9 +43,11 @@ def _moving_robots(path: Path, frames: int = 60, fps: int = 30) -> Path:
 
 def test_tracker_modes_documented():
     assert "auto" in TRACKER_MODES
+    assert "potato" in TRACKER_MODES
     assert "openai" in TRACKER_MODES
     assert "gemini" in TRACKER_MODES
     assert "motion" in TRACKER_MODES
+    assert set(TRACKER_MODES["potato"]["strategies"]) == {"motion", "color", "optical_flow"}
 
 
 def test_list_strategies_api():
@@ -53,6 +55,7 @@ def test_list_strategies_api():
     assert res.status_code == 200
     body = res.json()
     assert any(m["id"] == "auto" for m in body["modes"])
+    assert any(m["id"] == "potato" for m in body["modes"])
     names = {s["name"] for s in body["strategies"]}
     assert {"motion", "color", "optical_flow", "yolo", "openai", "gemini"} <= names
 
@@ -60,8 +63,16 @@ def test_list_strategies_api():
 def test_resolve_strategies_always_includes_motion():
     selected, _warnings = resolve_strategies("yolo")
     names = [s.name for s in selected]
-    assert "motion" in names or "optical_flow" in names or names
+    assert "motion" in names
+    assert "color" in names
+    assert "optical_flow" in names
 
+
+def test_potato_mode_is_opencv_only():
+    selected, warnings = resolve_strategies("potato", openai_key="", google_key="")
+    names = {s.name for s in selected}
+    assert names == {"motion", "color", "optical_flow"}
+    assert not any("openai" in w.lower() or "yolo" in w.lower() for w in warnings)
 
 def test_color_and_motion_ensemble(tmp_path):
     video = _moving_robots(tmp_path / "color.mp4")
@@ -77,20 +88,65 @@ def test_color_and_motion_ensemble(tmp_path):
     assert "color" in result["strategies"] or "motion" in result["strategies"]
 
 
-def test_local_mode_without_cloud_keys(tmp_path):
-    video = _moving_robots(tmp_path / "local.mp4", frames=45)
+def test_potato_mode_tracks_without_models(tmp_path):
+    video = _moving_robots(tmp_path / "potato.mp4", frames=50)
     result = track_video(
         video,
-        tracker_mode="local",
+        tracker_mode="potato",
         frame_stride=2,
         crop_top=0.05,
         crop_bottom=0.95,
-        max_frames=30,
+        max_frames=35,
         openai_key="",
         google_key="",
     )
     assert len(result["samples"]) > 8
-    assert result["tracker_mode"] == "local"
+    assert result["tracker_mode"] == "potato"
+    assert set(result["strategies"]) <= {"motion", "color", "optical_flow"}
+    assert not result["used_model"]
+
+
+def test_browser_tracks_endpoint():
+    job = client.post("/api/jobs", json={"demo": True}).json()
+    job_id = job["id"]
+    # Wait briefly for demo to finish if async
+    for _ in range(40):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] == "ready":
+            break
+        import time
+
+        time.sleep(0.05)
+    assert job["status"] == "ready"
+    fw = (job.get("frame_size") or [1280, 720])[0]
+    fh = (job.get("frame_size") or [1280, 720])[1]
+    payload = {
+        "replace": False,
+        "samples": [
+            {
+                "t": 1.0,
+                "track_id": 5101,
+                "px": fw * 0.25,
+                "py": fh * 0.4,
+                "alliance": "blue",
+                "bbox": [10, 10, 40, 40],
+            },
+            {
+                "t": 1.25,
+                "track_id": 5101,
+                "px": fw * 0.28,
+                "py": fh * 0.41,
+                "alliance": "blue",
+                "bbox": [12, 12, 42, 42],
+            },
+        ],
+    }
+    res = client.post(f"/api/jobs/{job_id}/browser-tracks", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["source_hits"].get("browser_potato", 0) >= 2
+    potato_samples = [s for s in body["samples"] if s.get("source") == "browser_potato"]
+    assert len(potato_samples) >= 2
 
 
 def test_merge_detections_prefers_unique_boxes():
