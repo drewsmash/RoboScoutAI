@@ -58,6 +58,8 @@ secrets exist and skips (with a warning) when they do not.
 | `MACOS_API_KEY_P8_BASE64` | macOS | Base64-encoded `.p8` AuthKey |
 | `MACOS_TEAM_ID` | macOS | Apple Team ID |
 
+These names match `.github/workflows/release.yml`.
+
 ### Local with a real Windows PFX
 
 ```bash
