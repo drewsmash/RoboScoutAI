@@ -78,13 +78,21 @@ function loadTbaKey() {
   $("tba-key").value = saved;
   const openai = localStorage.getItem("ramscout.openaiKey") || "";
   const google = localStorage.getItem("ramscout.googleKey") || "";
-  const mode = localStorage.getItem("ramscout.trackerMode") || "auto";
+  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "auto");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
     $("tracker-mode").value = mode;
   }
 }
+
+$("google-key")?.addEventListener("change", () => {
+  const key = $("google-key")?.value.trim() || "";
+  if (key && $("tracker-mode") && $("tracker-mode").value === "auto") {
+    $("tracker-mode").value = "gemini";
+  }
+  saveScoutKeys();
+});
 
 function saveScoutKeys() {
   localStorage.setItem("ramscout.tbaKey", $("tba-key").value.trim());

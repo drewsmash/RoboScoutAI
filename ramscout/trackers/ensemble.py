@@ -27,10 +27,10 @@ TRACKER_MODES: dict[str, dict[str, Any]] = {
     },
     "auto": {
         "label": "Auto (recommended)",
-        "strategies": ["yolo", "color", "motion", "optical_flow", "openai", "gemini"],
+        "strategies": ["gemini", "yolo", "openai", "color", "motion", "optical_flow"],
         "description": (
-            "Use every available method; silently skips missing YOLO/API keys and "
-            "always keeps potato OpenCV trackers so paths are never empty by design."
+            "Prefer Gemini when a Google key is set, then YOLO/OpenAI/OpenCV. "
+            "Skips missing backends and always keeps potato OpenCV so paths are never empty."
         ),
     },
     "local": {
@@ -65,12 +65,12 @@ TRACKER_MODES: dict[str, dict[str, Any]] = {
     },
     "cloud": {
         "label": "Cloud ensemble",
-        "strategies": ["openai", "gemini", "color", "motion", "optical_flow"],
-        "description": "Prefer OpenAI/Gemini when keyed, always keep local fallbacks.",
+        "strategies": ["gemini", "openai", "color", "motion", "optical_flow"],
+        "description": "Prefer Gemini, then OpenAI, when keyed; always keep local fallbacks.",
     },
     "all": {
         "label": "Everything",
-        "strategies": ["yolo", "openai", "gemini", "color", "motion", "optical_flow"],
+        "strategies": ["gemini", "yolo", "openai", "color", "motion", "optical_flow"],
         "description": "Run all configured strategies and merge detections.",
     },
 }

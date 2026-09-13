@@ -74,20 +74,20 @@
           <label class="field grow">
             <span>Tracking mode</span>
             <select id="tracker-mode" name="tracker_mode">
-              <option value="auto" selected>Auto (local + cloud if keyed)</option>
+              <option value="gemini" selected>Google Gemini (recommended with key)</option>
+              <option value="auto">Auto (Gemini → YOLO → OpenCV)</option>
               <option value="potato">Potato — no AI (OpenCV only)</option>
               <option value="local">Local only (OpenCV + YOLO)</option>
               <option value="motion">Motion blobs (no detector)</option>
               <option value="color">Bumper color + motion</option>
               <option value="yolo">YOLO neural</option>
               <option value="openai">OpenAI Vision</option>
-              <option value="gemini">Google Gemini</option>
               <option value="cloud">Cloud ensemble</option>
               <option value="all">Everything available</option>
             </select>
           </label>
         </div>
-        <p class="tool-meta" id="tracker-help">Potato = OpenCV only (no keys). Gemini / OpenAI fill in when you paste a key below — Gemini now defaults to gemini-3.5-flash and auto-falls back if a model id is retired. Auto keeps potato as the last resort. Browser JS frame-diff can also fill empty tracks.</p>
+        <p class="tool-meta" id="tracker-help">Paste a Google / Gemini API key below. Mode defaults to Gemini (gemini-3.5-flash with automatic fallbacks). Potato / Auto still work with zero keys via OpenCV.</p>
         <div class="composer-row">
           <label class="field grow">
             <span>OpenAI API key</span>
