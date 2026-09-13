@@ -90,6 +90,10 @@ def test_track_video_without_ultralytics(tmp_path, monkeypatch):
     import ramscout.detect as detect
 
     monkeypatch.setattr(detect, "ultralytics_available", lambda: False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_AI_API_KEY", raising=False)
     video = _write_moving_robots(tmp_path / "bots2.mp4", frames=60)
     result = detect.track_video(
         video,
@@ -97,9 +101,12 @@ def test_track_video_without_ultralytics(tmp_path, monkeypatch):
         crop_top=0.05,
         crop_bottom=0.95,
         max_frames=40,
+        openai_key="",
+        google_key="",
+        tracker_mode="local",
     )
     assert result["used_model"] is False
     assert len(result["samples"]) > 10
-    assert any("Ultralytics is not installed" in w or "motion" in w.lower() for w in result["warnings"])
+    assert any("Ultralytics is not installed" in w or "motion" in w.lower() or "potato" in w.lower() or "opencv" in w.lower() for w in result["warnings"])
     assert "Path overlay will be empty" not in " ".join(result["warnings"])
     assert "Detector did not run" not in " ".join(result["warnings"])

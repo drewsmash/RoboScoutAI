@@ -20,3 +20,4 @@ update-state.json
 .venv/
 venv/
 web/.DS_Store
+desktop-downloads/

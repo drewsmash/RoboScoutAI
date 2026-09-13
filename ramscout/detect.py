@@ -130,7 +130,7 @@ def track_video(
             openai_key=openai_key,
             google_key=google_key,
             openai_model=openai_model or "gpt-4o-mini",
-            google_model=google_model or "gemini-2.0-flash",
+            google_model=google_model or "gemini-3.5-flash",
         )
         detections = ensemble.detect(cropped, ctx)
 
