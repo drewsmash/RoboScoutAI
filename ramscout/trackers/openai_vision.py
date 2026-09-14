@@ -1,4 +1,4 @@
-"""OpenAI Vision tracker with model fallbacks for retired GPT ids."""
+"""OpenAI Vision tracker with sparse keyframe sampling (never frame-by-frame)."""
 
 from __future__ import annotations
 
@@ -26,23 +26,69 @@ Ignore the scoreboard/HUD. If unsure, still guess approximate boxes for visible 
 """
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+# Thrifty defaults: sample ~every 2s (or every 30 pipeline frames), cap calls per match.
+DEFAULT_INTERVAL_S = 2.0
+DEFAULT_FRAME_STRIDE = 30
+DEFAULT_MAX_CALLS = 24
+DEFAULT_COOLDOWN_S = 30.0
+MAX_COOLDOWN_S = 180.0
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 class OpenAIVisionTracker:
     name = "openai"
     kind = "cloud"
-    description = "OpenAI Vision (GPT) keyframe boxes — needs OPENAI_API_KEY"
+    description = "OpenAI Vision (GPT) sparse keyframes — needs OPENAI_API_KEY"
 
-    def __init__(self, interval_s: float = 2.5, max_calls: int = 48) -> None:
-        self.interval_s = interval_s
-        self.max_calls = max_calls
+    def __init__(
+        self,
+        interval_s: float | None = None,
+        frame_stride: int | None = None,
+        max_calls: int | None = None,
+    ) -> None:
+        self.interval_s = float(
+            interval_s if interval_s is not None else _env_float("RAMSCOUT_OPENAI_INTERVAL_S", DEFAULT_INTERVAL_S)
+        )
+        self.frame_stride = max(
+            1,
+            int(
+                frame_stride
+                if frame_stride is not None
+                else _env_int("RAMSCOUT_OPENAI_FRAME_STRIDE", DEFAULT_FRAME_STRIDE)
+            ),
+        )
+        self.max_calls = max(
+            1,
+            int(max_calls if max_calls is not None else _env_int("RAMSCOUT_OPENAI_MAX_CALLS", DEFAULT_MAX_CALLS)),
+        )
         self._last_t = -999.0
+        self._last_frame = -10**9
         self._calls = 0
         self._cache: list[Detection] = []
         self._next_id = 5000
         self.warnings: list[str] = []
         self._resolved_model: str | None = None
         self._fail_until = 0.0
+        self._cooldown_s = DEFAULT_COOLDOWN_S
         self._logged_fail = False
 
     def available(self, ctx: TrackerContext | None = None) -> bool:
@@ -51,31 +97,47 @@ class OpenAIVisionTracker:
 
     def reset(self) -> None:
         self._last_t = -999.0
+        self._last_frame = -10**9
         self._calls = 0
         self._cache = []
         self._next_id = 5000
         self.warnings = []
         self._resolved_model = None
         self._fail_until = 0.0
+        self._cooldown_s = DEFAULT_COOLDOWN_S
         self._logged_fail = False
+
+    def _should_sample(self, ctx: TrackerContext) -> bool:
+        """True only on sparse keyframes — never every processed frame."""
+        if self._calls >= self.max_calls:
+            return False
+        if time.time() < self._fail_until:
+            return False
+        # Hold last boxes between samples even when cache is empty (avoids hammering).
+        if self._last_frame > -10**8:
+            if (ctx.frame_index - self._last_frame) < self.frame_stride:
+                return False
+            if (ctx.t - self._last_t) < self.interval_s:
+                return False
+        return True
 
     def detect(self, cropped: np.ndarray, ctx: TrackerContext) -> list[Detection]:
         key = (ctx.openai_key or os.environ.get("OPENAI_API_KEY", "")).strip()
         if not key:
             return list(self._cache)
-        if self._calls >= self.max_calls:
+        if not self._should_sample(ctx):
             return list(self._cache)
-        if time.time() < self._fail_until:
-            return list(self._cache)
-        if ctx.t - self._last_t < self.interval_s and self._cache:
-            return list(self._cache)
+
+        # Reserve this keyframe before the HTTP call so failures/empty still pace calls.
+        self._last_t = ctx.t
+        self._last_frame = ctx.frame_index
+        self._calls += 1
 
         try:
             preferred = (ctx.openai_model or DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
             robots = self._query(cropped, key, preferred)
-            self._calls += 1
-            self._last_t = ctx.t
             self._logged_fail = False
+            self._cooldown_s = DEFAULT_COOLDOWN_S
             dets: list[Detection] = []
             h, w = cropped.shape[:2]
             for robot in robots:
@@ -106,16 +168,32 @@ class OpenAIVisionTracker:
                 self._next_id += 1
             if dets:
                 self._cache = dets
+            if self._calls >= self.max_calls:
+                msg = f"OpenAI vision hit max {self.max_calls} calls for this match; holding last boxes."
+                if msg not in self.warnings:
+                    self.warnings.append(msg)
+            return list(self._cache)
+        except _RateLimited as exc:
+            self._arm_cooldown(exc, rate_limited=True)
             return list(self._cache)
         except Exception as exc:  # noqa: BLE001
-            self._fail_until = time.time() + 20.0
-            msg = f"OpenAI vision failed ({exc})."
-            if msg not in self.warnings:
-                self.warnings.append(msg)
-            if not self._logged_fail:
-                log.warning("%s Cooling down 20s before retrying.", msg)
-                self._logged_fail = True
+            self._arm_cooldown(exc, rate_limited=False)
             return list(self._cache)
+
+    def _arm_cooldown(self, exc: BaseException, *, rate_limited: bool) -> None:
+        if rate_limited:
+            self._cooldown_s = min(MAX_COOLDOWN_S, max(self._cooldown_s * 2.0, DEFAULT_COOLDOWN_S))
+            label = "rate-limited (429)"
+        else:
+            self._cooldown_s = DEFAULT_COOLDOWN_S
+            label = "failed"
+        self._fail_until = time.time() + self._cooldown_s
+        msg = f"OpenAI vision {label} ({exc}). Cooling down {self._cooldown_s:.0f}s."
+        if msg not in self.warnings:
+            self.warnings.append(msg)
+        if not self._logged_fail:
+            log.warning("%s Holding last boxes between samples.", msg)
+            self._logged_fail = True
 
     def _query(self, cropped: np.ndarray, api_key: str, model: str) -> list[dict[str, Any]]:
         import urllib.error
@@ -168,6 +246,9 @@ class OpenAIVisionTracker:
                 return _parse_robots_json(content)
             except urllib.error.HTTPError as exc:
                 last_error = exc
+                # Never cascade across models on rate limits — that multiplies 429s.
+                if exc.code == 429:
+                    raise _RateLimited(f"HTTP 429 on model {name}") from exc
                 # 400 often = model lacks vision / json_object support.
                 if is_retryable_http(exc) or exc.code in {400, 404}:
                     log.debug("OpenAI model %s unavailable (%s); trying next.", name, exc.code)
@@ -175,10 +256,16 @@ class OpenAIVisionTracker:
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if "429" in str(exc):
+                    raise _RateLimited(str(exc)) from exc
                 if is_retryable_http(exc):
                     continue
                 raise
         raise RuntimeError(f"All OpenAI vision models failed; last error: {last_error}")
+
+
+class _RateLimited(RuntimeError):
+    """OpenAI returned HTTP 429 — stop model cascade and back off."""
 
 
 def _parse_robots_json(content: str) -> list[dict[str, Any]]:
