@@ -24,6 +24,7 @@ from ramscout.ingest import download_video, fetch_video_info, store_uploaded_vid
 from ramscout.paths import jobs_dir, models_dirs
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
+from ramscout.tba_scrape import enrich_from_html, resolve_match_html, scrape_match
 from ramscout.titles import TitleHints, parse_match_title
 
 log = logging.getLogger(__name__)
@@ -305,9 +306,29 @@ def _run_real(job: Job) -> None:
             job.warnings.append(str(exc))
     else:
         job.warnings.append(
-            "No TBA key provided — teams and scores are read from the match video overlay and YouTube title. "
-            "Paste a TBA auth key only if you want nicknames / official extras."
+            "No TBA API key — trying public TBA website scrape, then FIRST Event Web / video overlay."
         )
+
+    # HTML scrape fallback when API key is missing or the API call failed.
+    if not tba_match:
+        STORE.set_progress(job, "resolving", "Scraping TBA match pages (no API key)…", 19)
+        try:
+            html_match = None
+            if job.match_key:
+                html_match = scrape_match(job.match_key)
+            if not html_match:
+                html_match = resolve_match_html(
+                    match_key=job.match_key or None,
+                    event_key=job.event_key or (job.match_key.split("_")[0] if job.match_key else None),
+                    comp_level=hints.comp_level,
+                    match_number=hints.match_number,
+                    set_number=hints.set_number,
+                )
+            if html_match:
+                tba_match = enrich_from_html(html_match)
+                job.warnings.append("TBA data loaded via public website scrape (API fallback).")
+        except Exception as exc:  # noqa: BLE001
+            job.warnings.append(f"TBA HTML scrape skipped ({exc}).")
 
     if not tba_match:
         STORE.set_progress(job, "resolving", "Looking up FIRST Event Web results…", 20)

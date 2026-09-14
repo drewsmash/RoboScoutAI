@@ -40,7 +40,7 @@ class TrackerContext:
     openai_key: str = ""
     google_key: str = ""
     openai_model: str = "gpt-4o-mini"
-    google_model: str = "gemini-3.5-flash"
+    google_model: str = "gemini-flash-latest"
     extras: dict[str, Any] = field(default_factory=dict)
 
 

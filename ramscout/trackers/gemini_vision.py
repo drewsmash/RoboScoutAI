@@ -1,4 +1,4 @@
-"""Google Gemini vision tracker — samples keyframes for robot boxes."""
+"""Google Gemini vision tracker with live model discovery + fallbacks."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 import numpy as np
 
+from ramscout.trackers.cloud_models import gemini_model_candidates, is_retryable_http
 from ramscout.trackers.types import Detection, TrackerContext
 from ramscout.trackers.utils import encode_jpeg_bgr, plausible_robot_size
 
@@ -23,15 +25,7 @@ Normalize coordinates to the image width/height (0-1). Include up to 6 robots on
 Ignore the scoreboard/HUD. If unsure, still guess approximate boxes for visible robots.
 """
 
-# Current Google AI keys reject older flash IDs (404). Prefer latest stable flash,
-# then fall back through aliases that still accept generateContent.
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-GEMINI_MODEL_FALLBACKS = (
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-    "gemini-flash-latest",
-    "gemini-2.5-flash",
-)
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 
 
 class GeminiVisionTracker:
@@ -48,6 +42,8 @@ class GeminiVisionTracker:
         self._next_id = 6000
         self.warnings: list[str] = []
         self._resolved_model: str | None = None
+        self._fail_until = 0.0
+        self._logged_fail = False
 
     def available(self, ctx: TrackerContext | None = None) -> bool:
         return bool(_google_key(ctx).strip())
@@ -59,12 +55,16 @@ class GeminiVisionTracker:
         self._next_id = 6000
         self.warnings = []
         self._resolved_model = None
+        self._fail_until = 0.0
+        self._logged_fail = False
 
     def detect(self, cropped: np.ndarray, ctx: TrackerContext) -> list[Detection]:
         key = _google_key(ctx)
         if not key:
             return list(self._cache)
         if self._calls >= self.max_calls:
+            return list(self._cache)
+        if time.time() < self._fail_until:
             return list(self._cache)
         if ctx.t - self._last_t < self.interval_s and self._cache:
             return list(self._cache)
@@ -74,6 +74,7 @@ class GeminiVisionTracker:
             robots = self._query(cropped, key, preferred)
             self._calls += 1
             self._last_t = ctx.t
+            self._logged_fail = False
             dets: list[Detection] = []
             h, w = cropped.shape[:2]
             for robot in robots:
@@ -107,10 +108,13 @@ class GeminiVisionTracker:
                 self._cache = dets
             return list(self._cache)
         except Exception as exc:  # noqa: BLE001
+            self._fail_until = time.time() + 20.0
             msg = f"Gemini vision failed ({exc})."
             if msg not in self.warnings:
                 self.warnings.append(msg)
-            log.warning(msg)
+            if not self._logged_fail:
+                log.warning("%s Cooling down 20s before retrying.", msg)
+                self._logged_fail = True
             return list(self._cache)
 
     def _query(self, cropped: np.ndarray, api_key: str, model: str) -> list[dict[str, Any]]:
@@ -135,8 +139,8 @@ class GeminiVisionTracker:
         candidates: list[str] = []
         if self._resolved_model:
             candidates.append(self._resolved_model)
-        for name in (model, *GEMINI_MODEL_FALLBACKS):
-            if name and name not in candidates:
+        for name in gemini_model_candidates(api_key, preferred=model):
+            if name not in candidates:
                 candidates.append(name)
 
         last_error: Exception | None = None
@@ -155,18 +159,21 @@ class GeminiVisionTracker:
                 with urllib.request.urlopen(req, timeout=45) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
                 text = payload["candidates"][0]["content"]["parts"][0]["text"]
+                if self._resolved_model != name:
+                    log.info("Gemini vision using model %s", name)
                 self._resolved_model = name
                 return _parse_robots_json(text)
             except urllib.error.HTTPError as exc:
                 last_error = exc
-                # Retry on missing/retired model ids or transient overload.
-                if exc.code in {404, 429, 503}:
-                    log.info("Gemini model %s unavailable (%s); trying fallback.", name, exc.code)
+                if is_retryable_http(exc):
+                    log.debug("Gemini model %s unavailable (%s); trying next.", name, exc.code)
                     continue
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                continue
+                if is_retryable_http(exc):
+                    continue
+                raise
         raise RuntimeError(f"All Gemini models failed; last error: {last_error}")
 
 
@@ -182,10 +189,8 @@ def _google_key(ctx: TrackerContext | None) -> str:
 
 
 def _robot_box(robot: dict[str, Any], width: float, height: float) -> tuple[float, float, float, float]:
-    """Accept either normalized x1/y1/x2/y2 or Gemini box_2d [y0,x0,y1,x1] in 0–1000."""
     if "box_2d" in robot and isinstance(robot["box_2d"], (list, tuple)) and len(robot["box_2d"]) >= 4:
         y0, x0, y1, x1 = (float(v) for v in robot["box_2d"][:4])
-        # box_2d is typically 0–1000; also tolerate 0–1.
         scale = 1000.0 if max(abs(x0), abs(y0), abs(x1), abs(y1)) > 1.5 else 1.0
         return (
             (x0 / scale) * width,
