@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RamScoutAI</title>
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0e0e10" />
+  <meta name="application-name" content="RamScoutAI" />
+  <meta name="apple-mobile-web-app-title" content="RamScoutAI" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/static/favicon.png" type="image/png" sizes="32x32" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@380;500;650;750&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -15,21 +21,16 @@
   <div class="grain" aria-hidden="true"></div>
   <header class="topbar">
     <div class="brand">
-      <span class="mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="28" height="28">
-          <rect x="2" y="8" width="28" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <circle cx="8" cy="16" r="2.2" fill="#8ab4f8"/>
-          <circle cx="16" cy="16" r="2.2" fill="#f28b82"/>
-          <circle cx="24" cy="16" r="2.2" fill="#8ab4f8"/>
-        </svg>
-      </span>
+      <img class="mark-img" src="/static/icons/icon-64.png" width="36" height="36" alt="" />
       <div>
         <div class="wordmark">RamScoutAI</div>
         <div class="tagline" id="game-tagline">FRC auto-scout from match video</div>
       </div>
     </div>
     <div class="top-actions">
-      <span class="chip ghost">Dark</span>
+      <button type="button" class="chip ghost" id="nav-scoutbook" title="Open pick list &amp; scout book">Pick list</button>
+      <button type="button" class="chip ghost" id="version-chip" title="Check for updates">v…</button>
+      <button type="button" class="chip update" id="update-chip" hidden>Update available</button>
       <span class="chip ghost">Team 59</span>
     </div>
   </header>
@@ -42,6 +43,10 @@
       <label class="field grow">
         <span>YouTube match video</span>
         <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
+      </label>
+      <label class="field grow">
+        <span>Or upload a downloaded VOD</span>
+        <input id="video-file" name="video_file" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv" />
       </label>
       <div class="composer-row">
         <label class="field">
@@ -63,8 +68,36 @@
         </button>
         <button type="button" class="btn tonal" id="demo-btn">Try a sample match</button>
       </div>
-      <details class="advanced">
-        <summary>Field crop (default 10–65% of frame height)</summary>
+      <details class="advanced" open>
+        <summary>Tracking &amp; field crop</summary>
+        <div class="composer-row">
+          <label class="field grow">
+            <span>Tracking mode</span>
+            <select id="tracker-mode" name="tracker_mode">
+              <option value="gemini" selected>Google Gemini (recommended with key)</option>
+              <option value="auto">Auto (Gemini → YOLO → OpenCV)</option>
+              <option value="potato">Potato — no AI (OpenCV only)</option>
+              <option value="local">Local only (OpenCV + YOLO)</option>
+              <option value="motion">Motion blobs (no detector)</option>
+              <option value="color">Bumper color + motion</option>
+              <option value="yolo">YOLO neural</option>
+              <option value="openai">OpenAI Vision</option>
+              <option value="cloud">Cloud ensemble</option>
+              <option value="all">Everything available</option>
+            </select>
+          </label>
+        </div>
+        <p class="tool-meta" id="tracker-help">Paste a Google / Gemini API key below. Mode defaults to Gemini (gemini-3.5-flash with automatic fallbacks). Potato / Auto still work with zero keys via OpenCV.</p>
+        <div class="composer-row">
+          <label class="field grow">
+            <span>OpenAI API key</span>
+            <input id="openai-key" name="openai_key" type="password" placeholder="Optional · sk-… · saved in this browser" autocomplete="off" />
+          </label>
+          <label class="field grow">
+            <span>Google / Gemini API key</span>
+            <input id="google-key" name="google_key" type="password" placeholder="Optional · saved in this browser" autocomplete="off" />
+          </label>
+        </div>
         <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
@@ -74,10 +107,18 @@
             <span>Crop bottom</span>
             <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
           </label>
+          <label class="check field">
+            <span>Auto top-camera crop</span>
+            <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
+          </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Scores come from the broadcast overlay when possible. Action counts are motion estimates. A robot-trained YOLO `.pt` is needed for tracking; TBA is optional for nicknames.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, upload the file you already saved (best fix), or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
+    <div class="yt-help" id="yt-help" hidden>
+      <strong>YouTube download blocked.</strong>
+      <span>Upload the MP4/MKV you already downloaded, or export cookies with a browser extension and set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
+    </div>
   </section>
 
   <main class="workspace" id="workspace" hidden>
@@ -174,10 +215,187 @@
         <div class="export-row">
           <a class="btn tonal small" id="export-json" href="#">Export JSON</a>
           <a class="btn tonal small" id="export-csv" href="#">Export CSV</a>
+          <button type="button" class="btn tonal small" id="add-match-book">Add match to scout book</button>
         </div>
       </header>
       <div class="timeline" id="timeline"></div>
       <ul class="warnings" id="warnings"></ul>
+    </section>
+
+    <section class="scout-tools" id="scout-tools">
+      <header class="section-head">
+        <h2>Pick list &amp; scout book</h2>
+        <p>Accumulate matches, rank draft picks, compare alliances, and keep team notes — all local to this browser.</p>
+      </header>
+
+      <div class="tools-layout">
+        <div class="tool-block">
+          <div class="tool-head">
+            <h3>Draft board</h3>
+            <div class="export-row">
+              <button type="button" class="btn tonal small" id="refresh-picks">Refresh ranks</button>
+              <button type="button" class="btn tonal small" id="export-picklist">Export pick list</button>
+              <button type="button" class="btn tonal small" id="clear-scoutbook">Clear book</button>
+            </div>
+          </div>
+          <p class="tool-meta" id="scoutbook-meta">No matches in scout book yet.</p>
+          <div class="pick-rounds" id="pick-rounds"></div>
+          <ol class="pick-ranked" id="pick-ranked"></ol>
+        </div>
+
+        <div class="tool-block">
+          <h3>Alliance compare</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team A</span><input id="cmp-a" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Team B</span><input id="cmp-b" inputmode="numeric" placeholder="254" /></label>
+            <label class="field"><span>Team C</span><input id="cmp-c" inputmode="numeric" placeholder="1678" /></label>
+          </div>
+          <button type="button" class="btn tonal small" id="run-compare">Compare</button>
+          <div class="compare-grid" id="compare-grid"></div>
+          <div class="alliance-summary" id="alliance-summary"></div>
+        </div>
+
+        <div class="tool-block">
+          <h3>Team notes &amp; watchlist</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="note-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field grow"><span>Note</span><input id="note-text" placeholder="Strong intake, slow climb…" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="save-note">Save note</button>
+            <button type="button" class="btn tonal small" id="watch-team">Toggle watchlist</button>
+          </div>
+          <ul class="notes-list" id="notes-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="suite-panel" id="suite-panel">
+      <header class="section-head">
+        <h2>Scout suite</h2>
+        <p>Event ops, draft board, pit forms, heatmaps, shared scout book, and live camera — built for alliance selection day.</p>
+      </header>
+
+      <div class="suite-grid">
+        <div class="tool-block">
+          <h3>Job history</h3>
+          <button type="button" class="btn tonal small" id="refresh-history">Refresh</button>
+          <ul class="notes-list" id="history-list"></ul>
+        </div>
+
+        <div class="tool-block">
+          <h3>Event batch / schedule</h3>
+          <div class="composer-row compact">
+            <label class="field grow"><span>Event key</span><input id="suite-event-key" placeholder="2026nhdur" /></label>
+            <label class="field grow"><span>Watch teams</span><input id="suite-watch-teams" placeholder="59,190,238" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="suite-batch">Plan batch</button>
+            <button type="button" class="btn tonal small" id="suite-schedule">Watchlist schedule</button>
+          </div>
+          <pre class="suite-out" id="suite-event-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Role draft board</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Role</span>
+              <select id="draft-role">
+                <option value="balanced">Balanced</option>
+                <option value="scorer">Scorer</option>
+                <option value="defender">Defender</option>
+                <option value="climber">Climber</option>
+                <option value="flexible">Flexible</option>
+              </select>
+            </label>
+            <label class="field"><span>Locked picks</span><input id="draft-locked" placeholder="59,190" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="draft-refresh">Rank board</button>
+            <button type="button" class="btn tonal small" id="draft-fit">Alliance fit</button>
+            <button type="button" class="btn tonal small" id="draft-sheets">Sheets CSV</button>
+          </div>
+          <ol class="pick-ranked" id="draft-ranked"></ol>
+          <pre class="suite-out" id="draft-fit-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Heatmap &amp; annotated clip</h3>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="heatmap-btn">Build heatmap</button>
+            <button type="button" class="btn tonal small" id="annotate-btn">Export annotated clip</button>
+          </div>
+          <canvas id="heatmap-canvas" width="540" height="260"></canvas>
+          <a id="annotate-link" class="btn tonal small" hidden href="#">Download annotated MP4</a>
+        </div>
+
+        <div class="tool-block" id="event-editor-block">
+          <h3>Manual event editor</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="edit-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Type</span>
+              <select id="edit-type">
+                <option value="hub_score_candidate">Hub score</option>
+                <option value="climb_attempt">Climb attempt</option>
+                <option value="climb_success">Climb success</option>
+                <option value="defense">Defense</option>
+                <option value="collect">Collect</option>
+                <option value="foul">Foul</option>
+                <option value="note">Note</option>
+              </select>
+            </label>
+            <label class="field"><span>t (s)</span><input id="edit-t" type="number" step="0.1" value="30" /></label>
+          </div>
+          <label class="field grow"><span>Detail</span><input id="edit-detail" placeholder="Confirmed climb" /></label>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="edit-add">Add event</button>
+            <button type="button" class="btn tonal small" id="edit-refresh">Reload timeline edits</button>
+          </div>
+          <ul class="notes-list" id="edit-event-list"></ul>
+        </div>
+
+        <div class="tool-block pit-mode" id="pit-block">
+          <h3>Pit / qualitative form</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="pit-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Drivetrain</span><input id="pit-drive" placeholder="swerve" /></label>
+            <label class="field"><span>Climb</span><input id="pit-climb" placeholder="deep / shallow / none" /></label>
+          </div>
+          <label class="field grow"><span>Notes</span><input id="pit-notes" placeholder="Do not pick if battery issues…" /></label>
+          <label class="check"><input type="checkbox" id="pit-dnp" /> Do not pick</label>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="pit-save">Save pit form</button>
+            <button type="button" class="btn tonal small" id="pit-refresh">Load forms</button>
+          </div>
+          <ul class="notes-list" id="pit-list"></ul>
+        </div>
+
+        <div class="tool-block">
+          <h3>Shared scout book</h3>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="book-push">Push browser book → server</button>
+            <button type="button" class="btn tonal small" id="book-pull">Pull server book</button>
+            <button type="button" class="btn tonal small" id="book-export">Export sheets CSV</button>
+          </div>
+          <pre class="suite-out" id="book-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Live camera (best-effort)</h3>
+          <p class="tool-meta">Local webcam only — not YouTube live. Useful for pit demos.</p>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="live-start">Start</button>
+            <button type="button" class="btn tonal small" id="live-stop">Stop</button>
+          </div>
+          <pre class="suite-out" id="live-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Game pack</h3>
+          <select id="game-year"></select>
+          <p class="tool-meta" id="game-year-meta">Loads year-specific field art and landmarks.</p>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -186,5 +404,6 @@
   </footer>
 
   <script src="/static/app.js" type="module"></script>
+  <script src="/static/suite.js" type="module"></script>
 </body>
 </html>

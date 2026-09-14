@@ -73,6 +73,7 @@ def assign_by_start(
     Blue robots are sorted by y (station 1–3), same for red. This is a
     starting guess — the UI lets a scout swap any assignment.
     """
+    tracks = keep_top_tracks(tracks, max_tracks=max(len(blue_teams) + len(red_teams), 6) or 6)
     first: dict[int, dict[str, Any]] = {}
     for sample in tracks:
         tid = int(sample["track_id"])
@@ -82,24 +83,51 @@ def assign_by_start(
     blue_ids: list[tuple[float, int]] = []
     red_ids: list[tuple[float, int]] = []
     for tid, sample in first.items():
-        alliance = sample.get("alliance") or (
-            "blue" if float(sample["x"]) < FIELD_LENGTH / 2 else "red"
-        )
+        alliance = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else None
+        if alliance is None:
+            alliance = "blue" if float(sample["x"]) < FIELD_LENGTH / 2 else "red"
         if alliance == "blue":
             blue_ids.append((float(sample["y"]), tid))
         else:
             red_ids.append((float(sample["y"]), tid))
 
+    # If one side is empty/overfull, rebucket by field half using all first poses.
+    if (len(blue_ids) < min(3, len(blue_teams)) or len(red_ids) < min(3, len(red_teams))) and first:
+        blue_ids, red_ids = [], []
+        for tid, sample in first.items():
+            if float(sample["x"]) < FIELD_LENGTH / 2:
+                blue_ids.append((float(sample["y"]), tid))
+            else:
+                red_ids.append((float(sample["y"]), tid))
+
     blue_ids.sort()
     red_ids.sort()
     mapping: dict[int, str] = {}
-    for i, (_, tid) in enumerate(blue_ids):
-        if i < len(blue_teams):
-            mapping[tid] = str(blue_teams[i])
-    for i, (_, tid) in enumerate(red_ids):
-        if i < len(red_teams):
-            mapping[tid] = str(red_teams[i])
+    for i, (_, tid) in enumerate(blue_ids[: len(blue_teams)]):
+        mapping[tid] = str(blue_teams[i])
+    for i, (_, tid) in enumerate(red_ids[: len(red_teams)]):
+        mapping[tid] = str(red_teams[i])
     return mapping
+
+
+def keep_top_tracks(samples: list[dict[str, Any]], max_tracks: int = 6) -> list[dict[str, Any]]:
+    """Keep the longest-lived tracks so fragmented motion IDs do not flood scouting."""
+    if not samples or max_tracks <= 0:
+        return samples
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for sample in samples:
+        by_id.setdefault(int(sample["track_id"]), []).append(sample)
+    if len(by_id) <= max_tracks:
+        return samples
+
+    def score(group: list[dict[str, Any]]) -> tuple[int, float]:
+        times = [float(s.get("t") or 0.0) for s in group]
+        span = (max(times) - min(times)) if times else 0.0
+        return (len(group), span)
+
+    ranked = sorted(by_id.items(), key=lambda item: score(item[1]), reverse=True)
+    keep = {tid for tid, _ in ranked[:max_tracks]}
+    return [s for s in samples if int(s["track_id"]) in keep]
 
 
 def majority_alliance(samples: list[dict[str, Any]]) -> str:

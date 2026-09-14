@@ -3,6 +3,8 @@ const AUTO_END = 20;
 const ENDGAME_START = 130;
 const MATCH_END = 160;
 
+import { runBrowserPotato, shouldRunBrowserPotato } from "./potato.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -18,6 +20,9 @@ const state = {
   calMode: false,
   calJob: null,
   selectedSeed: null,
+  picklist: null,
+  potatoJobs: new Set(),
+  potatoRunning: false,
 };
 
 function applyGame(game) {
@@ -71,15 +76,45 @@ function loadAsset(key, src, onload) {
 function loadTbaKey() {
   const saved = localStorage.getItem("ramscout.tbaKey") || "";
   $("tba-key").value = saved;
+  const openai = localStorage.getItem("ramscout.openaiKey") || "";
+  const google = localStorage.getItem("ramscout.googleKey") || "";
+  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "auto");
+  if ($("openai-key")) $("openai-key").value = openai;
+  if ($("google-key")) $("google-key").value = google;
+  if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
+    $("tracker-mode").value = mode;
+  }
 }
 
-function saveTbaKey() {
+$("google-key")?.addEventListener("change", () => {
+  const key = $("google-key")?.value.trim() || "";
+  if (key && $("tracker-mode") && $("tracker-mode").value === "auto") {
+    $("tracker-mode").value = "gemini";
+  }
+  saveScoutKeys();
+});
+
+function saveScoutKeys() {
   localStorage.setItem("ramscout.tbaKey", $("tba-key").value.trim());
+  if ($("openai-key")) localStorage.setItem("ramscout.openaiKey", $("openai-key").value.trim());
+  if ($("google-key")) localStorage.setItem("ramscout.googleKey", $("google-key").value.trim());
+  if ($("tracker-mode")) localStorage.setItem("ramscout.trackerMode", $("tracker-mode").value);
+}
+
+function trackerPayload() {
+  return {
+    tracker_mode: $("tracker-mode")?.value || "auto",
+    auto_multicam: $("auto-multicam")?.checked !== false,
+    openai_key: $("openai-key")?.value.trim() || "",
+    google_key: $("google-key")?.value.trim() || "",
+  };
 }
 
 $("start-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  saveTbaKey();
+  saveScoutKeys();
+  const fileInput = $("video-file");
+  const file = fileInput?.files?.[0] || null;
   await createJob({
     url: $("url").value.trim(),
     tba_key: $("tba-key").value.trim(),
@@ -87,12 +122,14 @@ $("start-form").addEventListener("submit", async (event) => {
     match_key: $("match-key").value.trim(),
     crop_top: Number($("crop-top").value || 0.1),
     crop_bottom: Number($("crop-bottom").value || 0.65),
+    ...trackerPayload(),
     demo: false,
+    file,
   });
 });
 
 $("demo-btn").addEventListener("click", async () => {
-  saveTbaKey();
+  saveScoutKeys();
   await createJob({ url: "", tba_key: $("tba-key").value.trim(), demo: true });
 });
 
@@ -163,11 +200,29 @@ $("cal-canvas").addEventListener("click", async (event) => {
 });
 
 async function createJob(payload) {
-  const res = await fetch("/api/jobs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let res;
+  if (payload.file) {
+    const form = new FormData();
+    form.append("file", payload.file);
+    form.append("url", payload.url || "");
+    form.append("tba_key", payload.tba_key || "");
+    form.append("event_key", payload.event_key || "");
+    form.append("match_key", payload.match_key || "");
+    form.append("crop_top", String(payload.crop_top ?? 0.1));
+    form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
+    form.append("tracker_mode", payload.tracker_mode || "auto");
+    form.append("openai_key", payload.openai_key || "");
+    form.append("google_key", payload.google_key || "");
+    form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
+    res = await fetch("/api/jobs/upload", { method: "POST", body: form });
+  } else {
+    const { file: _file, ...body } = payload;
+    res = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Could not start job." }));
     alert(err.detail || "Could not start job.");
@@ -196,6 +251,15 @@ async function refreshJob() {
 }
 
 function renderJob(job) {
+  window.__ramscoutJobId = job.id;
+  window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
+  const ytHelp = $("yt-help");
+  if (ytHelp) {
+    const err = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`.toLowerCase();
+    const blocked = err.includes("bot") || err.includes("sign in") || err.includes("youtube") && err.includes("block");
+    ytHelp.hidden = !blocked;
+  }
+
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
   $("progress-fill").style.width = `${Math.max(4, job.progress || 0)}%`;
@@ -223,9 +287,16 @@ function renderJob(job) {
     const overlayEl = $("overlay-source");
     const channels = src.channels || job.overlay?.sources || [];
     if (overlayEl) {
-      if (channels.length) {
+      const trackBits = [];
+      if (job.tracker_mode) trackBits.push(`Track: ${job.tracker_mode}`);
+      if (job.camera?.mode) trackBits.push(`Cam: ${job.camera.mode}`);
+      const hits = job.source_hits || {};
+      const hitNames = Object.keys(hits).filter((k) => hits[k] > 0);
+      if (hitNames.length) trackBits.push(hitNames.join("+"));
+      const parts = [...channels.map(labelChannel), ...trackBits];
+      if (parts.length) {
         overlayEl.hidden = false;
-        overlayEl.textContent = channels.map(labelChannel).join(" · ");
+        overlayEl.textContent = parts.join(" · ");
       } else {
         overlayEl.hidden = true;
       }
@@ -282,6 +353,11 @@ function renderJob(job) {
   renderTimeline(job);
   renderWarnings(job);
   drawField();
+  if (job.status === "ready") {
+    updateScoutbookMeta();
+    refreshPicklist();
+    maybeRunBrowserPotato(job);
+  }
 }
 
 function renderTeams(elId, match, color) {
@@ -321,7 +397,14 @@ function renderRobots(job) {
         <div class="stat"><b>${card.hub_score_candidates}</b><span>Hub dwells</span></div>
         <div class="stat"><b>${card.climb_attempt ? "Yes" : "No"}</b><span>Climb attempt</span></div>
         <div class="stat"><b>${Number(card.defense_time_s || 0).toFixed(0)}s</b><span>Defense</span></div>
+        <div class="stat"><b>${Number(card.collection_time_s || 0).toFixed(0)}s</b><span>Collection</span></div>
         <div class="stat"><b>${Number(card.path_length_in || 0).toFixed(0)} in</b><span>Path length</span></div>
+        ${card.tba ? `<div class="stat"><b>${card.tba.tba_teleop_points ?? "—"}</b><span>TBA teleop</span></div>` : ""}
+      </div>
+      <div class="pick-actions">
+        <button type="button" data-pick="${escapeHtml(card.team)}">Add to pick list</button>
+        <button type="button" data-watch="${escapeHtml(card.team)}">Watch</button>
+        <button type="button" data-note="${escapeHtml(card.team)}">Note</button>
       </div>
       <label class="field">
         <span>Team override</span>
@@ -330,6 +413,24 @@ function renderRobots(job) {
     `;
     grid.appendChild(el);
   }
+  grid.querySelectorAll("[data-pick]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addCurrentMatchToBook(false);
+      refreshPicklist();
+      $("cmp-a").value = String(btn.dataset.pick);
+      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  grid.querySelectorAll("[data-watch]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleWatch(Number(btn.dataset.watch)));
+  });
+  grid.querySelectorAll("[data-note]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("note-team").value = String(btn.dataset.note);
+      $("note-text").focus();
+      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
   grid.querySelectorAll(".team-input").forEach((input) => {
     input.addEventListener("change", async () => {
       if (!state.job) return;
@@ -702,4 +803,425 @@ fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGa
   field_image: "/static/fields/2026.png",
   robot_icons: { blue: "/static/robots/blue.png", red: "/static/robots/red.png" },
 }));
+
+/* ---- Scout book / pick list (localStorage) ---- */
+
+const BOOK_KEY = "ramscout.scoutBook";
+const NOTES_KEY = "ramscout.teamNotes";
+const WATCH_KEY = "ramscout.watchlist";
+const EXCLUDE_KEY = "ramscout.pickedExclude";
+
+function loadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function saveJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadBook() {
+  return loadJson(BOOK_KEY, { matches: [], cards: [] });
+}
+
+function saveBook(book) {
+  saveJson(BOOK_KEY, book);
+}
+
+function loadNotes() {
+  return loadJson(NOTES_KEY, {});
+}
+
+function loadWatch() {
+  return new Set(loadJson(WATCH_KEY, []));
+}
+
+function saveWatch(set) {
+  saveJson(WATCH_KEY, [...set]);
+}
+
+function loadExcluded() {
+  return loadJson(EXCLUDE_KEY, []);
+}
+
+function excludeTeam(remove, team) {
+  const list = loadExcluded().filter((t) => Number(t) !== Number(team));
+  if (!remove) list.push(Number(team));
+  saveJson(EXCLUDE_KEY, list);
+}
+
+function addCurrentMatchToBook(announce = true) {
+  const job = state.job;
+  if (!job || job.status !== "ready" || !(job.cards || []).length) {
+    if (announce) alert("Analyze a match first, then add it to the scout book.");
+    return false;
+  }
+  const book = loadBook();
+  const matchKey = job.match?.key || job.id;
+  if (book.matches.includes(matchKey)) {
+    if (announce) alert(`Match ${matchKey} is already in the scout book.`);
+    return false;
+  }
+  book.matches.push(matchKey);
+  for (const card of job.cards) {
+    book.cards.push({
+      ...card,
+      _match: matchKey,
+      _job: job.id,
+    });
+  }
+  saveBook(book);
+  if (announce) {
+    updateScoutbookMeta();
+    refreshPicklist();
+  }
+  return true;
+}
+
+function updateScoutbookMeta() {
+  const el = $("scoutbook-meta");
+  if (!el) return;
+  const book = loadBook();
+  const teams = new Set(book.cards.map((c) => String(c.team)));
+  if (!book.matches.length) {
+    el.textContent = "No matches in scout book yet. Analyze a match, then Add match to scout book.";
+    return;
+  }
+  el.textContent = `${book.matches.length} match${book.matches.length === 1 ? "" : "es"} · ${teams.size} teams scouted`;
+}
+
+async function refreshPicklist() {
+  const book = loadBook();
+  const cards = book.cards.length ? book.cards : (state.job?.cards || []);
+  const excluded = loadExcluded();
+  const res = await fetch("/api/picklist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cards, already_picked: excluded, limit: 24 }),
+  });
+  if (!res.ok) return;
+  state.picklist = await res.json();
+  renderPicklist(state.picklist);
+  updateScoutbookMeta();
+}
+
+function renderPicklist(data) {
+  const rounds = $("pick-rounds");
+  const ranked = $("pick-ranked");
+  if (!rounds || !ranked) return;
+  const watch = loadWatch();
+  const sections = [
+    ["1st round", data.first_round || []],
+    ["2nd round", data.second_round || []],
+    ["3rd round", data.third_round || []],
+  ];
+  rounds.innerHTML = sections.map(([label, rows]) => `
+    <div class="pick-round">
+      <div class="round-label">${label}</div>
+      ${rows.length ? rows.map((row) => `
+        <div class="pick-chip">
+          <b>${escapeHtml(row.team)}</b>
+          <span class="why">${escapeHtml((row.reasons || [])[0] || "")}</span>
+        </div>
+      `).join("") : `<div class="pick-chip"><span class="why">Need more scout data</span></div>`}
+    </div>
+  `).join("");
+
+  ranked.innerHTML = (data.ranked || []).map((row) => `
+    <li class="${watch.has(row.team) ? "watched" : ""}">
+      <span class="rank">#${row.rank}</span>
+      <span class="team-n">${escapeHtml(row.team)}</span>
+      <span>${escapeHtml((row.reasons || []).join(" · "))}</span>
+      <span class="score">${Number(row.score).toFixed(1)}</span>
+      <button type="button" data-exclude="${row.team}">Mark taken</button>
+    </li>
+  `).join("") || `<li><span>Analyze matches and add them to the scout book to build a draft board.</span></li>`;
+
+  ranked.querySelectorAll("[data-exclude]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      excludeTeam(false, Number(btn.dataset.exclude));
+      refreshPicklist();
+    });
+  });
+}
+
+function renderNotes() {
+  const root = $("notes-list");
+  if (!root) return;
+  const notes = loadNotes();
+  const watch = loadWatch();
+  const teams = [...new Set([...Object.keys(notes), ...watch].map(String))].sort((a, b) => Number(a) - Number(b));
+  if (!teams.length) {
+    root.innerHTML = `<li><div class="note-team">No notes yet</div><div>Save a note or watchlist a team from a robot card.</div></li>`;
+    return;
+  }
+  root.innerHTML = teams.map((team) => `
+    <li>
+      <div class="note-team">
+        <span>${escapeHtml(team)}</span>
+        ${watch.has(Number(team)) ? `<span class="watched-dot" title="On watchlist">★</span>` : ""}
+      </div>
+      <div>${escapeHtml(notes[team] || "On watchlist")}</div>
+    </li>
+  `).join("");
+}
+
+function toggleWatch(team) {
+  const set = loadWatch();
+  const n = Number(team);
+  if (set.has(n)) set.delete(n);
+  else set.add(n);
+  saveWatch(set);
+  renderNotes();
+  refreshPicklist();
+}
+
+async function runCompare() {
+  const teams = [$("cmp-a")?.value, $("cmp-b")?.value, $("cmp-c")?.value]
+    .map((v) => Number(String(v || "").trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const grid = $("compare-grid");
+  const summary = $("alliance-summary");
+  if (!teams.length) {
+    if (grid) grid.innerHTML = "";
+    if (summary) summary.textContent = "Enter at least one team number.";
+    return;
+  }
+  const book = loadBook();
+  const cards = book.cards.length ? book.cards : (state.job?.cards || []);
+  const res = await fetch("/api/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cards, teams }),
+  });
+  if (!res.ok) {
+    if (summary) summary.textContent = "Compare failed.";
+    return;
+  }
+  const body = await res.json();
+  if (grid) {
+    grid.innerHTML = (body.compare?.teams || []).map((row) => {
+      if (!row.found) {
+        return `<div class="compare-card"><div class="team-n">${escapeHtml(row.team)}</div><div class="nick">Not in scout book</div></div>`;
+      }
+      return `
+        <div class="compare-card">
+          <div class="team-n">${escapeHtml(row.team)}</div>
+          <div class="nick">${escapeHtml(row.nickname || "")}</div>
+          <div class="row"><span>Hubs / match</span><b>${row.hubs_per_match}</b></div>
+          <div class="row"><span>Climb rate</span><b>${Math.round(row.climb_rate * 100)}%</b></div>
+          <div class="row"><span>Defense</span><b>${row.defense_s_per_match}s</b></div>
+          <div class="row"><span>Draft score</span><b>${row.score}</b></div>
+        </div>
+      `;
+    }).join("");
+  }
+  const a = body.alliance || {};
+  if (summary) {
+    summary.innerHTML = a.complete
+      ? `Alliance totals · <strong>${a.combined_hubs_per_match}</strong> hubs/match · avg climb <strong>${Math.round((a.avg_climb_rate || 0) * 100)}%</strong>`
+      : `Missing scout data for: ${(a.missing || []).join(", ") || "—"}`;
+  }
+}
+
+function exportPicklist() {
+  const data = state.picklist;
+  if (!data?.ranked?.length) {
+    alert("No ranked teams yet.");
+    return;
+  }
+  const lines = ["rank,team,score,hubs_per_match,climb_rate,reasons"];
+  for (const row of data.ranked) {
+    lines.push([
+      row.rank,
+      row.team,
+      row.score,
+      row.hubs_per_match,
+      row.climb_rate,
+      `"${(row.reasons || []).join("; ").replaceAll('"', "'")}"`,
+    ].join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ramscout-picklist.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function initScoutTools() {
+  $("nav-scoutbook")?.addEventListener("click", () => {
+    $("workspace").hidden = false;
+    $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $("add-match-book")?.addEventListener("click", () => addCurrentMatchToBook(true));
+  $("refresh-picks")?.addEventListener("click", () => refreshPicklist());
+  $("export-picklist")?.addEventListener("click", () => exportPicklist());
+  $("clear-scoutbook")?.addEventListener("click", () => {
+    if (!window.confirm("Clear scout book, exclusions, and keep notes/watchlist?")) return;
+    saveBook({ matches: [], cards: [] });
+    saveJson(EXCLUDE_KEY, []);
+    refreshPicklist();
+  });
+  $("run-compare")?.addEventListener("click", () => runCompare());
+  $("save-note")?.addEventListener("click", () => {
+    const team = String($("note-team")?.value || "").trim();
+    const text = String($("note-text")?.value || "").trim();
+    if (!team) return;
+    const notes = loadNotes();
+    if (text) notes[team] = text;
+    else delete notes[team];
+    saveJson(NOTES_KEY, notes);
+    $("note-text").value = "";
+    renderNotes();
+  });
+  $("watch-team")?.addEventListener("click", () => {
+    const team = Number($("note-team")?.value || 0);
+    if (!team) return;
+    toggleWatch(team);
+  });
+  updateScoutbookMeta();
+  renderNotes();
+  refreshPicklist();
+}
+
+async function initUpdater() {
+  const versionChip = $("version-chip");
+  const updateChip = $("update-chip");
+  if (!versionChip || !updateChip) return;
+
+  async function refresh(force = false) {
+    try {
+      const res = await fetch(force ? "/api/updates/check" : "/api/version");
+      const data = await res.json();
+      const version = data.version || data.current_version || "?";
+      versionChip.textContent = `v${version}`;
+      const update = data.update || data;
+      const available = Boolean(update?.available);
+      updateChip.hidden = !available;
+      if (available) {
+        updateChip.textContent = `Update ${update.latest_version}`;
+        updateChip.dataset.releaseUrl = update.release_url || "";
+        updateChip.dataset.canApply = update.asset_url && data.frozen ? "1" : "0";
+      }
+    } catch (_err) {
+      versionChip.textContent = "v?";
+    }
+  }
+
+  versionChip.addEventListener("click", async () => {
+    await refresh(true);
+    try {
+      const res = await fetch("/api/updates/check");
+      const update = await res.json();
+      if (update.available) return;
+      if (update.error) {
+        const open = update.release_url
+          ? `\n\nOpen releases? ${update.release_url}`
+          : "";
+        if (update.release_url && window.confirm(`${update.error}${open}`)) {
+          window.open(update.release_url, "_blank", "noopener");
+        } else if (!update.release_url) {
+          alert(update.error);
+        }
+      } else {
+        alert(`RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
+      }
+    } catch (_err) {
+      alert("Could not check GitHub for updates.");
+    }
+  });
+  updateChip.addEventListener("click", async () => {
+    if (updateChip.dataset.canApply === "1") {
+      updateChip.textContent = "Downloading…";
+      updateChip.disabled = true;
+      try {
+        const res = await fetch("/api/updates/download", { method: "POST" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(body.detail || "Update failed.");
+          updateChip.disabled = false;
+          updateChip.textContent = "Update available";
+          return;
+        }
+        if (body.open_url) {
+          window.open(body.open_url, "_blank", "noopener");
+        }
+        alert(body.message || "Update started.");
+      } catch (_err) {
+        alert("Update failed.");
+        updateChip.disabled = false;
+      }
+      return;
+    }
+    const url = updateChip.dataset.releaseUrl;
+    if (url) window.open(url, "_blank", "noopener");
+  });
+
+  refresh(false);
+  setInterval(() => refresh(false), 30 * 60 * 1000);
+}
+
+initUpdater();
+initScoutTools();
 drawField();
+
+async function maybeRunBrowserPotato(job) {
+  if (!shouldRunBrowserPotato(job)) return;
+  if (state.potatoJobs.has(job.id) || state.potatoRunning) return;
+  const video = $("match-video");
+  if (!video || video.hidden || !job.has_video) return;
+  // Ensure video URL is set before seeking.
+  if (video.dataset.src !== job.id) {
+    video.src = `/api/jobs/${job.id}/video`;
+    video.dataset.src = job.id;
+  }
+  state.potatoJobs.add(job.id);
+  state.potatoRunning = true;
+  const msg = $("progress-message");
+  const panel = $("progress-panel");
+  const status = $("progress-status");
+  const fill = $("progress-fill");
+  if (panel) panel.hidden = false;
+  if (status) status.textContent = "Browser potato";
+  try {
+    const samples = await runBrowserPotato(video, {
+      cropTop: job.crop_top ?? 0.1,
+      cropBottom: job.crop_bottom ?? 0.65,
+      durationHint: (job.game && job.game.match_end_s) || 150,
+      onProgress: (pct, text) => {
+        if (fill) fill.style.width = `${Math.max(4, pct)}%`;
+        if (msg) msg.textContent = text;
+      },
+    });
+    if (!samples.length) {
+      if (msg) msg.textContent = "Browser potato found no motion blobs.";
+      return;
+    }
+    const replace = (job.tracker_mode || "").toLowerCase() === "potato" && (job.samples || []).length < 8;
+    const res = await fetch(`/api/jobs/${job.id}/browser-tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ samples, replace }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (msg) msg.textContent = err.detail || "Browser potato upload failed.";
+      return;
+    }
+    const updated = await res.json();
+    state.job = updated;
+    renderJob(updated);
+  } catch (err) {
+    console.warn("browser potato failed", err);
+    if (msg) msg.textContent = "Browser potato skipped (video not ready).";
+  } finally {
+    state.potatoRunning = false;
+    if (panel && state.job?.status === "ready") panel.hidden = true;
+  }
+}

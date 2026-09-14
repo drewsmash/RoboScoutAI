@@ -11,7 +11,18 @@ client = TestClient(app)
 def test_health():
     res = client.get("/api/health")
     assert res.status_code == 200
-    assert res.json()["status"] == "ok"
+    body = res.json()
+    assert body["status"] == "ok"
+    assert "version" in body
+
+
+def test_version_endpoint():
+    res = client.get("/api/version")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["version"]
+    assert "repo" in body
+    assert "platform" in body
 
 
 def test_index_serves_dark_ui():
@@ -19,6 +30,8 @@ def test_index_serves_dark_ui():
     assert res.status_code == 200
     assert "RamScoutAI" in res.text
     assert "color-scheme" in res.text
+    assert "upload" in res.text.lower()
+    assert "update-chip" in res.text
 
 
 def test_demo_job_returns_scout_cards():
@@ -57,6 +70,27 @@ def test_demo_job_returns_scout_cards():
 def test_analyze_requires_url():
     res = client.post("/api/jobs", json={"url": ""})
     assert res.status_code == 400
+
+
+def test_upload_job_accepts_local_video(tmp_path):
+    # Tiny non-media payload is enough to exercise the upload route; the job will
+    # later fail OpenCV decode, which still proves multipart ingest works.
+    video = tmp_path / "match.mp4"
+    video.write_bytes(b"not-a-real-mp4")
+    with video.open("rb") as fh:
+        res = client.post(
+            "/api/jobs/upload",
+            data={
+                "url": "https://youtu.be/m9uLAGKtenM",
+                "crop_top": "0.10",
+                "crop_bottom": "0.65",
+            },
+            files={"file": ("match.mp4", fh, "video/mp4")},
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"]
+    assert body["status"] in {"queued", "resolving", "downloading", "error", "ready"}
 
 
 def test_crop_bottom_must_exceed_top():

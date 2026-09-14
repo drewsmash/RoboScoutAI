@@ -1,0 +1,190 @@
+name: Release desktop builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.4.2). Leave empty to use the pushed tag / create a draft from the current version."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: RamScoutAI-windows-x64.exe
+          - os: macos-14
+            artifact: RamScoutAI-macos-arm64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          # Slim freeze set — skip ultralytics/torch so CI stays fast and artifacts stay downloadable.
+          python -m pip install -r requirements-desktop.txt
+
+      - name: Build with PyInstaller
+        run: python -m PyInstaller --noconfirm --clean packaging/ramscout.spec
+
+      - name: Package Windows exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/release | Out-Null
+          Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
+
+      - name: Sign Windows exe (optional)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERT_PFX_BASE64) {
+            Write-Warning "WINDOWS_CERT_PFX_BASE64 not set — shipping unsigned (SmartScreen may warn)."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "ramscout-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          $exe = "dist/release/${{ matrix.artifact }}"
+          & signtool sign /fd SHA256 /f $pfx /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $exe
+          & signtool verify /pa $exe
+          Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+
+      - name: Sign & notarize macOS binary (optional)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_API_KEY_ID: ${{ secrets.MACOS_API_KEY_ID }}
+          MACOS_API_ISSUER_ID: ${{ secrets.MACOS_API_ISSUER_ID }}
+          MACOS_API_KEY_P8_BASE64: ${{ secrets.MACOS_API_KEY_P8_BASE64 }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CERTIFICATE_P12_BASE64:-}" ]]; then
+            echo "::warning::MACOS_CERTIFICATE_P12_BASE64 not set — shipping unsigned (Gatekeeper will quarantine)."
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/ramscout-dev-id.p12"
+          KEYCHAIN="$RUNNER_TEMP/ramscout.keychain-db"
+          KEYCHAIN_PW="$(openssl rand -hex 12)"
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+          if [[ -z "$IDENTITY" ]]; then
+            echo "::error::No Developer ID Application identity found in imported certificate."
+            exit 1
+          fi
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RamScoutAI
+          codesign --verify --verbose=2 dist/RamScoutAI
+          if [[ -n "${MACOS_API_KEY_P8_BASE64:-}" && -n "${MACOS_API_KEY_ID:-}" && -n "${MACOS_API_ISSUER_ID:-}" ]]; then
+            KEY_P8="$RUNNER_TEMP/AuthKey_${MACOS_API_KEY_ID}.p8"
+            echo "$MACOS_API_KEY_P8_BASE64" | base64 --decode > "$KEY_P8"
+            ditto -c -k --keepParent dist/RamScoutAI "$RUNNER_TEMP/RamScoutAI-notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/RamScoutAI-notarize.zip" \
+              --key "$KEY_P8" --key-id "$MACOS_API_KEY_ID" --issuer "$MACOS_API_ISSUER_ID" \
+              --wait
+            xcrun stapler staple dist/RamScoutAI || true
+          else
+            echo "::warning::Notarization secrets missing — binary is signed but not notarized."
+          fi
+          rm -f "$CERT_PATH"
+          [[ -n "${KEY_P8:-}" ]] && rm -f "$KEY_P8"
+          true
+
+      - name: Package macOS zip
+        if: runner.os == 'MacOS' || runner.os == 'macOS'
+        run: |
+          mkdir -p dist/release
+          cd dist
+          chmod +x RamScoutAI
+          zip -9 "release/${{ matrix.artifact }}" RamScoutAI
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(python -c 'from ramscout import __version__; print(__version__)')"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Flatten assets
+        shell: bash
+        run: |
+          mkdir -p out
+          find release-assets -type f -print -exec cp {} out/ \;
+          ls -lah out
+          test -f out/RamScoutAI-windows-x64.exe
+          test -f out/RamScoutAI-macos-arm64.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: RamScoutAI ${{ steps.meta.outputs.tag }}
+          draft: false
+          generate_release_notes: true
+          files: out/*
+          body: |
+            Desktop builds for RamScoutAI.
+
+            - **Windows:** download `RamScoutAI-windows-x64.exe` and run it
+            - **Mac (Apple Silicon):** download `RamScoutAI-macos-arm64.zip`, unzip, then run `./RamScoutAI`
+
+            If SmartScreen / Gatekeeper warns, see `docs/SIGNING.md`. Signed builds ship when repo signing secrets are configured.
+
+            The in-app updater checks this release for newer versions.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

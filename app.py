@@ -3,26 +3,69 @@
 from __future__ import annotations
 
 import os
+import tempfile
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from ramscout import __version__
+from ramscout.detect import TRACKER_MODES, list_strategies
 from ramscout.gameconfig import public_game
+from ramscout.paths import is_frozen, web_dir
+from ramscout.picklist import (
+    aggregate_cards,
+    alliance_summary,
+    compare_teams,
+    suggest_picks,
+)
+from ramscout.suite_api import register_suite_routes
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
+    apply_browser_tracks,
     apply_calibration,
     export_csv,
     start_job,
 )
+from ramscout.updater import (
+    UpdateInfo,
+    apply_downloaded_update,
+    check_for_update,
+    download_update,
+    github_repo,
+    last_check,
+    platform_key,
+)
 
-ROOT = Path(__file__).resolve().parent
-WEB = ROOT / "web"
+WEB = web_dir()
+_UPLOAD_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
 
-app = FastAPI(title="RamScoutAI", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    def worker() -> None:
+        try:
+            check_for_update()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from ramscout.detect import ensure_detector_weights
+
+            ensure_detector_weights()
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="RamScoutAI", version=__version__, lifespan=lifespan)
+register_suite_routes(app)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
@@ -34,6 +77,11 @@ class StartRequest(BaseModel):
     demo: bool = False
     crop_top: float = 0.10
     crop_bottom: float = 0.65
+    tracker_mode: str = "auto"
+    openai_key: str = ""
+    google_key: str = ""
+    auto_multicam: bool = True
+
 
 
 class CalibrateRequest(BaseModel):
@@ -44,6 +92,24 @@ class AssignRequest(BaseModel):
     assignments: dict[str, str]
 
 
+class BrowserTracksRequest(BaseModel):
+    """Pixel-space feet from the browser potato tracker (no AI)."""
+
+    samples: list[dict] = Field(default_factory=list)
+    replace: bool = False
+
+
+class PicklistRequest(BaseModel):
+    cards: list[dict] = Field(default_factory=list)
+    already_picked: list[int] = Field(default_factory=list)
+    limit: int = 24
+
+
+class CompareRequest(BaseModel):
+    cards: list[dict] = Field(default_factory=list)
+    teams: list[int] = Field(default_factory=list)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB / "index.html")
@@ -51,12 +117,83 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/version")
+def version() -> dict:
+    cached = last_check()
+    return {
+        "version": __version__,
+        "frozen": is_frozen(),
+        "platform": platform_key(),
+        "repo": github_repo(),
+        "update": cached,
+    }
+
+
+@app.get("/api/updates/check")
+def updates_check() -> dict:
+    return check_for_update().as_dict()
+
+
+@app.post("/api/updates/download")
+def updates_download() -> dict:
+    info = UpdateInfo(**(last_check() or check_for_update().as_dict()))
+    if not info.available:
+        raise HTTPException(400, info.error or "No update available.")
+    if not info.asset_url:
+        return {
+            "ok": False,
+            "open_url": info.release_url,
+            "message": "Open the GitHub release page to download this update.",
+            "update": info.as_dict(),
+        }
+    if not is_frozen():
+        return {
+            "ok": False,
+            "open_url": info.release_url,
+            "message": "Source installs update with git pull. Desktop builds can auto-apply.",
+            "update": info.as_dict(),
+        }
+    try:
+        package = download_update(info)
+        message = apply_downloaded_update(package)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc)) from exc
+    return {"ok": True, "message": message, "update": info.as_dict(), "restarting": True}
 
 
 @app.get("/api/game")
 def game_config(year: int | None = None) -> dict:
     return public_game(year)
+
+
+@app.get("/api/trackers")
+def trackers() -> dict:
+    """List tracking modes and which strategies are available on this machine."""
+    return {
+        "modes": [
+            {"id": key, "label": meta["label"], "description": meta["description"], "strategies": meta["strategies"]}
+            for key, meta in TRACKER_MODES.items()
+        ],
+        "strategies": list_strategies(),
+        "env_hints": {
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
+            "yolo": "pip install ultralytics (+ optional models/*.pt)",
+        },
+    }
+
+
+def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
+    if crop_bottom <= crop_top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
+    top = min(max(crop_top, 0.0), 0.45)
+    bottom = min(max(crop_bottom, 0.5), 1.0)
+    if bottom <= top:
+        raise HTTPException(400, "Crop bottom must be below crop top.")
+    return top, bottom
 
 
 @app.post("/api/jobs")
@@ -65,13 +202,8 @@ def create_job(body: StartRequest) -> dict:
         job = start_job(url=body.url or "demo://sample", demo=True, tba_key=body.tba_key)
         return job.public()
     if not body.url.strip():
-        raise HTTPException(400, "Paste a YouTube match video URL.")
-    if body.crop_bottom <= body.crop_top:
-        raise HTTPException(400, "Crop bottom must be below crop top.")
-    top = min(max(body.crop_top, 0.0), 0.45)
-    bottom = min(max(body.crop_bottom, 0.5), 1.0)
-    if bottom <= top:
-        raise HTTPException(400, "Crop bottom must be below crop top.")
+        raise HTTPException(400, "Paste a YouTube match video URL or upload a local file.")
+    top, bottom = _normalize_crop(body.crop_top, body.crop_bottom)
     job = start_job(
         url=body.url.strip(),
         tba_key=body.tba_key.strip() or os.environ.get("TBA_AUTH_KEY", ""),
@@ -79,7 +211,64 @@ def create_job(body: StartRequest) -> dict:
         match_key=body.match_key.strip(),
         crop_top=top,
         crop_bottom=bottom,
+        tracker_mode=body.tracker_mode.strip() or "auto",
+        openai_key=body.openai_key.strip() or os.environ.get("OPENAI_API_KEY", ""),
+        google_key=body.google_key.strip()
+        or os.environ.get("GOOGLE_API_KEY", "")
+        or os.environ.get("GEMINI_API_KEY", ""),
+        auto_multicam=bool(body.auto_multicam),
     )
+    return job.public()
+
+
+@app.post("/api/jobs/upload")
+async def create_job_upload(
+    file: UploadFile = File(...),
+    url: str = Form(""),
+    tba_key: str = Form(""),
+    event_key: str = Form(""),
+    match_key: str = Form(""),
+    crop_top: float = Form(0.10),
+    crop_bottom: float = Form(0.65),
+    tracker_mode: str = Form("auto"),
+    openai_key: str = Form(""),
+    google_key: str = Form(""),
+    auto_multicam: bool = Form(True),
+) -> dict:
+    """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
+    suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
+    if suffix not in _UPLOAD_SUFFIXES:
+        raise HTTPException(400, "Upload an mp4/mkv/webm/mov match video.")
+    top, bottom = _normalize_crop(crop_top, crop_bottom)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = Path(tmp.name)
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+    meta_url = (url or "").strip() or f"file://{tmp_path}"
+    try:
+        job = start_job(
+            url=meta_url,
+            tba_key=(tba_key or "").strip() or os.environ.get("TBA_AUTH_KEY", ""),
+            event_key=(event_key or "").strip(),
+            match_key=(match_key or "").strip(),
+            crop_top=top,
+            crop_bottom=bottom,
+            local_video=tmp_path,
+            tracker_mode=(tracker_mode or "auto").strip() or "auto",
+            openai_key=(openai_key or "").strip() or os.environ.get("OPENAI_API_KEY", ""),
+            google_key=(google_key or "").strip()
+            or os.environ.get("GOOGLE_API_KEY", "")
+            or os.environ.get("GEMINI_API_KEY", ""),
+            auto_multicam=bool(auto_multicam),
+        )
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return job.public()
 
 
@@ -105,6 +294,17 @@ def assign(job_id: str, body: AssignRequest) -> dict:
     if job is None:
         raise HTTPException(404, "Unknown job.")
     return apply_assignments(job, body.assignments).public()
+
+
+@app.post("/api/jobs/{job_id}/browser-tracks")
+def browser_tracks(job_id: str, body: BrowserTracksRequest) -> dict:
+    """Ingest dumb browser frame-diff tracks (potato fallback, no models)."""
+    job = STORE.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job.")
+    if job.status not in {"ready", "tracking", "scouting"}:
+        raise HTTPException(400, "Job is not ready for browser tracks yet.")
+    return apply_browser_tracks(job, body.samples, replace=body.replace).public()
 
 
 @app.get("/api/jobs/{job_id}/export.json")
@@ -139,7 +339,32 @@ def job_frame(job_id: str) -> FileResponse:
     return FileResponse(job.frame_path)
 
 
-if __name__ == "__main__":
-    import uvicorn
+@app.post("/api/picklist")
+def picklist(body: PicklistRequest) -> dict:
+    cards = aggregate_cards(body.cards) if body.cards else []
+    return suggest_picks(cards, already_picked=body.already_picked, limit=body.limit)
 
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), reload=True)
+
+@app.post("/api/compare")
+def compare(body: CompareRequest) -> dict:
+    if not body.teams:
+        raise HTTPException(400, "Provide at least one team number.")
+    cards = aggregate_cards(body.cards) if body.cards else []
+    return {
+        "compare": compare_teams(cards, body.teams),
+        "alliance": alliance_summary(cards, body.teams[:3]),
+    }
+
+
+@app.get("/api/jobs/{job_id}/picklist")
+def job_picklist(job_id: str, limit: int = 12) -> dict:
+    job = STORE.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job.")
+    return suggest_picks(job.cards or [], limit=limit)
+
+
+if __name__ == "__main__":
+    from desktop.main import main
+
+    raise SystemExit(main())
