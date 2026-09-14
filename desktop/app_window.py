@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,10 @@ def _chrome_user_data_dir() -> Path:
     return base
 
 
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
 def wait_for_server(url: str, timeout: float = 30.0) -> bool:
     """Poll until the local HTTP server responds or timeout."""
     deadline = time.monotonic() + timeout
@@ -43,15 +48,8 @@ def wait_for_server(url: str, timeout: float = 30.0) -> bool:
 
 
 def _chrome_like_binaries() -> list[str]:
-    names: list[str] = []
     if sys.platform == "win32":
-        names = [
-            "msedge",
-            "chrome",
-            "google-chrome",
-            "chromium",
-        ]
-        # Common install paths when not on PATH
+        names = ["msedge", "chrome", "google-chrome", "chromium"]
         program_files = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -68,11 +66,8 @@ def _chrome_like_binaries() -> list[str]:
         ]
         found = [p for p in mac_paths if Path(p).is_file()]
         return found + [
-            n
-            for n in ("google-chrome", "chrome", "chromium", "msedge")
-            if shutil.which(n)
+            n for n in ("google-chrome", "chrome", "chromium", "msedge") if shutil.which(n)
         ]
-    # Linux
     names = [
         "google-chrome-stable",
         "google-chrome",
@@ -116,11 +111,37 @@ def open_chrome_app_window(url: str) -> subprocess.Popen[Any] | None:
     return None
 
 
+def _should_try_pywebview() -> bool:
+    """Frozen Windows + pywebview/pythonnet often dies with an uncatchable
+    NullReferenceException on a .NET UI thread when setting window Text.
+
+    Skip pywebview in frozen Windows builds unless RAMSCOUT_FORCE_WEBVIEW=1.
+    """
+    force = (os.environ.get("RAMSCOUT_FORCE_WEBVIEW") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if force:
+        return True
+    if sys.platform == "win32" and _is_frozen():
+        return False
+    return True
+
+
 def open_pywebview(url: str) -> bool:
     """Open a native WebView window. Blocks until the window is closed.
 
     Returns True if the window ran successfully, False if pywebview/GUI is unavailable.
     """
+    if not _should_try_pywebview():
+        log.info(
+            "Skipping pywebview in the Windows .exe (avoids WinForms crash); "
+            "using Edge/Chrome --app instead."
+        )
+        return False
+
     try:
         import webview
     except ImportError:
@@ -129,6 +150,11 @@ def open_pywebview(url: str) -> bool:
 
     # Avoid scary ERROR traces when GTK/Qt are missing on Linux; we fall back cleanly.
     logging.getLogger("pywebview").setLevel(logging.CRITICAL)
+
+    # On Windows only use Edge/WebView2 — never legacy WinForms/mshtml.
+    start_kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        start_kwargs["gui"] = "edgechromium"
 
     try:
         webview.create_window(
@@ -140,8 +166,7 @@ def open_pywebview(url: str) -> bool:
             confirm_close=False,
             text_select=True,
         )
-        # gui=None lets pywebview pick Edge/WebView2 (Win), Cocoa (mac), GTK/Qt (Linux)
-        webview.start()
+        webview.start(**start_kwargs)
         return True
     except Exception as exc:  # noqa: BLE001
         log.warning("Native WebView unavailable (%s); trying browser app mode.", exc)
@@ -161,7 +186,8 @@ def run_app_ui(
     """Open the UI and block until the app window exits when possible.
 
     mode:
-      - "app": prefer pywebview, then Chrome --app, then system browser
+      - "app": chrome-less window (Edge/Chrome --app first on Windows;
+        pywebview first elsewhere), then system browser
       - "browser": system browser tab (with URL bar)
       - "none": do not open a window
 
@@ -180,17 +206,29 @@ def run_app_ui(
         open_system_browser(url)
         return "browser"
 
-    # Prefer a true native window (no address bar).
-    if open_pywebview(url):
-        return "webview"
-
-    proc = open_chrome_app_window(url)
-    if proc is not None:
-        try:
-            proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()
-        return "chrome_app"
+    # Windows: Edge/Chrome --app first. pywebview's WinForms/pythonnet path can
+    # raise an unhandled NullReferenceException on a .NET thread (process death)
+    # that Python try/except cannot catch — that is what broke the .exe.
+    if sys.platform == "win32":
+        proc = open_chrome_app_window(url)
+        if proc is not None:
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                proc.terminate()
+            return "chrome_app"
+        if open_pywebview(url):
+            return "webview"
+    else:
+        if open_pywebview(url):
+            return "webview"
+        proc = open_chrome_app_window(url)
+        if proc is not None:
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                proc.terminate()
+            return "chrome_app"
 
     log.info("Falling back to the system browser (URL bar may be visible).")
     open_system_browser(url)

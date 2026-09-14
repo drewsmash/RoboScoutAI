@@ -7,6 +7,11 @@ The packaged app opens in a **chrome-less window** (native WebView when availabl
 ### Windows (ready)
 - `RamScoutAI-windows-x64.exe` — upload as-is
 
+The Windows app opens Edge/Chrome in `--app` mode (no URL bar). It does **not** use the
+bundled WinForms WebView path, which crashed some installs with
+`NullReferenceException` in `Control.set_Text`. Edge or Chrome must be installed
+(almost always true on Windows 10/11 via Edge).
+
 ### Linux (ready, split for download size)
 Download all `RamScoutAI-linux-x86_64.tar.gz.part*` files, then:
 ```bash
