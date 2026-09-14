@@ -55,7 +55,7 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `auto` | YOLO (if installed) + bumper color + motion + optical flow + OpenAI/Gemini when keyed |
 | `local` | Offline only (YOLO optional + OpenCV) |
 | `motion` / `color` | No neural net |
-| `openai` / `gemini` / `cloud` | Cloud vision keyframes + local fill between frames |
+| `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
 API keys (optional, also in the UI Advanced panel):
 

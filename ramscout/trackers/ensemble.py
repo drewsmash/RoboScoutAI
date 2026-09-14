@@ -153,9 +153,13 @@ class EnsembleTracker:
     def detect(self, cropped, ctx: TrackerContext) -> list[Detection]:
         primary: list[Detection] = []
         support: list[Detection] = []
+        gemini_hit = False
         for tracker in self.strategies:
             name = getattr(tracker, "name", "unknown")
             if name == "optical_flow":
+                continue
+            # Gemini-first: skip OpenAI HTTP when Gemini already anchored this frame.
+            if name == "openai" and gemini_hit:
                 continue
             try:
                 dets = tracker.detect(cropped, ctx) or []
@@ -172,6 +176,8 @@ class EnsembleTracker:
             if not dets:
                 continue
             self.hits[name] = self.hits.get(name, 0) + len(dets)
+            if name == "gemini":
+                gemini_hit = True
             # Prefer neural/cloud as primary anchors; color/motion fill gaps.
             if name in {"yolo", "openai", "gemini"}:
                 primary = merge_detections(primary, dets)
@@ -201,6 +207,7 @@ def _build_pool(model_path: str | None = None) -> dict[str, Any]:
         "color": ColorTracker(),
         "optical_flow": OpticalFlowTracker(),
         "yolo": YoloTracker(model_path=model_path),
+        # OpenAI defaults are thrifty (sparse seconds/frames + max calls); see openai_vision.py.
         "openai": OpenAIVisionTracker(),
         "gemini": GeminiVisionTracker(),
     }
