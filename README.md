@@ -15,16 +15,18 @@ Action counts are **heuristics**. Confirm anything you put on a pick list.
 
 ## Desktop builds (Windows / macOS)
 
-RamScoutAI can ship as a local desktop app that opens in your browser:
+RamScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
 
 ```bash
 # from source
+pip install -r requirements-desktop.txt
 python desktop/main.py
 
 # or package on the target OS
-pip install -r requirements-desktop.txt
 bash packaging/build.sh
 ```
+
+Use `--browser` for a normal browser tab, or `--no-browser` for server-only.
 
 GitHub Actions (`.github/workflows/release.yml`) builds:
 

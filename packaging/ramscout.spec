@@ -51,10 +51,13 @@ hiddenimports = [
     "ramscout.trackers",
     "desktop",
     "desktop.main",
+    "desktop.app_window",
     "app",
+    "webview",
 ]
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("ramscout")
+hiddenimports += collect_submodules("webview")
 
 binaries = []
 tmp_datas, tmp_binaries, tmp_hidden = collect_all("cv2")
