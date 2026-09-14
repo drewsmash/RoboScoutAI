@@ -104,6 +104,7 @@ function saveScoutKeys() {
 function trackerPayload() {
   return {
     tracker_mode: $("tracker-mode")?.value || "auto",
+    auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
   };
@@ -212,6 +213,7 @@ async function createJob(payload) {
     form.append("tracker_mode", payload.tracker_mode || "auto");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
+    form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
     const { file: _file, ...body } = payload;
@@ -249,6 +251,15 @@ async function refreshJob() {
 }
 
 function renderJob(job) {
+  window.__ramscoutJobId = job.id;
+  window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
+  const ytHelp = $("yt-help");
+  if (ytHelp) {
+    const err = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`.toLowerCase();
+    const blocked = err.includes("bot") || err.includes("sign in") || err.includes("youtube") && err.includes("block");
+    ytHelp.hidden = !blocked;
+  }
+
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
   $("progress-fill").style.width = `${Math.max(4, job.progress || 0)}%`;
@@ -278,6 +289,7 @@ function renderJob(job) {
     if (overlayEl) {
       const trackBits = [];
       if (job.tracker_mode) trackBits.push(`Track: ${job.tracker_mode}`);
+      if (job.camera?.mode) trackBits.push(`Cam: ${job.camera.mode}`);
       const hits = job.source_hits || {};
       const hitNames = Object.keys(hits).filter((k) => hits[k] > 0);
       if (hitNames.length) trackBits.push(hitNames.join("+"));
@@ -385,7 +397,9 @@ function renderRobots(job) {
         <div class="stat"><b>${card.hub_score_candidates}</b><span>Hub dwells</span></div>
         <div class="stat"><b>${card.climb_attempt ? "Yes" : "No"}</b><span>Climb attempt</span></div>
         <div class="stat"><b>${Number(card.defense_time_s || 0).toFixed(0)}s</b><span>Defense</span></div>
+        <div class="stat"><b>${Number(card.collection_time_s || 0).toFixed(0)}s</b><span>Collection</span></div>
         <div class="stat"><b>${Number(card.path_length_in || 0).toFixed(0)} in</b><span>Path length</span></div>
+        ${card.tba ? `<div class="stat"><b>${card.tba.tba_teleop_points ?? "—"}</b><span>TBA teleop</span></div>` : ""}
       </div>
       <div class="pick-actions">
         <button type="button" data-pick="${escapeHtml(card.team)}">Add to pick list</button>

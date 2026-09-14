@@ -75,6 +75,9 @@ class Job:
     google_key: str = ""
     tracker_strategies: list[str] = field(default_factory=list)
     source_hits: dict[str, int] = field(default_factory=dict)
+    camera: dict[str, Any] = field(default_factory=dict)
+    auto_multicam: bool = True
+    edited_events: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -108,6 +111,9 @@ class Job:
             "tracker_mode": self.tracker_mode,
             "tracker_strategies": self.tracker_strategies,
             "source_hits": self.source_hits,
+            "camera": self.camera,
+            "auto_multicam": self.auto_multicam,
+            "edited_events": self.edited_events,
         }
 
 
@@ -185,6 +191,7 @@ def start_job(
     tracker_mode: str = "auto",
     openai_key: str = "",
     google_key: str = "",
+    auto_multicam: bool = True,
 ) -> Job:
     job = STORE.create(
         url=url,
@@ -197,6 +204,7 @@ def start_job(
         tracker_mode=(tracker_mode or "auto").strip().lower() or "auto",
         openai_key=openai_key or "",
         google_key=google_key or "",
+        auto_multicam=bool(auto_multicam),
     )
     if local_video:
         dest = DATA / job.id
@@ -364,6 +372,31 @@ def _run_real(job: Job) -> None:
     # Keep FIRST/TBA teams if overlay OCR did not recover them.
     video_match = merge_tba(match_from_overlay(reading), tba_match or video_match)
     STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(reading.year or hints.year))
+
+    if getattr(job, "auto_multicam", True) and job.video_path:
+        try:
+            from ramscout.multicam import analyze_video, apply_layout
+
+            layout = analyze_video(job.video_path)
+            top, bottom, chosen = apply_layout(
+                layout,
+                user_crop_top=job.crop_top,
+                user_crop_bottom=job.crop_bottom,
+                auto=True,
+            )
+            warnings = list(job.warnings or [])
+            warnings.append(chosen.detail)
+            STORE.update(
+                job,
+                crop_top=top,
+                crop_bottom=bottom,
+                camera=chosen.as_dict(),
+                warnings=warnings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings = list(job.warnings or [])
+            warnings.append(f"Multi-camera detect skipped: {exc}")
+            STORE.update(job, warnings=warnings)
 
     STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
     model = find_local_model(models_dirs()) or ensure_detector_weights()
@@ -586,11 +619,23 @@ def _reproject_and_scout(job: Job) -> None:
 
     events = detect_events(poses)
     cards = build_cards(poses, events, nicknames=nicknames)
+    event_dicts = [e.as_dict() for e in events]
+    card_dicts = [c.as_dict() for c in cards]
+    try:
+        from ramscout.event_editor import ensure_event_ids
+        from ramscout.tba_stats import enrich_cards_with_tba
+
+        event_dicts = ensure_event_ids(event_dicts)
+        card_dicts = enrich_cards_with_tba(card_dicts, job.match)
+    except Exception as exc:  # noqa: BLE001
+        warnings = list(job.warnings or [])
+        warnings.append(f"TBA card enrich skipped: {exc}")
+        STORE.update(job, warnings=warnings)
     STORE.update(
         job,
         samples=samples,
-        events=[e.as_dict() for e in events],
-        cards=[c.as_dict() for c in cards],
+        events=event_dicts,
+        cards=card_dicts,
         seeds=_seed_boxes(samples) or job.seeds,
         status="ready" if job.status in {"ready", "scouting", "tracking"} else job.status,
     )
@@ -629,6 +674,12 @@ def _persist(job: Job) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     payload = job.public()
     dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        from ramscout.history import record_job_summary
+
+        record_job_summary(payload)
+    except Exception:
+        pass
 
 
 def export_csv(job: Job) -> str:

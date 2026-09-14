@@ -107,10 +107,18 @@
             <span>Crop bottom</span>
             <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
           </label>
+          <label class="check field">
+            <span>Auto top-camera crop</span>
+            <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
+          </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. If YouTube blocks the cloud download, upload the file you already saved, or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates. Tracking can use OpenCV, YOLO, OpenAI, or Gemini — pick a mode above.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, upload the file you already saved (best fix), or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
+    <div class="yt-help" id="yt-help" hidden>
+      <strong>YouTube download blocked.</strong>
+      <span>Upload the MP4/MKV you already downloaded, or export cookies with a browser extension and set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
+    </div>
   </section>
 
   <main class="workspace" id="workspace" hidden>
@@ -261,6 +269,134 @@
         </div>
       </div>
     </section>
+
+    <section class="suite-panel" id="suite-panel">
+      <header class="section-head">
+        <h2>Scout suite</h2>
+        <p>Event ops, draft board, pit forms, heatmaps, shared scout book, and live camera — built for alliance selection day.</p>
+      </header>
+
+      <div class="suite-grid">
+        <div class="tool-block">
+          <h3>Job history</h3>
+          <button type="button" class="btn tonal small" id="refresh-history">Refresh</button>
+          <ul class="notes-list" id="history-list"></ul>
+        </div>
+
+        <div class="tool-block">
+          <h3>Event batch / schedule</h3>
+          <div class="composer-row compact">
+            <label class="field grow"><span>Event key</span><input id="suite-event-key" placeholder="2026nhdur" /></label>
+            <label class="field grow"><span>Watch teams</span><input id="suite-watch-teams" placeholder="59,190,238" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="suite-batch">Plan batch</button>
+            <button type="button" class="btn tonal small" id="suite-schedule">Watchlist schedule</button>
+          </div>
+          <pre class="suite-out" id="suite-event-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Role draft board</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Role</span>
+              <select id="draft-role">
+                <option value="balanced">Balanced</option>
+                <option value="scorer">Scorer</option>
+                <option value="defender">Defender</option>
+                <option value="climber">Climber</option>
+                <option value="flexible">Flexible</option>
+              </select>
+            </label>
+            <label class="field"><span>Locked picks</span><input id="draft-locked" placeholder="59,190" /></label>
+          </div>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="draft-refresh">Rank board</button>
+            <button type="button" class="btn tonal small" id="draft-fit">Alliance fit</button>
+            <button type="button" class="btn tonal small" id="draft-sheets">Sheets CSV</button>
+          </div>
+          <ol class="pick-ranked" id="draft-ranked"></ol>
+          <pre class="suite-out" id="draft-fit-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Heatmap &amp; annotated clip</h3>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="heatmap-btn">Build heatmap</button>
+            <button type="button" class="btn tonal small" id="annotate-btn">Export annotated clip</button>
+          </div>
+          <canvas id="heatmap-canvas" width="540" height="260"></canvas>
+          <a id="annotate-link" class="btn tonal small" hidden href="#">Download annotated MP4</a>
+        </div>
+
+        <div class="tool-block" id="event-editor-block">
+          <h3>Manual event editor</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="edit-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Type</span>
+              <select id="edit-type">
+                <option value="hub_score_candidate">Hub score</option>
+                <option value="climb_attempt">Climb attempt</option>
+                <option value="climb_success">Climb success</option>
+                <option value="defense">Defense</option>
+                <option value="collect">Collect</option>
+                <option value="foul">Foul</option>
+                <option value="note">Note</option>
+              </select>
+            </label>
+            <label class="field"><span>t (s)</span><input id="edit-t" type="number" step="0.1" value="30" /></label>
+          </div>
+          <label class="field grow"><span>Detail</span><input id="edit-detail" placeholder="Confirmed climb" /></label>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="edit-add">Add event</button>
+            <button type="button" class="btn tonal small" id="edit-refresh">Reload timeline edits</button>
+          </div>
+          <ul class="notes-list" id="edit-event-list"></ul>
+        </div>
+
+        <div class="tool-block pit-mode" id="pit-block">
+          <h3>Pit / qualitative form</h3>
+          <div class="composer-row compact">
+            <label class="field"><span>Team</span><input id="pit-team" inputmode="numeric" placeholder="59" /></label>
+            <label class="field"><span>Drivetrain</span><input id="pit-drive" placeholder="swerve" /></label>
+            <label class="field"><span>Climb</span><input id="pit-climb" placeholder="deep / shallow / none" /></label>
+          </div>
+          <label class="field grow"><span>Notes</span><input id="pit-notes" placeholder="Do not pick if battery issues…" /></label>
+          <label class="check"><input type="checkbox" id="pit-dnp" /> Do not pick</label>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="pit-save">Save pit form</button>
+            <button type="button" class="btn tonal small" id="pit-refresh">Load forms</button>
+          </div>
+          <ul class="notes-list" id="pit-list"></ul>
+        </div>
+
+        <div class="tool-block">
+          <h3>Shared scout book</h3>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="book-push">Push browser book → server</button>
+            <button type="button" class="btn tonal small" id="book-pull">Pull server book</button>
+            <button type="button" class="btn tonal small" id="book-export">Export sheets CSV</button>
+          </div>
+          <pre class="suite-out" id="book-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Live camera (best-effort)</h3>
+          <p class="tool-meta">Local webcam only — not YouTube live. Useful for pit demos.</p>
+          <div class="composer-actions tight">
+            <button type="button" class="btn tonal small" id="live-start">Start</button>
+            <button type="button" class="btn tonal small" id="live-stop">Stop</button>
+          </div>
+          <pre class="suite-out" id="live-out"></pre>
+        </div>
+
+        <div class="tool-block">
+          <h3>Game pack</h3>
+          <select id="game-year"></select>
+          <p class="tool-meta" id="game-year-meta">Loads year-specific field art and landmarks.</p>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="foot">
@@ -268,5 +404,6 @@
   </footer>
 
   <script src="/static/app.js" type="module"></script>
+  <script src="/static/suite.js" type="module"></script>
 </body>
 </html>

@@ -728,3 +728,42 @@ video, #cal-canvas {
   .pick-ranked li { grid-template-columns: 28px 56px 1fr; }
   .pick-ranked .score, .pick-ranked button { grid-column: 2 / -1; }
 }
+
+/* Scout suite */
+.suite-panel { margin-top: 2rem; }
+.suite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.suite-out {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.04);
+  border-radius: 10px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+.yt-help {
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(255,180,60,0.18), rgba(255,80,80,0.12));
+  border: 1px solid rgba(255,180,60,0.35);
+}
+.yt-help strong { display: block; margin-bottom: 0.25rem; }
+.check.field { display: flex; flex-direction: column; gap: 0.35rem; justify-content: flex-end; }
+.check.field input { width: auto; }
+.pit-mode { border: 1px solid rgba(120,200,255,0.2); }
+#heatmap-canvas {
+  width: 100%;
+  margin-top: 0.75rem;
+  border-radius: 10px;
+  background: #0a0a0c;
+}
+@media (max-width: 720px) {
+  .suite-grid { grid-template-columns: 1fr; }
+  .pit-mode .composer-row { flex-direction: column; }
+}

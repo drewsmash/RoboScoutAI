@@ -23,6 +23,7 @@ from ramscout.picklist import (
     compare_teams,
     suggest_picks,
 )
+from ramscout.suite_api import register_suite_routes
 from ramscout.pipeline import (
     STORE,
     apply_assignments,
@@ -64,6 +65,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="RamScoutAI", version=__version__, lifespan=lifespan)
+register_suite_routes(app)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
@@ -78,6 +80,8 @@ class StartRequest(BaseModel):
     tracker_mode: str = "auto"
     openai_key: str = ""
     google_key: str = ""
+    auto_multicam: bool = True
+
 
 
 class CalibrateRequest(BaseModel):
@@ -212,6 +216,7 @@ def create_job(body: StartRequest) -> dict:
         google_key=body.google_key.strip()
         or os.environ.get("GOOGLE_API_KEY", "")
         or os.environ.get("GEMINI_API_KEY", ""),
+        auto_multicam=bool(body.auto_multicam),
     )
     return job.public()
 
@@ -228,6 +233,7 @@ async def create_job_upload(
     tracker_mode: str = Form("auto"),
     openai_key: str = Form(""),
     google_key: str = Form(""),
+    auto_multicam: bool = Form(True),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
     suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -256,6 +262,7 @@ async def create_job_upload(
             google_key=(google_key or "").strip()
             or os.environ.get("GOOGLE_API_KEY", "")
             or os.environ.get("GEMINI_API_KEY", ""),
+            auto_multicam=bool(auto_multicam),
         )
     finally:
         try:
