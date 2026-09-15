@@ -172,6 +172,98 @@ def test_artifact_paths_prefer_release_artifacts():
     assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
 
 
+def test_classify_rejects_downgrade():
+    assert (
+        updater.classify_update(
+            current_version="0.4.4",
+            remote_version="0.4.2",
+            local_sha="",
+            remote_sha="bbbbbbb",
+        )
+        == "ahead"
+    )
+    assert (
+        updater.classify_update(
+            current_version="0.4.4",
+            remote_version="0.4.4",
+            local_sha="",
+            remote_sha="bbbbbbb",
+        )
+        == "up_to_date"
+    )
+    assert (
+        updater.classify_update(
+            current_version="0.4.2",
+            remote_version="0.4.4",
+            local_sha="old",
+            remote_sha="new",
+        )
+        == "available"
+    )
+
+
+def test_frozen_does_not_offer_older_main(monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    mirror = cache / "mirror"
+    mirror.mkdir(parents=True)
+    (mirror / ".git").mkdir()
+    written = {}
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:1] == ["rev-parse"]:
+            return "mainsha0"
+        if args[0] == "show":
+            return '__version__ = "0.4.2"\n'
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: None)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: cache)
+    monkeypatch.setattr(updater, "_read_installed_sha", lambda: "")
+    monkeypatch.setattr(updater, "_write_installed_sha", lambda sha: written.setdefault("sha", sha))
+    monkeypatch.setattr(updater, "_ensure_mirror", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.4")
+    assert info.available is False
+    assert info.message == "up to date"
+    assert info.can_apply is False
+    assert info.latest_version == "0.4.2"
+    assert written.get("sha") == "mainsha0"
+
+
+def test_frozen_no_binary_not_nagging(monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    mirror = cache / "mirror"
+    mirror.mkdir(parents=True)
+    (mirror / ".git").mkdir()
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:1] == ["rev-parse"]:
+            return "newsha99"
+        if args[0] == "show":
+            return '__version__ = "0.4.5"\n'
+        if args[0] == "ls-tree":
+            return ""
+        if args[0] == "cat-file":
+            raise RuntimeError("missing")
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: None)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: cache)
+    monkeypatch.setattr(updater, "platform_key", lambda: "windows")
+    monkeypatch.setattr(updater, "_read_installed_sha", lambda: "oldsha")
+    monkeypatch.setattr(updater, "_ensure_mirror", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_find_remote_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.4")
+    assert info.available is False
+    assert info.can_apply is False
+    assert "release-artifacts" in (info.error or "")
+
+
 def test_git_branch_bundled_channel(monkeypatch, tmp_path):
     channel = tmp_path / "update-channel.txt"
     channel.write_text("cursor/feature-e0ef\n", encoding="utf-8")

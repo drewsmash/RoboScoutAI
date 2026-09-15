@@ -1143,14 +1143,17 @@ async function initUpdater() {
       versionChip.textContent = `v${version}`;
       const update = data.update || data;
       const available = Boolean(update?.available);
-      updateChip.hidden = !available;
-      if (available) {
+      const canApply = Boolean(update?.can_apply) || Boolean(update?.mode === "source" && available);
+      // Only show the chip when something can actually be applied (never for downgrades / missing binaries).
+      updateChip.hidden = !(available && canApply);
+      if (available && canApply) {
         const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
         updateChip.textContent = `Update ${label}`;
         updateChip.title = update.message || "Update available from git";
         updateChip.dataset.releaseUrl = update.release_url || update.remote || "";
-        const canApply = Boolean(update.can_apply) || Boolean(update.mode === "source" && available);
-        updateChip.dataset.canApply = canApply ? "1" : "0";
+        updateChip.dataset.canApply = "1";
+      } else {
+        updateChip.dataset.canApply = "0";
       }
       const cookiesEl = $("cookies-status");
       if (cookiesEl && data.cookies) {
@@ -1173,15 +1176,26 @@ async function initUpdater() {
     try {
       const res = await fetch("/api/updates/check");
       const update = await res.json();
-      if (update.available) {
+      if (update.available && (update.can_apply || update.mode === "source")) {
         updateChip.hidden = false;
+        updateChip.dataset.canApply = "1";
         const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
         updateChip.textContent = `Update ${label}`;
-        alert(update.message || `Update available from git (${label}). Click Update to apply.`);
+        alert(
+          `Update available: ${update.current_version} → ${label}\n${update.message || "Click Update to apply from git."}`
+        );
+        return;
+      }
+      if (update.available && !update.can_apply) {
+        updateChip.hidden = true;
+        alert(
+          update.error
+          || "A newer git revision exists, but no desktop binary is published on that branch yet."
+        );
         return;
       }
       if (update.error) {
-        const soft = /up to date|git remote unreachable|no desktop binary|unreachable/i.test(
+        const soft = /up to date|git remote unreachable|no desktop binary|unreachable|nothing to apply/i.test(
           update.error
         );
         alert(update.error);
@@ -1189,10 +1203,11 @@ async function initUpdater() {
           window.open(update.release_url, "_blank", "noopener");
         }
       } else {
+        const body = update.body ? `\n${update.body}` : "";
         alert(
           update.message === "up to date" || !update.message
-            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`
-            : update.message
+            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
+            : `${update.message}${body}`
         );
       }
     } catch (_err) {
@@ -1224,13 +1239,7 @@ async function initUpdater() {
       }
       return;
     }
-    const url = updateChip.dataset.releaseUrl;
-    if (url) {
-      alert("An update is available on the git remote, but no desktop binary could be applied automatically.");
-      window.open(url, "_blank", "noopener");
-    } else {
-      alert("Update available from git, but nothing to apply on this install.");
-    }
+    alert("No applyable desktop update is available right now.");
   });
 
   refresh(false);

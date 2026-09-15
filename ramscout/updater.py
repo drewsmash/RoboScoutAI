@@ -198,6 +198,39 @@ def is_newer(latest: str, current: str) -> bool:
     return version_tuple(latest) > version_tuple(current)
 
 
+def is_older(candidate: str, current: str) -> bool:
+    return version_tuple(candidate) < version_tuple(current)
+
+
+def classify_update(
+    *,
+    current_version: str,
+    remote_version: str,
+    local_sha: str,
+    remote_sha: str,
+) -> str:
+    """Return up_to_date | available | ahead (local newer than remote channel)."""
+    if local_sha and remote_sha and local_sha == remote_sha:
+        return "up_to_date"
+
+    remote_ver = normalize_version(remote_version or "")
+    current_ver = normalize_version(current_version or "")
+    if remote_ver and re.match(r"^\d", remote_ver) and current_ver and re.match(r"^\d", current_ver):
+        if is_newer(remote_ver, current_ver):
+            return "available"
+        if is_older(remote_ver, current_ver):
+            return "ahead"
+        # Same semver: only offer when we know the installed SHA and it differs (hotfix).
+        if local_sha and remote_sha and local_sha != remote_sha:
+            return "available"
+        return "up_to_date"
+
+    # No usable semver — require a known local SHA drift (never empty→anything).
+    if local_sha and remote_sha and local_sha != remote_sha:
+        return "available"
+    return "up_to_date"
+
+
 def source_git_root() -> Path | None:
     """Return the working tree root when running from a git checkout."""
     if is_frozen():
@@ -421,21 +454,31 @@ def _check_source(info: UpdateInfo, root: Path, *, timeout: float) -> UpdateInfo
         info.message = "git remote unreachable"
         return info
 
-    remote_version = _remote_version_via_show(root, branch) or info.remote_sha[:7]
+    remote_version = _remote_version_via_show(root, branch) or ""
     info.latest_version = normalize_version(remote_version) if remote_version else info.remote_sha[:7]
     info.body = f"Local {info.local_sha[:7]} → origin/{branch} {info.remote_sha[:7]}"
 
-    if info.local_sha == info.remote_sha:
+    status = classify_update(
+        current_version=info.current_version,
+        remote_version=remote_version or info.latest_version,
+        local_sha=info.local_sha,
+        remote_sha=info.remote_sha,
+    )
+    if status == "up_to_date":
         info.available = False
         info.message = "up to date"
         info.can_apply = False
         return info
+    if status == "ahead":
+        info.available = False
+        info.message = "up to date"
+        info.can_apply = False
+        info.body = (
+            f"Local {info.current_version} is newer than origin/{branch} "
+            f"({info.latest_version or info.remote_sha[:7]})."
+        )
+        return info
 
-    # Prefer semver when both parse; otherwise any SHA drift means update available.
-    if info.latest_version and re.match(r"^\d", info.latest_version):
-        if not is_newer(info.latest_version, info.current_version) and info.latest_version == info.current_version:
-            # Same version string but different commit (hotfixes) — still offer update.
-            pass
     info.available = True
     info.message = "update available from git"
     info.can_apply = True
@@ -451,7 +494,9 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
     branch = info.branch
     try:
         _ensure_mirror(mirror, remote, branch, timeout=timeout)
-        info.remote_sha = _run_git(["rev-parse", f"refs/remotes/origin/{branch}"], cwd=mirror, timeout=timeout)
+        info.remote_sha = _run_git(
+            ["rev-parse", f"refs/remotes/origin/{branch}"], cwd=mirror, timeout=timeout
+        )
         if not info.remote_sha:
             info.remote_sha = _run_git(["rev-parse", "HEAD"], cwd=mirror, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
@@ -460,26 +505,44 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
         return info
 
     info.local_sha = _read_installed_sha()
-    remote_version = _remote_version_via_show(mirror, branch) or info.remote_sha[:7]
-    info.latest_version = normalize_version(remote_version)
+    remote_version = _remote_version_via_show(mirror, branch) or ""
+    info.latest_version = normalize_version(remote_version) if remote_version else info.remote_sha[:7]
     info.body = f"Installed {info.local_sha[:7] or info.current_version} → {branch} {info.remote_sha[:7]}"
 
-    sha_changed = bool(info.remote_sha) and info.remote_sha != info.local_sha
-    version_newer = bool(info.latest_version) and is_newer(info.latest_version, info.current_version)
-    if not sha_changed and not version_newer:
+    status = classify_update(
+        current_version=info.current_version,
+        remote_version=remote_version or info.latest_version,
+        local_sha=info.local_sha,
+        remote_sha=info.remote_sha,
+    )
+    if status in {"up_to_date", "ahead"}:
         info.available = False
         info.message = "up to date"
+        info.can_apply = False
+        if status == "ahead":
+            info.body = (
+                f"Installed {info.current_version} is newer than {branch} "
+                f"({info.latest_version or info.remote_sha[:7]})."
+            )
+        # Pin installed SHA so empty→remote never flaps as an "update".
+        if info.remote_sha and (
+            not info.local_sha
+            or (status == "up_to_date" and info.local_sha != info.remote_sha and not is_newer(info.latest_version, info.current_version))
+        ):
+            _write_installed_sha(info.remote_sha)
+            info.local_sha = info.remote_sha
         return info
 
     asset_rel = _find_remote_artifact(mirror, branch)
     if asset_rel is None:
-        info.available = True
-        info.message = "update available from git"
+        # Newer remote without a binary is NOT an applyable update — don't nag.
+        info.available = False
+        info.message = "up to date"
         info.can_apply = False
         info.error = (
-            f"Git remote has newer code ({info.remote_sha[:7]}), but no "
-            f"{platform_key()} desktop binary was found under release-artifacts/. "
-            "Commit a build there (or rebuild from source) on that branch."
+            f"Git remote {branch}@{info.remote_sha[:7]} has no "
+            f"{platform_key()} desktop binary under release-artifacts/, "
+            "so nothing to apply automatically."
         )
         return info
 
