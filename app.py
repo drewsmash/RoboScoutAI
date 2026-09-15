@@ -35,10 +35,10 @@ from ramscout.pipeline import (
     start_job,
 )
 from ramscout.updater import (
-    UpdateInfo,
-    apply_downloaded_update,
+    apply_update_now,
     check_for_update,
-    download_update,
+    git_branch,
+    git_remote,
     github_repo,
     last_check,
     platform_key,
@@ -140,6 +140,8 @@ def version() -> dict:
         "frozen": is_frozen(),
         "platform": platform_key(),
         "repo": github_repo(),
+        "git_remote": git_remote(),
+        "git_branch": git_branch(),
         "update": cached,
         "cookies": {
             "found": cookies is not None,
@@ -155,29 +157,15 @@ def updates_check() -> dict:
 
 @app.post("/api/updates/download")
 def updates_download() -> dict:
-    info = UpdateInfo(**(last_check() or check_for_update().as_dict()))
-    if not info.available:
-        raise HTTPException(400, info.error or "No update available.")
-    if not info.asset_url:
-        return {
-            "ok": False,
-            "open_url": info.release_url,
-            "message": "Open the GitHub release page to download this update.",
-            "update": info.as_dict(),
-        }
-    if not is_frozen():
-        return {
-            "ok": False,
-            "open_url": info.release_url,
-            "message": "Source installs update with git pull. Desktop builds can auto-apply.",
-            "update": info.as_dict(),
-        }
+    """Fetch and apply an update from the configured git remote."""
     try:
-        package = download_update(info)
-        message = apply_downloaded_update(package)
+        result = apply_update_now()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, str(exc)) from exc
-    return {"ok": True, "message": message, "update": info.as_dict(), "restarting": True}
+    update = result.get("update") or {}
+    if not result.get("ok") and update.get("available"):
+        raise HTTPException(400, result.get("message") or "Update failed.")
+    return result
 
 
 @app.get("/api/game")

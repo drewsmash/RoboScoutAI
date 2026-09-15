@@ -263,8 +263,11 @@ function renderJob(job) {
   const errLower = errText.toLowerCase();
   const failed = job.status === "error";
   const hasVideo = Boolean(job.has_video);
+  const isUpload = job.media_source === "upload" || (hasVideo && !String(job.url || "").includes("youtu"));
+  // Never show YouTube-blocked help for local uploads — even if an error mentions "bot".
   const youtubeBlocked =
     failed
+    && !isUpload
     && !hasVideo
     && (
       errLower.includes("bot")
@@ -273,10 +276,11 @@ function renderJob(job) {
     );
   const uploadFailed =
     failed
-    && hasVideo
+    && (isUpload || hasVideo)
     && !youtubeBlocked
     && (
-      errLower.includes("upload")
+      isUpload
+      || errLower.includes("upload")
       || errLower.includes("missing on disk")
       || errLower.includes("empty")
       || errLower.includes("opencv")
@@ -285,7 +289,7 @@ function renderJob(job) {
       || errLower.includes("video")
     );
   if (ytHelp) ytHelp.hidden = !youtubeBlocked;
-  if (uploadHelp) uploadHelp.hidden = !(uploadFailed || (failed && hasVideo && !youtubeBlocked));
+  if (uploadHelp) uploadHelp.hidden = !(uploadFailed || (failed && isUpload));
 
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
@@ -1132,9 +1136,23 @@ async function initUpdater() {
       const available = Boolean(update?.available);
       updateChip.hidden = !available;
       if (available) {
-        updateChip.textContent = `Update ${update.latest_version}`;
-        updateChip.dataset.releaseUrl = update.release_url || "";
-        updateChip.dataset.canApply = update.asset_url && data.frozen ? "1" : "0";
+        const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
+        updateChip.textContent = `Update ${label}`;
+        updateChip.title = update.message || "Update available from git";
+        updateChip.dataset.releaseUrl = update.release_url || update.remote || "";
+        const canApply = Boolean(update.can_apply) || Boolean(update.mode === "source" && available);
+        updateChip.dataset.canApply = canApply ? "1" : "0";
+      }
+      const cookiesEl = $("cookies-status");
+      if (cookiesEl && data.cookies) {
+        if (data.cookies.found) {
+          cookiesEl.hidden = false;
+          cookiesEl.textContent = `YouTube cookies found (${data.cookies.path || "cookies.txt"}). Downloads can use them; upload is still the most reliable escape hatch.`;
+        } else {
+          cookiesEl.hidden = false;
+          cookiesEl.textContent =
+            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\ / set YTDLP_COOKIES.";
+        }
       }
     } catch (_err) {
       versionChip.textContent = "v?";
@@ -1146,53 +1164,64 @@ async function initUpdater() {
     try {
       const res = await fetch("/api/updates/check");
       const update = await res.json();
-      if (update.available) return;
+      if (update.available) {
+        updateChip.hidden = false;
+        const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
+        updateChip.textContent = `Update ${label}`;
+        alert(update.message || `Update available from git (${label}). Click Update to apply.`);
+        return;
+      }
       if (update.error) {
-        const soft = /no (desktop )?updates? (published|available)|not published yet|nothing to install/i.test(
+        const soft = /up to date|git remote unreachable|no desktop binary|unreachable/i.test(
           update.error
         );
-        const open = update.release_url
-          ? `\n\nOpen releases? ${update.release_url}`
-          : "";
-        if (soft) {
-          alert(update.error);
-        } else if (update.release_url && window.confirm(`${update.error}${open}`)) {
+        alert(update.error);
+        if (!soft && update.release_url && window.confirm(`Open git remote page?\n${update.release_url}`)) {
           window.open(update.release_url, "_blank", "noopener");
-        } else if (!update.release_url) {
-          alert(update.error);
         }
       } else {
-        alert(`RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
+        alert(
+          update.message === "up to date" || !update.message
+            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`
+            : update.message
+        );
       }
     } catch (_err) {
-      alert("Could not check GitHub for updates.");
+      alert("Could not check the git remote for updates.");
     }
   });
   updateChip.addEventListener("click", async () => {
     if (updateChip.dataset.canApply === "1") {
-      updateChip.textContent = "Downloading…";
+      updateChip.textContent = "Updating from git…";
       updateChip.disabled = true;
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          alert(body.detail || "Update failed.");
+          alert(body.detail || body.message || "Update failed.");
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
-        if (body.open_url) {
-          window.open(body.open_url, "_blank", "noopener");
+        alert(body.message || "Update applied from git.");
+        if (!body.restarting) {
+          updateChip.disabled = false;
+          updateChip.hidden = true;
+          await refresh(true);
         }
-        alert(body.message || "Update started.");
       } catch (_err) {
-        alert("Update failed.");
+        alert("Update from git failed.");
         updateChip.disabled = false;
       }
       return;
     }
     const url = updateChip.dataset.releaseUrl;
-    if (url) window.open(url, "_blank", "noopener");
+    if (url) {
+      alert("An update is available on the git remote, but no desktop binary could be applied automatically.");
+      window.open(url, "_blank", "noopener");
+    } else {
+      alert("Update available from git, but nothing to apply on this install.");
+    }
   });
 
   refresh(false);

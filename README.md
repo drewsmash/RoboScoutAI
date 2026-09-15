@@ -34,26 +34,27 @@ GitHub Actions (`.github/workflows/release.yml`) builds:
 - `RamScoutAI-macos-arm64.zip`
 - `RamScoutAI-macos-x64.zip`
 
-Publish the first downloadable builds by pushing a version tag (this creates the GitHub Release the in-app updater looks for):
+### In-app updater (git remote — not GitHub Releases)
 
-```bash
-git tag v0.4.3
-git push origin v0.4.3
-```
+RamScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
 
-Until that release exists, Check for updates will say **no updates published yet** — that is expected, not a crash. The updater reads:
-
-`https://api.github.com/repos/drewsmash/RamScoutAI/releases/latest`
-
-and looks for these asset names (in order):
-
-| Platform | Asset names |
+| Mode | Behavior |
 | --- | --- |
-| Windows | `RamScoutAI-windows-x64.exe`, then `RamScoutAI-windows-x64-signed.exe` |
-| macOS arm64 | `RamScoutAI-macos-arm64.zip` (`.7z` accepted as fallback) |
-| macOS x64 | `RamScoutAI-macos-x64.zip` |
+| Source (`.git` present) | `git fetch` → compare `HEAD` to `origin/<branch>` → pull / reset → restart hint |
+| Frozen EXE | Shallow clone/fetch into an update cache → look for tracked binaries under `desktop-downloads/` → replace EXE and relaunch |
 
-The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`). Private repos need `RAMSCOUT_GITHUB_TOKEN` (or download while signed into GitHub).
+Config:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RamScoutAI.git` | Git remote URL |
+| `RAMSCOUT_GIT_BRANCH` | `main` | Branch to track |
+| `RAMSCOUT_UPDATE_CACHE` | appdata / `.ramscout-update-cache` | Mirror + package cache |
+| `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` | — | Optional HTTPS auth for private remotes |
+
+UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available from git*, or *git remote unreachable*.
+
+For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RamScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
 
 Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
 

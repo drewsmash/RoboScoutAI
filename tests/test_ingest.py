@@ -60,3 +60,43 @@ def test_download_tries_proxy_after_direct_block(monkeypatch, tmp_path):
     path = download_video("https://youtu.be/m9uLAGKtenM", tmp_path / "out")
     assert path.exists()
     assert any(kind == "auto" for kind, _ in calls)
+
+
+def test_resolve_cookies_path_env_and_appdata(tmp_path, monkeypatch):
+    from ramscout.ingest import resolve_cookies_path
+
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape\n.youtube.com\tTRUE\t/\tFALSE\t0\tA\tB\n", encoding="utf-8")
+    monkeypatch.setenv("YTDLP_COOKIES", str(cookie))
+    assert resolve_cookies_path() == cookie.resolve()
+
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
+    appdata = tmp_path / "AppData"
+    dest = appdata / "RamScoutAI" / "cookies.txt"
+    dest.parent.mkdir(parents=True)
+    dest.write_text(cookie.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr("ramscout.ingest.app_dir", lambda: tmp_path / "missing-app")
+    monkeypatch.setattr("ramscout.ingest.data_dir", lambda: tmp_path / "missing-data" / "data")
+    found = resolve_cookies_path()
+    assert found == dest.resolve()
+
+
+def test_is_youtube_url_classification():
+    from ramscout.ingest import is_youtube_url
+
+    assert is_youtube_url("https://youtu.be/m9uLAGKtenM")
+    assert is_youtube_url("https://www.youtube.com/watch?v=m9uLAGKtenM")
+    assert not is_youtube_url("/tmp/match.mp4")
+    assert not is_youtube_url("file:///tmp/match.mp4")
+    assert not is_youtube_url("demo://sample")
+
+
+def test_local_upload_info_skips_youtube_bot_hint(tmp_path):
+    from ramscout.ingest import fetch_video_info
+
+    video = tmp_path / "match.mp4"
+    video.write_bytes(b"x" * 2048)
+    info = fetch_video_info(str(video))
+    assert info["source"] == "local"
+    assert "warning" not in info or "bot" not in (info.get("warning") or "").lower()

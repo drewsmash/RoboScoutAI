@@ -28,7 +28,7 @@ if [[ "$OS" == "darwin" ]]; then
   )
   echo ""
   echo "Built: dist/release/RamScoutAI-${KEY}.zip"
-  echo "Upload that zip to your GitHub Release."
+  echo "Commit under desktop-downloads/ for the git updater, or distribute directly."
   echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RamScoutAI && chmod +x ./RamScoutAI"
 elif [[ "$OS" == linux* ]]; then
   tar -C dist -czf "dist/release/RamScoutAI-linux-${ARCH}.tar.gz" RamScoutAI

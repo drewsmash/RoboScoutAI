@@ -2,61 +2,63 @@
 
 The packaged app opens in a **chrome-less window** (native WebView when available, otherwise Chrome/Edge `--app` mode). There is no browser URL bar. Pass `--browser` to the launcher if you want a normal tab instead.
 
-## Upload to GitHub Release
-
-Tag a version **newer than** the embedded `__version__` (currently `0.4.3`) so the in-app updater offers it:
+## Building artifacts
 
 ```bash
-git tag v0.4.3
-git push origin v0.4.3
-# or: GitHub Actions → Release desktop builds → Run workflow
+bash packaging/build.sh
 ```
 
-### Windows (ready)
-- `RamScoutAI-windows-x64.exe` — **required** name for the updater (upload as-is)
-- `RamScoutAI-windows-x64-signed.exe` — optional; updater accepts it as a fallback
+### Windows
+- Output: `dist/release/RamScoutAI-windows-x64.exe` (or `dist/RamScoutAI.exe`)
+- Optional signed copy: `RamScoutAI-windows-x64-signed.exe`
+- For the **git updater** to auto-apply frozen builds, commit the EXE under `desktop-downloads/` on the tracked branch (or place a tracked update bundle there).
 
 The Windows app opens Edge/Chrome in `--app` mode (no URL bar). It does **not** use the
 bundled WinForms WebView path, which crashed some installs with
 `NullReferenceException` in `Control.set_Text`. Edge or Chrome must be installed
 (almost always true on Windows 10/11 via Edge).
 
-### Linux (ready, split for download size)
-Download all `RamScoutAI-linux-x86_64.tar.gz.part*` files, then:
+### Linux
 ```bash
-cat RamScoutAI-linux-x86_64.tar.gz.part* > RamScoutAI-linux-x86_64.tar.gz
+# after packaging/build.sh
+# dist/release/RamScoutAI-linux-<arch>.tar.gz
 ```
-Upload the reassembled `.tar.gz` to the release (or keep parts if you prefer).
 
-### macOS (not buildable here)
-Must be built on a Mac:
+### macOS (build on a Mac)
 ```bash
 bash packaging/build.sh
+# dist/release/RamScoutAI-macos-arm64.zip (or macos-x64)
 ```
-Upload `dist/release/RamScoutAI-macos-arm64.zip`.
 
-## In-app updater
+## In-app updater (git)
 
-Frozen builds call `GET /repos/{owner}/{repo}/releases/latest` (override repo with `RAMSCOUT_GITHUB_REPO`).
+The updater **never** calls GitHub Releases (`/releases/latest`). It uses git:
 
-| Response | User-facing result |
+1. Resolve remote: `RAMSCOUT_GIT_REMOTE` (default repo URL) and `RAMSCOUT_GIT_BRANCH` (default `main`)
+2. **Source installs** (`.git` present): fetch, compare SHAs, pull/reset, ask for restart
+3. **Frozen EXE**: shallow clone/fetch into `%APPDATA%/RamScoutAI/update-cache` (or `RAMSCOUT_UPDATE_CACHE`), sparse-checkout known artifact paths under `desktop-downloads/`, replace the running binary
+
+| Check result | User-facing message |
 | --- | --- |
-| 404 / private without token | Soft message: no updates published yet / need token |
-| Latest tag ≤ current version | Up to date |
-| Newer tag + matching asset | Update chip → download + relaunch (Windows/macOS) |
+| Local SHA == remote SHA | Up to date |
+| Remote ahead + apply possible | Update available from git → Update now |
+| Git missing / network / auth fail | git remote unreachable |
+| Remote ahead but no platform binary | Update available, but no desktop binary on the branch |
 
-Private repos: set `RAMSCOUT_GITHUB_TOKEN` (fine-grained read on Contents/Releases) or download manually while signed into GitHub.
+Private remotes: set `RAMSCOUT_GITHUB_TOKEN`, `GH_TOKEN`, or `RAMSCOUT_GIT_TOKEN` (injected into the fetch URL only — not written into `.git/config`).
+
+Legacy `RAMSCOUT_GITHUB_REPO=owner/repo` is still accepted and rewritten to `https://github.com/owner/repo.git`.
 
 ## YouTube cookies (desktop)
 
 If YouTube bot-checks downloads, either **upload the MP4/MKV** or place Netscape `cookies.txt` in one of:
 
-1. `%APPDATA%\RamScoutAI\cookies.txt` (Windows)
+1. `YTDLP_COOKIES` env var
 2. Next to `RamScoutAI-windows-x64.exe`
-3. `YTDLP_COOKIES` env var
+3. `%APPDATA%\RamScoutAI\cookies.txt` (Windows)
 4. `~/RamScoutAI/cookies.txt`
 
-Export with a browser extension such as **Get cookies.txt LOCALLY**.
+Export with a browser extension such as **Get cookies.txt LOCALLY**. Upload failures are classified separately from YouTube bot blocks — uploading a local file never shows the YouTube-blocked banner.
 
 ## Unsigned apps
 Windows SmartScreen / macOS Gatekeeper may warn. See `docs/SIGNING.md`.
@@ -70,8 +72,11 @@ Windows SmartScreen / macOS Gatekeeper may warn. See `docs/SIGNING.md`.
 | `YTDLP_PROXY` / `HTTPS_PROXY` | Residential proxy for yt-dlp |
 | `YTDLP_AUTO_PROXY` | `1` (default) enables public-proxy ladder; `0` disables |
 | `YTDLP_FORMAT` | Override yt-dlp format selector |
-| `RAMSCOUT_GITHUB_REPO` | `owner/repo` for update checks (default `drewsmash/RamScoutAI`) |
-| `RAMSCOUT_GITHUB_TOKEN` | Token for private-repo release checks / downloads |
+| `RAMSCOUT_GIT_REMOTE` | Git remote URL for updates |
+| `RAMSCOUT_GIT_BRANCH` | Branch to track (default `main`) |
+| `RAMSCOUT_UPDATE_CACHE` | Override update mirror/cache directory |
+| `RAMSCOUT_GITHUB_REPO` | Legacy `owner/repo` → rewritten to a git HTTPS URL |
+| `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` / `RAMSCOUT_GIT_TOKEN` | HTTPS auth for private git remotes |
 | `RAMSCOUT_OPENAI_INTERVAL_S` | Seconds between OpenAI vision keyframes (default `2`) |
 | `RAMSCOUT_OPENAI_FRAME_STRIDE` | Min processed frames between OpenAI calls (default `30`) |
 | `RAMSCOUT_OPENAI_MAX_CALLS` | Cap OpenAI calls per match (default `24`) |

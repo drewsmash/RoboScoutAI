@@ -83,6 +83,7 @@ class Job:
     camera: dict[str, Any] = field(default_factory=dict)
     auto_multicam: bool = True
     edited_events: bool = False
+    media_source: str = "youtube"  # upload | youtube | demo
 
     def public(self) -> dict[str, Any]:
         return {
@@ -119,6 +120,7 @@ class Job:
             "camera": self.camera,
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
+            "media_source": self.media_source,
         }
 
 
@@ -220,7 +222,9 @@ def start_job(
         meta_url = job.url
         if not is_youtube_url(meta_url):
             meta_url = str(stored.resolve())
-        STORE.update(job, video_path=str(stored), url=meta_url)
+        STORE.update(job, video_path=str(stored), url=meta_url, media_source="upload")
+    elif demo:
+        STORE.update(job, media_source="demo")
     thread = threading.Thread(target=_run_job, args=(job.id,), daemon=True)
     thread.start()
     return job

@@ -62,6 +62,7 @@ def test_upload_without_youtube_url_keeps_local_source(tmp_path):
     body = res.json()
     assert body["id"]
     assert body["has_video"] is True
+    assert body.get("media_source") == "upload"
     assert not is_youtube_url(body["url"])
     # Job url must point at the stored copy, not a deleted staging temp.
     assert Path(body["url"]).is_file() or "match" in body["url"]
