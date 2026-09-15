@@ -65,7 +65,10 @@ def track_video(
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {video_path}")
+        raise RuntimeError(
+            f"Could not open uploaded video ({Path(video_path).name}). "
+            "Confirm it is a real MP4/MKV (not an empty or corrupt download), then re-upload."
+        )
 
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)

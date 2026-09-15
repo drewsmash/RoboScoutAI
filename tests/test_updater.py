@@ -163,3 +163,10 @@ def test_no_releases_api_usage():
     assert "api.github.com" not in source
     assert "/releases" not in source or "GitHub Releases" not in source
     assert "RAMSCOUT_GIT_REMOTE" in source
+    assert "release-artifacts/" in source
+
+
+def test_artifact_paths_prefer_release_artifacts():
+    names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
+    assert "RamScoutAI-windows-x64.exe" in names
+    assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")

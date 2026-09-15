@@ -27,8 +27,14 @@ DEFAULT_GIT_BRANCH = "main"
 _STATE_LOCK = threading.Lock()
 _LAST_CHECK: dict[str, Any] | None = None
 
-# Paths inside the repo that may hold desktop binaries (tracked via git / LFS / CI).
+# Paths inside the repo that may hold desktop binaries (tracked via git for the updater).
+# Prefer release-artifacts/ — desktop-downloads/ is gitignored for local staging only.
 _ARTIFACT_REL_PATHS = (
+    "release-artifacts/RamScoutAI-windows-x64.exe",
+    "release-artifacts/RamScoutAI-windows-x64-signed.exe",
+    "release-artifacts/RamScoutAI-macos-arm64.zip",
+    "release-artifacts/RamScoutAI-macos-x64.zip",
+    "release-artifacts/RamScoutAI-linux-x86_64.tar.gz",
     "desktop-downloads/RamScoutAI-windows-x64.exe",
     "desktop-downloads/RamScoutAI-windows-x64-signed.exe",
     "desktop-downloads/RamScoutAI-macos-arm64.zip",
@@ -441,8 +447,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
         info.can_apply = False
         info.error = (
             f"Git remote has newer code ({info.remote_sha[:7]}), but no "
-            f"{platform_key()} desktop binary was found under desktop-downloads/. "
-            "Rebuild from source or wait for an artifact commit on that branch."
+            f"{platform_key()} desktop binary was found under release-artifacts/. "
+            "Commit a build there (or rebuild from source) on that branch."
         )
         return info
 
@@ -561,7 +567,7 @@ def _fetch_frozen_artifact(update: UpdateInfo, dest_dir: Path | None = None) -> 
     if not rel:
         raise RuntimeError(
             "No desktop binary found on the git remote. "
-            "Commit an artifact under desktop-downloads/ or rebuild from source."
+            "Commit an artifact under release-artifacts/ or rebuild from source."
         )
 
     # Sparse checkout of the artifact path (and parent) then checkout blob.

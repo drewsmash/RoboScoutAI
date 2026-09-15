@@ -11,7 +11,7 @@ bash packaging/build.sh
 ### Windows
 - Output: `dist/release/RamScoutAI-windows-x64.exe` (or `dist/RamScoutAI.exe`)
 - Optional signed copy: `RamScoutAI-windows-x64-signed.exe`
-- For the **git updater** to auto-apply frozen builds, commit the EXE under `desktop-downloads/` on the tracked branch (or place a tracked update bundle there).
+- For the **git updater** to auto-apply frozen builds, commit the EXE under `release-artifacts/` on the tracked branch (see below). `desktop-downloads/` is only for local staging and is gitignored.
 
 The Windows app opens Edge/Chrome in `--app` mode (no URL bar). It does **not** use the
 bundled WinForms WebView path, which crashed some installs with
@@ -36,7 +36,7 @@ The updater **never** calls GitHub Releases (`/releases/latest`). It uses git:
 
 1. Resolve remote: `RAMSCOUT_GIT_REMOTE` (default repo URL) and `RAMSCOUT_GIT_BRANCH` (default `main`)
 2. **Source installs** (`.git` present): fetch, compare SHAs, pull/reset, ask for restart
-3. **Frozen EXE**: shallow clone/fetch into `%APPDATA%/RamScoutAI/update-cache` (or `RAMSCOUT_UPDATE_CACHE`), sparse-checkout known artifact paths under `desktop-downloads/`, replace the running binary
+3. **Frozen EXE**: shallow clone/fetch into `%APPDATA%/RamScoutAI/update-cache` (or `RAMSCOUT_UPDATE_CACHE`), sparse-checkout known artifact paths under `release-artifacts/` (fallback: `desktop-downloads/`), replace the running binary
 
 | Check result | User-facing message |
 | --- | --- |
@@ -44,6 +44,18 @@ The updater **never** calls GitHub Releases (`/releases/latest`). It uses git:
 | Remote ahead + apply possible | Update available from git → Update now |
 | Git missing / network / auth fail | git remote unreachable |
 | Remote ahead but no platform binary | Update available, but no desktop binary on the branch |
+
+### Publishing a desktop binary for the updater
+
+```bash
+bash packaging/build.sh
+mkdir -p release-artifacts
+cp dist/release/RamScoutAI-windows-x64.exe release-artifacts/
+# optional: echo "$(git rev-parse HEAD)" > release-artifacts/UPDATE.txt
+git add -f release-artifacts/RamScoutAI-windows-x64.exe
+git commit -m "Publish Windows desktop build for git updater"
+git push
+```
 
 Private remotes: set `RAMSCOUT_GITHUB_TOKEN`, `GH_TOKEN`, or `RAMSCOUT_GIT_TOKEN` (injected into the fetch URL only — not written into `.git/config`).
 

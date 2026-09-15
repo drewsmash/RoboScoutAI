@@ -115,8 +115,17 @@ $("start-form").addEventListener("submit", async (event) => {
   saveScoutKeys();
   const fileInput = $("video-file");
   const file = fileInput?.files?.[0] || null;
+  const url = $("url").value.trim();
+  if (!file && !url) {
+    alert("Upload an MP4/MKV match VOD, or paste a YouTube URL.");
+    return;
+  }
+  if (file && file.size < 1024) {
+    alert("That file looks empty. Choose a real downloaded MP4/MKV match video.");
+    return;
+  }
   await createJob({
-    url: $("url").value.trim(),
+    url,
     tba_key: $("tba-key").value.trim(),
     event_key: $("event-key").value.trim(),
     match_key: $("match-key").value.trim(),
