@@ -29,6 +29,7 @@ def merge_detections(
     secondary: list[Detection],
     min_dist: float = 40.0,
 ) -> list[Detection]:
+    """Merge boxes; prefer primary on near-duplicates (centroid or IoU)."""
     merged = list(primary)
     for det in secondary:
         x1, y1, x2, y2 = det.bbox
@@ -37,9 +38,21 @@ def merge_detections(
         for existing in merged:
             ex1, ey1, ex2, ey2 = existing.bbox
             ecx, ecy = (ex1 + ex2) * 0.5, (ey1 + ey2) * 0.5
-            if ((ecx - cx) ** 2 + (ecy - cy) ** 2) ** 0.5 < min_dist:
+            dist = ((ecx - cx) ** 2 + (ecy - cy) ** 2) ** 0.5
+            if dist < min_dist:
                 conflict = True
                 break
+            # IoU overlap also counts as duplicate.
+            ix1, iy1 = max(x1, ex1), max(y1, ey1)
+            ix2, iy2 = min(x2, ex2), min(y2, ey2)
+            inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+            if inter > 0:
+                area_a = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                area_b = max(0.0, ex2 - ex1) * max(0.0, ey2 - ey1)
+                iou = inter / max(area_a + area_b - inter, 1e-6)
+                if iou >= 0.35:
+                    conflict = True
+                    break
         if not conflict:
             merged.append(det)
     return merged

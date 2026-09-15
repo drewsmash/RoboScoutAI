@@ -47,8 +47,13 @@ def test_download_tries_proxy_after_direct_block(monkeypatch, tmp_path):
         path.write_bytes(b"ok" * 60_000)
         return path
 
+    def fake_cli(*_a, **_k):
+        calls.append(("cli", "skip"))
+        raise RuntimeError("cli blocked")
+
     monkeypatch.setattr("ramscout.ingest._ytdlp_extract", fake_extract)
     monkeypatch.setattr("ramscout.ingest._download_via_auto_proxy", fake_auto)
+    monkeypatch.setattr("ramscout.ingest._download_via_cli", fake_cli)
     monkeypatch.setattr("ramscout.ingest._configured_proxy", lambda: None)
     monkeypatch.setattr("ramscout.ingest._auto_proxy_enabled", lambda: True)
     monkeypatch.setattr("ramscout.ingest._discover_proxies", lambda: ["1.2.3.4:8080"])

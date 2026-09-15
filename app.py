@@ -77,7 +77,7 @@ class StartRequest(BaseModel):
     demo: bool = False
     crop_top: float = 0.10
     crop_bottom: float = 0.65
-    tracker_mode: str = "auto"
+    tracker_mode: str = "hybrid"
     openai_key: str = ""
     google_key: str = ""
     auto_multicam: bool = True
@@ -211,7 +211,7 @@ def create_job(body: StartRequest) -> dict:
         match_key=body.match_key.strip(),
         crop_top=top,
         crop_bottom=bottom,
-        tracker_mode=body.tracker_mode.strip() or "auto",
+        tracker_mode=body.tracker_mode.strip() or "hybrid",
         openai_key=body.openai_key.strip() or os.environ.get("OPENAI_API_KEY", ""),
         google_key=body.google_key.strip()
         or os.environ.get("GOOGLE_API_KEY", "")
@@ -230,7 +230,7 @@ async def create_job_upload(
     match_key: str = Form(""),
     crop_top: float = Form(0.10),
     crop_bottom: float = Form(0.65),
-    tracker_mode: str = Form("auto"),
+    tracker_mode: str = Form("hybrid"),
     openai_key: str = Form(""),
     google_key: str = Form(""),
     auto_multicam: bool = Form(True),
@@ -257,7 +257,7 @@ async def create_job_upload(
             crop_top=top,
             crop_bottom=bottom,
             local_video=tmp_path,
-            tracker_mode=(tracker_mode or "auto").strip() or "auto",
+            tracker_mode=(tracker_mode or "hybrid").strip() or "hybrid",
             openai_key=(openai_key or "").strip() or os.environ.get("OPENAI_API_KEY", ""),
             google_key=(google_key or "").strip()
             or os.environ.get("GOOGLE_API_KEY", "")

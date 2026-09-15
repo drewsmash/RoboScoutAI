@@ -109,14 +109,26 @@ A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the f
 
 ### YouTube download (bot checks)
 
-Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI now tries several download paths:
+Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI tries a resilient ladder:
 
-1. **yt-dlp** with modern player clients (`tv`, `mweb`, …) and the **WebPoClient PO-token** plugin (`yt-dlp-getpot-wpc`) when Chrome/Chromium is available  
+1. **yt-dlp** with multiple player clients (`android`/`ios`, `tv`, `web_embedded`, …) and a **format ladder** (progressive `18` → muxed 720p → `worst`)  
 2. Your **`YTDLP_PROXY`** / `HTTPS_PROXY` residential proxy (recommended for servers)  
-3. An optional **auto-proxy ladder** (`YTDLP_AUTO_PROXY=1`, default on) for flaky public HTTP proxies when everything else is blocked  
-4. **Upload a local VOD** in the UI (or pass a local file path) — skips YouTube entirely
+3. **CLI yt-dlp fallback** (avoids Python JS-runtime pitfalls when Deno/Node is missing)  
+4. An optional **auto-proxy ladder** (`YTDLP_AUTO_PROXY=1`, default on) for flaky public HTTP proxies  
+5. **Upload a local VOD** in the UI (or pass a local file path) — skips YouTube entirely
 
-Also supported: `YTDLP_COOKIES=/path/to/cookies.txt` or `YTDLP_BROWSER=chrome` on a signed-in machine. Title metadata still loads via oEmbed when the file download is blocked.
+Also supported:
+
+- `YTDLP_COOKIES=/path/to/cookies.txt` — Netscape cookies from a signed-in browser  
+- `YTDLP_BROWSER=chrome` (or `edge` / `firefox`) — cookies-from-browser on a signed-in machine  
+- `YTDLP_FORMAT=…` — override the format selector  
+- `YTDLP_AUTO_PROXY=0` — disable the public-proxy ladder  
+
+Title metadata still loads via oEmbed when the file download is blocked.
+
+### Tracking modes
+
+Default is **hybrid cascade**: OpenCV motion/color proposals every frame → SORT multi-object tracking (Kalman + IoU + alliance/color) → sparse Gemini / YOLO / OpenAI confirmation only when local proposals look weak. OpenAI stays sparse (interval + frame stride + max calls) to avoid 429s. See [`docs/POTATO.md`](docs/POTATO.md).
 
 ## Next year’s game
 

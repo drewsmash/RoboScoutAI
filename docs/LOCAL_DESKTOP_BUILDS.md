@@ -28,3 +28,17 @@ Upload `dist/release/RamScoutAI-macos-arm64.zip`.
 
 ## Unsigned apps
 Windows SmartScreen / macOS Gatekeeper may warn. See `docs/SIGNING.md`.
+
+## Optional env flags (tracking / download)
+
+| Variable | Purpose |
+| --- | --- |
+| `YTDLP_COOKIES` | Path to Netscape `cookies.txt` for YouTube |
+| `YTDLP_BROWSER` | `chrome` / `edge` / `firefox` cookies-from-browser |
+| `YTDLP_PROXY` / `HTTPS_PROXY` | Residential proxy for yt-dlp |
+| `YTDLP_AUTO_PROXY` | `1` (default) enables public-proxy ladder; `0` disables |
+| `YTDLP_FORMAT` | Override yt-dlp format selector |
+| `RAMSCOUT_OPENAI_INTERVAL_S` | Seconds between OpenAI vision keyframes (default `2`) |
+| `RAMSCOUT_OPENAI_FRAME_STRIDE` | Min processed frames between OpenAI calls (default `30`) |
+| `RAMSCOUT_OPENAI_MAX_CALLS` | Cap OpenAI calls per match (default `24`) |
+| `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Cloud vision keys |

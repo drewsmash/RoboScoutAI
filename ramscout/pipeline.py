@@ -70,7 +70,7 @@ class Job:
     crop_bottom: float = 0.65
     user_calibrated: bool = False
     seeds: list[dict[str, Any]] = field(default_factory=list)
-    tracker_mode: str = "auto"
+    tracker_mode: str = "hybrid"
     openai_key: str = ""
     google_key: str = ""
     tracker_strategies: list[str] = field(default_factory=list)
@@ -188,7 +188,7 @@ def start_job(
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
     local_video: Path | str | None = None,
-    tracker_mode: str = "auto",
+    tracker_mode: str = "hybrid",
     openai_key: str = "",
     google_key: str = "",
     auto_multicam: bool = True,
@@ -201,7 +201,7 @@ def start_job(
         demo=demo,
         crop_top=float(crop_top),
         crop_bottom=float(crop_bottom),
-        tracker_mode=(tracker_mode or "auto").strip().lower() or "auto",
+        tracker_mode=(tracker_mode or "hybrid").strip().lower() or "hybrid",
         openai_key=openai_key or "",
         google_key=google_key or "",
         auto_multicam=bool(auto_multicam),
@@ -416,7 +416,7 @@ def _run_real(job: Job) -> None:
         crop_top=job.crop_top,
         crop_bottom=job.crop_bottom,
         on_progress=track_progress,
-        tracker_mode=job.tracker_mode or "auto",
+        tracker_mode=job.tracker_mode or "hybrid",
         openai_key=job.openai_key,
         google_key=job.google_key,
     )

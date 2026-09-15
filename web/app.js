@@ -78,7 +78,7 @@ function loadTbaKey() {
   $("tba-key").value = saved;
   const openai = localStorage.getItem("ramscout.openaiKey") || "";
   const google = localStorage.getItem("ramscout.googleKey") || "";
-  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "auto");
+  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "hybrid");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
@@ -88,8 +88,8 @@ function loadTbaKey() {
 
 $("google-key")?.addEventListener("change", () => {
   const key = $("google-key")?.value.trim() || "";
-  if (key && $("tracker-mode") && $("tracker-mode").value === "auto") {
-    $("tracker-mode").value = "gemini";
+  if (key && $("tracker-mode") && ["auto", "hybrid"].includes($("tracker-mode").value)) {
+    // Keep hybrid — it already prefers Gemini when keyed. Do not force gemini-only.
   }
   saveScoutKeys();
 });
@@ -103,7 +103,7 @@ function saveScoutKeys() {
 
 function trackerPayload() {
   return {
-    tracker_mode: $("tracker-mode")?.value || "auto",
+    tracker_mode: $("tracker-mode")?.value || "hybrid",
     auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
@@ -210,7 +210,7 @@ async function createJob(payload) {
     form.append("match_key", payload.match_key || "");
     form.append("crop_top", String(payload.crop_top ?? 0.1));
     form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
-    form.append("tracker_mode", payload.tracker_mode || "auto");
+    form.append("tracker_mode", payload.tracker_mode || "hybrid");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
