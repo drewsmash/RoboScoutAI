@@ -181,9 +181,17 @@ class MotTracker:
 
         out: list[Detection] = []
         for track in self.tracks.values():
-            # Emit confirmed tracks, or brand-new high-confidence detections.
-            if not track.confirmed and track.kalman.hits < self.min_hits:
-                if track.confidence < 0.55 and track.kalman.time_since_update > 0:
+            # Emit confirmed tracks. Allow immediate emit for strong cloud/YOLO anchors.
+            if not track.confirmed:
+                strong_anchor = track.confidence >= 0.55 and track.source in {
+                    "gemini",
+                    "openai",
+                    "yolo",
+                    "color",
+                }
+                if track.kalman.hits < self.min_hits and not strong_anchor:
+                    continue
+                if track.kalman.time_since_update > 0:
                     continue
             bbox = _clamp_bbox(track.kalman.bbox(), frame_w, frame_h)
             out.append(
