@@ -2,7 +2,7 @@
 """PyInstaller spec for RamScoutAI desktop builds (Windows .exe / macOS binary).
 
 Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
-YouTube ingest, and GitHub auto-update all work. Drop a robot .pt next to the
+YouTube ingest, and the git-remote in-app updater all work. Drop a robot .pt next to the
 app and install ultralytics in a source tree for full tracking.
 """
 
