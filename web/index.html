@@ -45,9 +45,10 @@
         <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
       </label>
       <label class="field grow">
-        <span>Or upload a downloaded VOD</span>
+        <span>Or upload a downloaded VOD (preferred if YouTube blocks)</span>
         <input id="video-file" name="video_file" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv" />
       </label>
+      <p class="hint" id="upload-hint">Upload skips YouTube entirely. Keep a YouTube URL only if you want title/team metadata from the listing.</p>
       <div class="composer-row">
         <label class="field">
           <span>TBA auth key</span>
@@ -114,11 +115,15 @@
           </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, upload the file you already saved (best fix), or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RamScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
     <div class="yt-help" id="yt-help" hidden>
       <strong>YouTube download blocked.</strong>
-      <span>Upload the MP4/MKV you already downloaded, or export cookies with a browser extension and set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
+      <span>Upload the MP4/MKV you already downloaded (recommended), or export cookies with “Get cookies.txt LOCALLY” and place <code>cookies.txt</code> next to the EXE / in <code>%APPDATA%\RamScoutAI\</code> / set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
+    </div>
+    <div class="yt-help upload-help" id="upload-help" hidden>
+      <strong>Uploaded video could not be analyzed.</strong>
+      <span>Confirm the file is a real MP4/MKV (not an empty download), then try again. This is not a YouTube bot check — the local file is the source.</span>
     </div>
   </section>
 

@@ -225,7 +225,11 @@ async function createJob(payload) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Could not start job." }));
-    alert(err.detail || "Could not start job.");
+    const detail = err.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+      : (detail || "Could not start job.");
+    alert(message);
     return;
   }
   const job = await res.json();
@@ -254,11 +258,34 @@ function renderJob(job) {
   window.__ramscoutJobId = job.id;
   window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
   const ytHelp = $("yt-help");
-  if (ytHelp) {
-    const err = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`.toLowerCase();
-    const blocked = err.includes("bot") || err.includes("sign in") || err.includes("youtube") && err.includes("block");
-    ytHelp.hidden = !blocked;
-  }
+  const uploadHelp = $("upload-help");
+  const errText = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`;
+  const errLower = errText.toLowerCase();
+  const failed = job.status === "error";
+  const hasVideo = Boolean(job.has_video);
+  const youtubeBlocked =
+    failed
+    && !hasVideo
+    && (
+      errLower.includes("bot")
+      || errLower.includes("sign in")
+      || (errLower.includes("youtube") && (errLower.includes("block") || errLower.includes("cookies")))
+    );
+  const uploadFailed =
+    failed
+    && hasVideo
+    && !youtubeBlocked
+    && (
+      errLower.includes("upload")
+      || errLower.includes("missing on disk")
+      || errLower.includes("empty")
+      || errLower.includes("opencv")
+      || errLower.includes("could not")
+      || errLower.includes("decode")
+      || errLower.includes("video")
+    );
+  if (ytHelp) ytHelp.hidden = !youtubeBlocked;
+  if (uploadHelp) uploadHelp.hidden = !(uploadFailed || (failed && hasVideo && !youtubeBlocked));
 
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
@@ -1121,10 +1148,15 @@ async function initUpdater() {
       const update = await res.json();
       if (update.available) return;
       if (update.error) {
+        const soft = /no (desktop )?updates? (published|available)|not published yet|nothing to install/i.test(
+          update.error
+        );
         const open = update.release_url
           ? `\n\nOpen releases? ${update.release_url}`
           : "";
-        if (update.release_url && window.confirm(`${update.error}${open}`)) {
+        if (soft) {
+          alert(update.error);
+        } else if (update.release_url && window.confirm(`${update.error}${open}`)) {
           window.open(update.release_url, "_blank", "noopener");
         } else if (!update.release_url) {
           alert(update.error);

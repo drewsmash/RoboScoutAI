@@ -76,7 +76,7 @@ def test_upload_job_accepts_local_video(tmp_path):
     # Tiny non-media payload is enough to exercise the upload route; the job will
     # later fail OpenCV decode, which still proves multipart ingest works.
     video = tmp_path / "match.mp4"
-    video.write_bytes(b"not-a-real-mp4")
+    video.write_bytes(b"not-a-real-mp4" + b"\x00" * 2048)
     with video.open("rb") as fh:
         res = client.post(
             "/api/jobs/upload",
@@ -90,6 +90,7 @@ def test_upload_job_accepts_local_video(tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["id"]
+    assert body["has_video"] is True
     assert body["status"] in {"queued", "resolving", "downloading", "error", "ready"}
 
 

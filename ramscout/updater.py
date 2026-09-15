@@ -72,6 +72,7 @@ def preferred_asset_names() -> list[str]:
     if key == "windows":
         return [
             "RamScoutAI-windows-x64.exe",
+            "RamScoutAI-windows-x64-signed.exe",
             "RamScoutAI-windows.exe",
             "RamScoutAI.exe",
         ]
@@ -81,11 +82,12 @@ def preferred_asset_names() -> list[str]:
             "RamScoutAI-macos-arm64.zip",
             "RamScoutAI-macos.zip",
             "RamScoutAI-macos-universal.zip",
+            "RamScoutAI-macos-arm64.7z",
         ]
         if key == "macos-x64":
             names.append("RamScoutAI-macos-x64.zip")
         return names
-    return [f"RamScoutAI-{key}.tar.gz", "RamScoutAI-linux.tar.gz"]
+    return [f"RamScoutAI-{key}.tar.gz", "RamScoutAI-linux.tar.gz", "RamScoutAI-linux-x86_64.tar.gz"]
 
 
 def normalize_version(tag: str) -> str:
@@ -111,6 +113,7 @@ def _api_headers(version: str, *, download: bool = False) -> dict[str, str]:
     headers = {
         "User-Agent": f"RamScoutAI/{version}",
         "Accept": "application/octet-stream" if download else "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
     token = github_token()
     if token:
@@ -131,20 +134,29 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=_api_headers(current_version)) as client:
             res = client.get(url)
-            if res.status_code == 404:
-                if github_token():
+            if res.status_code in {401, 403, 404}:
+                # Private repos return 404 to anonymous callers; treat as "nothing to install yet"
+                # rather than a scary failure on first launch.
+                releases_url = f"https://github.com/{repo}/releases"
+                if github_token() and res.status_code == 404:
                     info.error = (
-                        "No desktop release is published yet. "
-                        f"Open https://github.com/{repo}/releases after the first tagged build finishes."
+                        "No desktop updates published yet. "
+                        f"After the first tagged release, Check for updates will find "
+                        f"RamScoutAI-windows-x64.exe (and macOS zips) at {releases_url}."
+                    )
+                elif res.status_code in {401, 403} or (res.status_code == 404 and not github_token()):
+                    info.error = (
+                        "No updates available to this install yet "
+                        f"(GitHub returned {res.status_code} for {repo}). "
+                        "If the repo is private, set RAMSCOUT_GITHUB_TOKEN, or download while signed in at "
+                        f"{releases_url}."
                     )
                 else:
                     info.error = (
-                        f"Could not read releases for {repo}. "
-                        "If the GitHub repo is private, download while signed in at "
-                        f"https://github.com/{repo}/releases "
-                        "or set RAMSCOUT_GITHUB_TOKEN for in-app updates."
+                        "No desktop updates published yet. "
+                        f"See {releases_url} after the first tagged Windows/macOS build."
                     )
-                info.release_url = f"https://github.com/{repo}/releases"
+                info.release_url = releases_url
                 return _store(info)
             res.raise_for_status()
             payload = res.json()
@@ -163,7 +175,8 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
     if asset is None:
         info.error = (
             f"Release {latest} exists, but the {info.platform} desktop file is not attached yet. "
-            f"Check https://github.com/{repo}/releases for Windows/macOS assets."
+            f"Attach RamScoutAI-windows-x64.exe (or the macOS zip) on "
+            f"https://github.com/{repo}/releases."
         )
         info.available = False
         info.release_url = payload.get("html_url") or f"https://github.com/{repo}/releases"
@@ -223,10 +236,23 @@ def _pick_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | None:
         if name in by_name:
             return by_name[name]
     key = platform_key().split("-")[0]
+    # Prefer unsigned canonical names, then signed / alternate archives.
+    ranked: list[tuple[int, dict[str, Any]]] = []
     for name, asset in by_name.items():
         lower = name.lower()
-        if key in lower and (lower.endswith(".exe") or lower.endswith(".zip") or lower.endswith(".tar.gz")):
-            return asset
+        if key not in lower:
+            continue
+        if not (lower.endswith(".exe") or lower.endswith(".zip") or lower.endswith(".tar.gz") or lower.endswith(".7z")):
+            continue
+        score = 0
+        if "signed" in lower:
+            score += 1
+        if lower.endswith(".7z"):
+            score += 2
+        ranked.append((score, asset))
+    if ranked:
+        ranked.sort(key=lambda item: item[0])
+        return ranked[0][1]
     return None
 
 
