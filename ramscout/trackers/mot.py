@@ -183,7 +183,7 @@ class MotTracker:
         for track in self.tracks.values():
             # Emit confirmed tracks. Allow immediate emit for strong cloud/YOLO anchors.
             if not track.confirmed:
-                strong_anchor = track.confidence >= 0.55 and track.source in {
+                strong_anchor = track.confidence >= 0.5 and track.source in {
                     "gemini",
                     "openai",
                     "yolo",
