@@ -27,6 +27,41 @@ DEFAULT_GIT_BRANCH = "main"
 _STATE_LOCK = threading.Lock()
 _LAST_CHECK: dict[str, Any] | None = None
 
+
+def _bundled_update_channel() -> str | None:
+    """Optional update-channel.txt next to the EXE / in the freeze bundle."""
+    from ramscout.paths import bundle_root
+
+    candidates = [
+        app_dir() / "update-channel.txt",
+        bundle_root() / "update-channel.txt",
+    ]
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.is_file():
+                text = path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+                if text and not text.startswith("#"):
+                    return text
+        except OSError:
+            continue
+    return None
+
+
+def git_branch() -> str:
+    env = (os.environ.get("RAMSCOUT_GIT_BRANCH") or "").strip()
+    if env:
+        return env
+    bundled = _bundled_update_channel()
+    if bundled:
+        return bundled
+    return DEFAULT_GIT_BRANCH
+
+
 # Paths inside the repo that may hold desktop binaries (tracked via git for the updater).
 # Prefer release-artifacts/ — desktop-downloads/ is gitignored for local staging only.
 _ARTIFACT_REL_PATHS = (
@@ -82,10 +117,6 @@ def git_remote() -> str:
         return f"https://github.com/{legacy}.git"
     discovered = _discover_origin_url()
     return discovered or DEFAULT_GIT_REMOTE
-
-
-def git_branch() -> str:
-    return (os.environ.get("RAMSCOUT_GIT_BRANCH") or DEFAULT_GIT_BRANCH).strip() or DEFAULT_GIT_BRANCH
 
 
 def github_repo() -> str:

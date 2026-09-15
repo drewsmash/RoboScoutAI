@@ -170,3 +170,14 @@ def test_artifact_paths_prefer_release_artifacts():
     names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
     assert "RamScoutAI-windows-x64.exe" in names
     assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
+
+
+def test_git_branch_bundled_channel(monkeypatch, tmp_path):
+    channel = tmp_path / "update-channel.txt"
+    channel.write_text("cursor/feature-e0ef\n", encoding="utf-8")
+    monkeypatch.delenv("RAMSCOUT_GIT_BRANCH", raising=False)
+    monkeypatch.setattr(updater, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr("ramscout.paths.bundle_root", lambda: tmp_path / "missing")
+    assert updater.git_branch() == "cursor/feature-e0ef"
+    monkeypatch.setenv("RAMSCOUT_GIT_BRANCH", "main")
+    assert updater.git_branch() == "main"

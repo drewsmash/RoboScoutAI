@@ -30,6 +30,10 @@ datas = [
     (str(ROOT / "web"), "web"),
     (str(ROOT / "ramscout" / "games"), "ramscout/games"),
 ]
+# Optional freeze-time update channel (branch name). Overridable by RAMSCOUT_GIT_BRANCH.
+_channel = ROOT / "release-artifacts" / "update-channel.txt"
+if _channel.is_file():
+    datas.append((str(_channel), "."))
 datas += collect_data_files("yt_dlp")
 
 hiddenimports = [
