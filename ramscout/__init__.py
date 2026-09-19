@@ -1,3 +1,6 @@
-"""RamScoutAI — FRC match auto-scout from recorded YouTube videos."""
+"""RoboScoutAI — FRC match auto-scout from recorded YouTube videos."""
 
-__version__ = "0.4.2"
+from ramscout.brand import APP_NAME
+
+__version__ = "0.5.0"
+__all__ = ["APP_NAME", "__version__"]

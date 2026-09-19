@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desktop entrypoint: start the local RamScoutAI server and open an app window."""
+"""Desktop entrypoint: start the local RoboScoutAI server and open an app window."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from ramscout import __version__
 from ramscout.paths import is_frozen, jobs_dir, web_dir
 from ramscout.updater import apply_downloaded_update, check_for_update, download_update
 
-log = logging.getLogger("ramscout.desktop")
+log = logging.getLogger("roboscout.desktop")
 
 
 def _free_port(preferred: int) -> int:
@@ -53,7 +53,7 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.info("Update check: %s", info.error)
         return
     if not info.available:
-        log.info("RamScoutAI %s is up to date.", info.current_version)
+        log.info("RoboScoutAI %s is up to date.", info.current_version)
         return
     log.info(
         "Update available: %s → %s (%s)",
@@ -90,7 +90,7 @@ def _stop_server(server: object) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="RamScoutAI desktop launcher")
+    parser = argparse.ArgumentParser(description="RoboScoutAI desktop launcher")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     parser.add_argument(
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     from app import app
 
     url = f"http://{args.host}:{port}/"
-    log.info("RamScoutAI %s starting on %s", __version__, url)
+    log.info("RoboScoutAI %s starting on %s", __version__, url)
     config = uvicorn.Config(app, host=args.host, port=port, log_level="info", reload=False)
     server = uvicorn.Server(config)
 
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     # App / chrome-app windows block until closed; serve in a background thread.
     # Browser / none keep the server in the foreground until Ctrl+C.
     if ui_mode == "app":
-        server_thread = threading.Thread(target=server.run, daemon=True, name="ramscout-uvicorn")
+        server_thread = threading.Thread(target=server.run, daemon=True, name="roboscout-uvicorn")
         server_thread.start()
         try:
             strategy = run_app_ui(url, mode="app")

@@ -1,4 +1,4 @@
-"""Pluggable robot-tracking strategies for RamScoutAI.
+"""Pluggable robot-tracking strategies for RoboScoutAI.
 
 Local strategies work offline with OpenCV. Optional cloud strategies
 (OpenAI Vision, Google Gemini) can refine detections when API keys are set.

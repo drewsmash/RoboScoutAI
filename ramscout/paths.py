@@ -29,11 +29,18 @@ def app_dir() -> Path:
 
 
 def data_dir() -> Path:
-    override = (os.environ.get("RAMSCOUT_DATA") or "").strip()
+    override = (
+        (os.environ.get("ROBOSCOUT_DATA") or "").strip()
+        or (os.environ.get("RAMSCOUT_DATA") or "").strip()
+    )
     if override:
         path = Path(override)
     elif is_frozen():
-        path = Path.home() / "RamScoutAI" / "data"
+        path = Path.home() / "RoboScoutAI" / "data"
+        legacy = Path.home() / "RamScoutAI" / "data"
+        # Prefer new brand folder; fall back so existing installs keep their jobs.
+        if not path.exists() and legacy.exists():
+            path = legacy
     else:
         path = app_dir() / "data"
     path.mkdir(parents=True, exist_ok=True)

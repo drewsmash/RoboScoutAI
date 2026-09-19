@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 log = logging.getLogger(__name__)
 
 TBA_SITE = "https://www.thebluealliance.com"
-USER_AGENT = "RamScoutAI/0.4 (+https://github.com/drewsmash/RamScoutAI; TBA HTML fallback)"
+USER_AGENT = "RoboScoutAI/0.4 (+https://github.com/drewsmash/RoboScoutAI; TBA HTML fallback)"
 
 
 def scrape_match(match_key: str) -> dict[str, Any] | None:

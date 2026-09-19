@@ -8,7 +8,7 @@ strategies in order:
 3. An optional auto-proxy ladder when ``YTDLP_AUTO_PROXY`` is enabled (default)
 4. Local files already on disk (``file://`` / absolute paths)
 
-Prefer running RamScoutAI on a residential network, or set cookies / a proxy.
+Prefer running RoboScoutAI on a residential network, or set cookies / a proxy.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ ProgressFn = Callable[[str, float], None]
 
 _BOT_HINT = (
     "YouTube blocked this download (bot check / sign-in required). "
-    "Fixes that usually work: run RamScoutAI on your own network, set "
+    "Fixes that usually work: run RoboScoutAI on your own network, set "
     "YTDLP_COOKIES to a Netscape cookies.txt from a signed-in browser, "
     "set YTDLP_PROXY to a residential HTTP proxy, or upload the match video file."
 )
@@ -452,7 +452,7 @@ def _oembed(url: str) -> dict[str, Any] | None:
             "https://www.youtube.com/oembed",
             params={"url": url, "format": "json"},
             timeout=15.0,
-            headers={"User-Agent": "RamScoutAI/0.3"},
+            headers={"User-Agent": "RoboScoutAI/0.3"},
         )
         if res.status_code != 200:
             return None

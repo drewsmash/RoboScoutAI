@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build RamScoutAI desktop release artifacts on the CURRENT OS.
-# Run this on a Mac to produce RamScoutAI-macos-arm64.zip / macos-x64.zip.
-# Run on Windows (Git Bash / PowerShell) to produce RamScoutAI-windows-x64.exe.
+# Build RoboScoutAI desktop release artifacts on the CURRENT OS.
+# Run this on a Mac to produce RoboScoutAI-macos-arm64.zip / macos-x64.zip.
+# Run on Windows (Git Bash / PowerShell) to produce RoboScoutAI-windows-x64.exe.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -22,23 +22,23 @@ if [[ "$OS" == "darwin" ]]; then
   if [[ "$ARCH" == "x86_64" ]]; then KEY="macos-x64"; fi
   (
     cd dist
-    chmod +x RamScoutAI
+    chmod +x RoboScoutAI
     # Prefer a zip that expands to a runnable binary (same layout as CI releases)
-    zip -9 "release/RamScoutAI-${KEY}.zip" RamScoutAI
+    zip -9 "release/RoboScoutAI-${KEY}.zip" RoboScoutAI
   )
   echo ""
-  echo "Built: dist/release/RamScoutAI-${KEY}.zip"
+  echo "Built: dist/release/RoboScoutAI-${KEY}.zip"
   echo "Upload that zip to your GitHub Release."
-  echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RamScoutAI && chmod +x ./RamScoutAI"
+  echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RoboScoutAI && chmod +x ./RoboScoutAI"
 elif [[ "$OS" == linux* ]]; then
-  tar -C dist -czf "dist/release/RamScoutAI-linux-${ARCH}.tar.gz" RamScoutAI
-  echo "Built: dist/release/RamScoutAI-linux-${ARCH}.tar.gz"
+  tar -C dist -czf "dist/release/RoboScoutAI-linux-${ARCH}.tar.gz" RoboScoutAI
+  echo "Built: dist/release/RoboScoutAI-linux-${ARCH}.tar.gz"
 else
   # Windows / Git Bash / MSYS
-  if [[ -f dist/RamScoutAI.exe ]]; then
-    cp dist/RamScoutAI.exe "dist/release/RamScoutAI-windows-x64.exe"
-    echo "Built: dist/release/RamScoutAI-windows-x64.exe"
+  if [[ -f dist/RoboScoutAI.exe ]]; then
+    cp dist/RoboScoutAI.exe "dist/release/RoboScoutAI-windows-x64.exe"
+    echo "Built: dist/release/RoboScoutAI-windows-x64.exe"
   else
-    echo "Built dist/RamScoutAI — rename to RamScoutAI-windows-x64.exe for the release."
+    echo "Built dist/RoboScoutAI — rename to RoboScoutAI-windows-x64.exe for the release."
   fi
 fi

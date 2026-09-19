@@ -28,7 +28,7 @@ def test_version_endpoint():
 def test_index_serves_dark_ui():
     res = client.get("/")
     assert res.status_code == 200
-    assert "RamScoutAI" in res.text
+    assert "RoboScoutAI" in res.text
     assert "color-scheme" in res.text
     assert "upload" in res.text.lower()
     assert "update-chip" in res.text

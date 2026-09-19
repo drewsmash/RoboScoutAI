@@ -1,4 +1,4 @@
-"""Draft / pick-list helpers for alliance selection from RamScoutAI cards."""
+"""Draft / pick-list helpers for alliance selection from RoboScoutAI cards."""
 
 from __future__ import annotations
 

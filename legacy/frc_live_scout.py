@@ -1,5 +1,5 @@
 """
-RamScoutAI - Standalone FRC Live Match Scouting Desktop App (PyQt6)
+RoboScoutAI - Standalone FRC Live Match Scouting Desktop App (PyQt6)
 
 This application ingests a local video file or a YouTube/TBA stream URL,
 tracks robots with Ultralytics RT-DETR + ByteTrack, projects detections onto
@@ -402,7 +402,7 @@ class ScoutingMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RamScoutAI - FRC 2026 REBUILT Live Scout")
+        self.setWindowTitle("RoboScoutAI - FRC 2026 REBUILT Live Scout")
         self.resize(1500, 950)
 
         # Worker instance (set when a source is loaded).

@@ -25,9 +25,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: RamScoutAI-windows-x64.exe
+            artifact: RoboScoutAI-windows-x64.exe
           - os: macos-14
-            artifact: RamScoutAI-macos-arm64.zip
+            artifact: RoboScoutAI-macos-arm64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/release | Out-Null
-          Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
+          Copy-Item dist/RoboScoutAI.exe "dist/release/${{ matrix.artifact }}"
 
       - name: Sign Windows exe (optional)
         if: runner.os == 'Windows'
@@ -102,16 +102,16 @@ jobs:
             echo "::error::No Developer ID Application identity found in imported certificate."
             exit 1
           fi
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RamScoutAI
-          codesign --verify --verbose=2 dist/RamScoutAI
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RoboScoutAI
+          codesign --verify --verbose=2 dist/RoboScoutAI
           if [[ -n "${MACOS_API_KEY_P8_BASE64:-}" && -n "${MACOS_API_KEY_ID:-}" && -n "${MACOS_API_ISSUER_ID:-}" ]]; then
             KEY_P8="$RUNNER_TEMP/AuthKey_${MACOS_API_KEY_ID}.p8"
             echo "$MACOS_API_KEY_P8_BASE64" | base64 --decode > "$KEY_P8"
-            ditto -c -k --keepParent dist/RamScoutAI "$RUNNER_TEMP/RamScoutAI-notarize.zip"
-            xcrun notarytool submit "$RUNNER_TEMP/RamScoutAI-notarize.zip" \
+            ditto -c -k --keepParent dist/RoboScoutAI "$RUNNER_TEMP/RoboScoutAI-notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/RoboScoutAI-notarize.zip" \
               --key "$KEY_P8" --key-id "$MACOS_API_KEY_ID" --issuer "$MACOS_API_ISSUER_ID" \
               --wait
-            xcrun stapler staple dist/RamScoutAI || true
+            xcrun stapler staple dist/RoboScoutAI || true
           else
             echo "::warning::Notarization secrets missing — binary is signed but not notarized."
           fi
@@ -124,8 +124,8 @@ jobs:
         run: |
           mkdir -p dist/release
           cd dist
-          chmod +x RamScoutAI
-          zip -9 "release/${{ matrix.artifact }}" RamScoutAI
+          chmod +x RoboScoutAI
+          zip -9 "release/${{ matrix.artifact }}" RoboScoutAI
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -166,22 +166,22 @@ jobs:
           mkdir -p out
           find release-assets -type f -print -exec cp {} out/ \;
           ls -lah out
-          test -f out/RamScoutAI-windows-x64.exe
-          test -f out/RamScoutAI-macos-arm64.zip
+          test -f out/RoboScoutAI-windows-x64.exe
+          test -f out/RoboScoutAI-macos-arm64.zip
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: RamScoutAI ${{ steps.meta.outputs.tag }}
+          name: RoboScoutAI ${{ steps.meta.outputs.tag }}
           draft: false
           generate_release_notes: true
           files: out/*
           body: |
-            Desktop builds for RamScoutAI.
+            Desktop builds for RoboScoutAI.
 
-            - **Windows:** download `RamScoutAI-windows-x64.exe` and run it
-            - **Mac (Apple Silicon):** download `RamScoutAI-macos-arm64.zip`, unzip, then run `./RamScoutAI`
+            - **Windows:** download `RoboScoutAI-windows-x64.exe` and run it
+            - **Mac (Apple Silicon):** download `RoboScoutAI-macos-arm64.zip`, unzip, then run `./RoboScoutAI`
 
             If SmartScreen / Gatekeeper warns, see `docs/SIGNING.md`. Signed builds ship when repo signing secrets are configured.
 

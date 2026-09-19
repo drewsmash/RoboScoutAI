@@ -1,8 +1,8 @@
-# RamScoutAI
+# RoboScoutAI
 
 Local web app that auto-scouts an FRC **match video** from a YouTube link.
 
-Paste a recorded FRC match VOD (not a live stream). RamScoutAI:
+Paste a recorded FRC match VOD (not a live stream). RoboScoutAI:
 
 1. Reads **teams and scores from the video** — YouTube title/description plus the on-screen scorebug
 2. Downloads the VOD and tracks robots onto that year’s field image
@@ -15,7 +15,7 @@ Action counts are **heuristics**. Confirm anything you put on a pick list.
 
 ## Desktop builds (Windows / macOS)
 
-RamScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
+RoboScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
 
 ```bash
 # from source
@@ -30,9 +30,9 @@ Use `--browser` for a normal browser tab, or `--no-browser` for server-only.
 
 GitHub Actions (`.github/workflows/release.yml`) builds:
 
-- `RamScoutAI-windows-x64.exe`
-- `RamScoutAI-macos-arm64.zip`
-- `RamScoutAI-macos-x64.zip`
+- `RoboScoutAI-windows-x64.exe`
+- `RoboScoutAI-macos-arm64.zip`
+- `RoboScoutAI-macos-x64.zip`
 
 Publish the first downloadable builds by pushing a version tag (this creates the GitHub Release the in-app updater looks for):
 
@@ -43,8 +43,8 @@ git push origin v0.4.2
 
 Until that release exists, Check for updates will say the desktop files are not published yet — that is expected. The release uploads:
 
-- `RamScoutAI-windows-x64.exe`
-- `RamScoutAI-macos-arm64.zip` (Apple Silicon Macs)
+- `RoboScoutAI-windows-x64.exe`
+- `RoboScoutAI-macos-arm64.zip` (Apple Silicon Macs)
 
 The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
 
@@ -101,24 +101,24 @@ After analyzing matches, use **Pick list** in the app to:
 
 Optional env vars:
 
-- `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)
-- `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
-- `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
+- `ROBOSCOUT_GITHUB_REPO` / `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RoboScoutAI`)
+- `ROBOSCOUT_GITHUB_TOKEN` / `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
+- `ROBOSCOUT_DATA` / `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
 
 Because this repository is private, open the release while signed into GitHub to download:
 
-https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.2
+https://github.com/drewsmash/RoboScoutAI/releases/tag/v0.4.2
 
 
 Click **Try a sample match** to explore the UI without a download.
 
-For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RamScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
+For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RoboScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
 
-A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
+A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RoboScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
 ### YouTube download (bot checks)
 
-Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI now tries several download paths:
+Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RoboScoutAI now tries several download paths:
 
 1. **yt-dlp** with modern player clients (`tv`, `mweb`, …) and the **WebPoClient PO-token** plugin (`yt-dlp-getpot-wpc`) when Chrome/Chromium is available  
 2. Your **`YTDLP_PROXY`** / `HTTPS_PROXY` residential proxy (recommended for servers)  

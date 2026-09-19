@@ -89,7 +89,7 @@ def export_annotated_clip(
             )
         cv2.putText(
             crop,
-            f"t={t:.1f}s  RamScoutAI annotated",
+            f"t={t:.1f}s  RoboScoutAI annotated",
             (16, 28),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,

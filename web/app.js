@@ -73,12 +73,29 @@ function loadAsset(key, src, onload) {
   img.src = src;
 }
 
+function storageGet(key, fallback = null) {
+  const modern = `roboscout.${key}`;
+  const legacy = `ramscout.${key}`;
+  const value = localStorage.getItem(modern);
+  if (value != null) return value;
+  const old = localStorage.getItem(legacy);
+  if (old != null) {
+    localStorage.setItem(modern, old);
+    return old;
+  }
+  return fallback;
+}
+
+function storageSet(key, value) {
+  localStorage.setItem(`roboscout.${key}`, value);
+}
+
 function loadTbaKey() {
-  const saved = localStorage.getItem("ramscout.tbaKey") || "";
+  const saved = storageGet("tbaKey", "") || "";
   $("tba-key").value = saved;
-  const openai = localStorage.getItem("ramscout.openaiKey") || "";
-  const google = localStorage.getItem("ramscout.googleKey") || "";
-  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "auto");
+  const openai = storageGet("openaiKey", "") || "";
+  const google = storageGet("googleKey", "") || "";
+  const mode = storageGet("trackerMode", "") || (google ? "gemini" : "auto");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
@@ -95,10 +112,10 @@ $("google-key")?.addEventListener("change", () => {
 });
 
 function saveScoutKeys() {
-  localStorage.setItem("ramscout.tbaKey", $("tba-key").value.trim());
-  if ($("openai-key")) localStorage.setItem("ramscout.openaiKey", $("openai-key").value.trim());
-  if ($("google-key")) localStorage.setItem("ramscout.googleKey", $("google-key").value.trim());
-  if ($("tracker-mode")) localStorage.setItem("ramscout.trackerMode", $("tracker-mode").value);
+  storageSet("tbaKey", $("tba-key").value.trim());
+  if ($("openai-key")) storageSet("openaiKey", $("openai-key").value.trim());
+  if ($("google-key")) storageSet("googleKey", $("google-key").value.trim());
+  if ($("tracker-mode")) storageSet("trackerMode", $("tracker-mode").value);
 }
 
 function trackerPayload() {
@@ -251,8 +268,8 @@ async function refreshJob() {
 }
 
 function renderJob(job) {
-  window.__ramscoutJobId = job.id;
-  window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
+  window.__roboscoutJobId = job.id;
+  window.dispatchEvent(new CustomEvent("roboscout:job", { detail: job }));
   const ytHelp = $("yt-help");
   if (ytHelp) {
     const err = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`.toLowerCase();
@@ -1006,14 +1023,24 @@ fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGa
 
 /* ---- Scout book / pick list (localStorage) ---- */
 
-const BOOK_KEY = "ramscout.scoutBook";
-const NOTES_KEY = "ramscout.teamNotes";
-const WATCH_KEY = "ramscout.watchlist";
-const EXCLUDE_KEY = "ramscout.pickedExclude";
+const BOOK_KEY = "roboscout.scoutBook";
+const NOTES_KEY = "roboscout.teamNotes";
+const WATCH_KEY = "roboscout.watchlist";
+const EXCLUDE_KEY = "roboscout.pickedExclude";
+const LEGACY_KEYS = {
+  [BOOK_KEY]: "ramscout.scoutBook",
+  [NOTES_KEY]: "ramscout.teamNotes",
+  [WATCH_KEY]: "ramscout.watchlist",
+  [EXCLUDE_KEY]: "ramscout.pickedExclude",
+};
 
 function loadJson(key, fallback) {
   try {
-    const raw = localStorage.getItem(key);
+    let raw = localStorage.getItem(key);
+    if (raw == null && LEGACY_KEYS[key]) {
+      raw = localStorage.getItem(LEGACY_KEYS[key]);
+      if (raw != null) localStorage.setItem(key, raw);
+    }
     return raw ? JSON.parse(raw) : fallback;
   } catch (_err) {
     return fallback;
@@ -1249,7 +1276,7 @@ function exportPicklist() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "ramscout-picklist.csv";
+  a.download = "roboscout-picklist.csv";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1330,7 +1357,7 @@ async function initUpdater() {
           alert(update.error);
         }
       } else {
-        alert(`RamScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
+        alert(`RoboScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
       }
     } catch (_err) {
       alert("Could not check GitHub for updates.");
