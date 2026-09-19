@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from ramscout import jev
 
@@ -57,18 +57,22 @@ def test_verify_scout_events_boosts_and_rejects(monkeypatch):
     assert abs(by_team["177"]["confidence"] - (0.5 * 0.55 + 0.5 * 0.5)) < 1e-6
 
 
-def test_evaluate_posts_to_ai_gateway(monkeypatch):
-    monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw-secret")
-    captured: dict = {}
-
+def _fake_client(status_code: int, body: dict | str, captured: dict):
     class FakeResp:
-        status_code = 200
+        def __init__(self):
+            self.status_code = status_code
+            self.text = body if isinstance(body, str) else ""
+            self._body = body
 
         def raise_for_status(self):
+            if self.status_code >= 400:
+                raise jev.httpx.HTTPStatusError("err", request=None, response=self)
             return None
 
         def json(self):
-            return {"model": jev.JEV_MODEL, "answers": {"ok": {"type": "boolean", "probability": 1.0}}}
+            if isinstance(self._body, dict):
+                return self._body
+            raise ValueError("not json")
 
     class FakeClient:
         def __init__(self, *a, **k):
@@ -86,7 +90,26 @@ def test_evaluate_posts_to_ai_gateway(monkeypatch):
             captured["json"] = json
             return FakeResp()
 
-    with patch.object(jev.httpx, "Client", FakeClient):
+    return FakeClient
+
+
+def test_evaluate_posts_to_ai_gateway(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw-secret")
+    monkeypatch.delenv("AI_GATEWAY_ONLY", raising=False)
+    monkeypatch.delenv("JEV_GATEWAY_ONLY", raising=False)
+    monkeypatch.delenv("AI_GATEWAY_ZERO_DATA_RETENTION", raising=False)
+    monkeypatch.delenv("JEV_ZERO_DATA_RETENTION", raising=False)
+    captured: dict = {}
+
+    with patch.object(
+        jev.httpx,
+        "Client",
+        _fake_client(
+            200,
+            {"model": jev.JEV_MODEL, "answers": {"ok": {"type": "boolean", "probability": 1.0}}},
+            captured,
+        ),
+    ):
         data = jev.evaluate(
             {"hello": "world"},
             {"ok": {"type": "boolean", "instructions": "yes?"}},
@@ -94,7 +117,66 @@ def test_evaluate_posts_to_ai_gateway(monkeypatch):
     assert data["answers"]["ok"]["probability"] == 1.0
     assert captured["url"] == jev.EVALUATE_URL
     assert captured["json"]["model"] == "typesafe-ai/jev"
+    assert captured["json"]["state"] == {"hello": "world"}
+    assert captured["json"]["questions"]["ok"]["type"] == "boolean"
+    assert "providerOptions" not in captured["json"]
     assert captured["headers"]["Authorization"] == "Bearer gw-secret"
+
+
+def test_evaluate_provider_options_env_gated(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw")
+    monkeypatch.setenv("AI_GATEWAY_ONLY", "typesafe-ai")
+    monkeypatch.setenv("AI_GATEWAY_ZERO_DATA_RETENTION", "1")
+    captured: dict = {}
+
+    with patch.object(
+        jev.httpx,
+        "Client",
+        _fake_client(200, {"model": jev.JEV_MODEL, "answers": {}}, captured),
+    ):
+        jev.evaluate({"s": 1}, {"q": {"type": "boolean", "instructions": "?"}})
+    opts = captured["json"]["providerOptions"]["gateway"]
+    assert opts["only"] == ["typesafe-ai"]
+    assert opts["zeroDataRetention"] is True
+
+
+def test_evaluate_403_raises_actionable_message(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad-key")
+    captured: dict = {}
+
+    with patch.object(
+        jev.httpx,
+        "Client",
+        _fake_client(403, {"error": {"message": "Forbidden: no access"}}, captured),
+    ):
+        try:
+            jev.evaluate({"s": 1}, {"q": {"type": "boolean", "instructions": "?"}})
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            msg = str(exc)
+            assert "403" in msg
+            assert "AI_GATEWAY_API_KEY" in msg
+            assert "ONLY" in msg or "ZDR" in msg or "ZERO_DATA" in msg
+            assert "Forbidden" in msg
+
+
+def test_verify_scout_events_soft_fails_on_403(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad-key")
+    events = [
+        {"type": "hub_score_candidate", "team": "195", "t": 10.0, "confidence": 0.4, "detail": "dwell"},
+    ]
+    captured: dict = {}
+
+    with patch.object(
+        jev.httpx,
+        "Client",
+        _fake_client(403, {"message": "denied"}, captured),
+    ):
+        out, notes = jev.verify_scout_events(events, api_key="bad-key")
+    assert out == events
+    assert len(notes) == 1
+    assert "403" in notes[0]
+    assert "AI_GATEWAY_API_KEY" in notes[0]
 
 
 def test_classify_camera_layout(monkeypatch):
@@ -113,3 +195,17 @@ def test_classify_camera_layout(monkeypatch):
     assert mode == "stacked_sides"
     assert conf == 0.85
     assert notes == []
+
+
+def test_classify_camera_layout_soft_fails_on_403(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad")
+    captured: dict = {}
+    with patch.object(
+        jev.httpx,
+        "Client",
+        _fake_client(403, {"error": "nope"}, captured),
+    ):
+        mode, conf, notes = jev.classify_camera_layout({"classical_mode": "single"})
+    assert mode is None
+    assert conf == 0.0
+    assert notes and "403" in notes[0]

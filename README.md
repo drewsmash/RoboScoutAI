@@ -65,12 +65,12 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
-**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
+**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch + Pillow are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
 
 Optional neural depth (source installs):
 
 ```bash
-pip install transformers torch pillow
+pip install transformers torch   # Pillow is in requirements.txt
 # Depth-Anything-V2-Small loads from Hugging Face on first use
 ```
 
@@ -78,7 +78,7 @@ API keys (optional, also in the UI Advanced panel):
 
 - `OPENAI_API_KEY`
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
-- `AI_GATEWAY_API_KEY` — Vercel AI Gateway; enables [Jev](https://vercel.com/ai-gateway/models/jev) (`typesafe-ai/jev`) to verify hub/climb/defense candidates and help classify multi-view layouts
+- `AI_GATEWAY_API_KEY` — Vercel AI Gateway; enables [Jev](https://vercel.com/ai-gateway/models/jev) (`typesafe-ai/jev`) to verify hub/climb/defense candidates and help classify multi-view layouts. A 403 usually means a bad/missing key or missing evaluation access — scout heuristics still run. Optional strict routing (often causes 403): `AI_GATEWAY_ONLY=typesafe-ai`, `AI_GATEWAY_ZERO_DATA_RETENTION=1`
 
 For stronger local neural detection from source:
 
