@@ -120,9 +120,9 @@ def test_frozen_update_finds_artifact(monkeypatch, tmp_path):
     mirror = cache / "mirror"
     mirror.mkdir(parents=True)
     (mirror / ".git").mkdir()
-    artifact_dir = mirror / "desktop-downloads"
+    artifact_dir = mirror / "release-artifacts"
     artifact_dir.mkdir()
-    exe = artifact_dir / "RamScoutAI-windows-x64.exe"
+    exe = artifact_dir / "RoboScoutAI-windows-x64.exe"
     exe.write_bytes(b"MZ-fake")
 
     def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
@@ -135,9 +135,12 @@ def test_frozen_update_finds_artifact(monkeypatch, tmp_path):
         if args[0] == "show":
             return '__version__ = "0.4.9"\n'
         if args[0] == "ls-tree":
-            return "desktop-downloads/RamScoutAI-windows-x64.exe"
+            return "release-artifacts/RoboScoutAI-windows-x64.exe"
         if args[0] == "cat-file":
-            return ""
+            rel = args[-1].split(":", 1)[-1]
+            if "RoboScoutAI-windows-x64.exe" in rel:
+                return ""
+            raise RuntimeError("missing")
         if args[0] == "clone":
             return ""
         return ""
@@ -154,22 +157,42 @@ def test_frozen_update_finds_artifact(monkeypatch, tmp_path):
     assert info.available is True
     assert info.mode == "frozen"
     assert info.message == "update available from git"
-    assert info.asset_name == "RamScoutAI-windows-x64.exe"
+    assert info.asset_name == "RoboScoutAI-windows-x64.exe"
     assert info.asset_url.startswith("git:")
+    assert "releases/download" in info.release_url
 
 
 def test_no_releases_api_usage():
     source = Path(updater.__file__).read_text(encoding="utf-8")
+    # Git updater must not call the GitHub Releases REST API; browser download
+    # URLs for Access Denied fallback are fine.
     assert "api.github.com" not in source
-    assert "/releases" not in source or "GitHub Releases" not in source
+    assert "httpx" not in source
     assert "RAMSCOUT_GIT_REMOTE" in source
     assert "release-artifacts/" in source
 
 
 def test_artifact_paths_prefer_release_artifacts():
     names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
+    assert "RoboScoutAI-windows-x64.exe" in names
     assert "RamScoutAI-windows-x64.exe" in names
     assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
+
+
+def test_manual_download_url_points_at_github_cdn(monkeypatch):
+    monkeypatch.setattr(updater, "platform_key", lambda: "windows")
+    monkeypatch.setattr(updater, "github_repo", lambda: "drewsmash/RoboScoutAI")
+    url = updater.manual_download_url(version="0.5.1", asset_name="RoboScoutAI-windows-x64.exe")
+    assert url == (
+        "https://github.com/drewsmash/RoboScoutAI/releases/download/"
+        "v0.5.1/RoboScoutAI-windows-x64.exe"
+    )
+
+
+def test_windows_user_install_dir_uses_localappdata(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    path = updater._windows_user_install_dir()
+    assert path == tmp_path / "Local" / "RoboScoutAI"
 
 
 def test_classify_rejects_downgrade():

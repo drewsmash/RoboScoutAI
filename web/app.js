@@ -1442,28 +1442,38 @@ async function initUpdater() {
     }
   });
   updateChip.addEventListener("click", async () => {
+    const releaseUrl = updateChip.dataset.releaseUrl || "";
     if (updateChip.dataset.canApply === "1") {
       updateChip.textContent = "Updating from git…";
       updateChip.disabled = true;
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          alert(body.detail || body.message || "Update failed.");
+        if (body.open_url) {
+          window.open(body.open_url, "_blank", "noopener");
+        }
+        if (!res.ok || body.ok === false) {
+          alert(body.message || body.detail || "Update failed — opened the download page.");
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
-        alert(body.message || "Update applied from git.");
+        alert(body.message || "Update applied from git — the app will restart.");
         if (!body.restarting) {
           updateChip.disabled = false;
           updateChip.hidden = true;
           await refresh(true);
         }
       } catch (_err) {
-        alert("Update from git failed.");
+        if (releaseUrl) window.open(releaseUrl, "_blank", "noopener");
+        alert("Update from git failed — opened the release page so you can download the exe manually.");
         updateChip.disabled = false;
+        updateChip.textContent = "Update available";
       }
+      return;
+    }
+    if (releaseUrl) {
+      window.open(releaseUrl, "_blank", "noopener");
       return;
     }
     alert("No applyable desktop update is available right now.");

@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from ramscout.brand import APP_NAME
+
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
@@ -28,6 +30,23 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def user_data_root() -> Path:
+    """Always-writable per-user folder (avoids Program Files Access Denied)."""
+    override = (
+        (os.environ.get("ROBOSCOUT_DATA") or "").strip()
+        or (os.environ.get("RAMSCOUT_DATA") or "").strip()
+    )
+    if override:
+        return Path(override)
+    system = sys.platform
+    if system.startswith("win"):
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return base / APP_NAME
+    if system == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path.home() / ".local" / "share" / APP_NAME
+
+
 def data_dir() -> Path:
     override = (
         (os.environ.get("ROBOSCOUT_DATA") or "").strip()
@@ -36,7 +55,7 @@ def data_dir() -> Path:
     if override:
         path = Path(override)
     elif is_frozen():
-        path = Path.home() / "RoboScoutAI" / "data"
+        path = user_data_root() / "data"
         legacy = Path.home() / "RamScoutAI" / "data"
         # Prefer new brand folder; fall back so existing installs keep their jobs.
         if not path.exists() and legacy.exists():
@@ -59,3 +78,15 @@ def web_dir() -> Path:
 
 def models_dirs() -> list[Path]:
     return [app_dir(), app_dir() / "models", data_dir() / "models", Path.cwd()]
+
+
+def ensure_writable_dir(path: Path) -> Path:
+    """Create path and verify we can write files there."""
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".write_test"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        raise PermissionError(f"Cannot write to {path}: {exc}") from exc
+    return path
