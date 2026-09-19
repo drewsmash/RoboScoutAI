@@ -24,6 +24,11 @@ desktop-downloads/
 # Git updater channel — allow named desktop binaries to be tracked.
 release-artifacts/
 !release-artifacts/
+!release-artifacts/RoboScoutAI-windows-x64.exe
+!release-artifacts/RoboScoutAI-windows-x64-signed.exe
+!release-artifacts/RoboScoutAI-linux-*.tar.gz
+!release-artifacts/RoboScoutAI-macos-*.zip
+!release-artifacts/update-channel.txt
 !release-artifacts/RamScoutAI-windows-x64.exe
 !release-artifacts/RamScoutAI-windows-x64-signed.exe
 !release-artifacts/RamScoutAI-linux-*.tar.gz
