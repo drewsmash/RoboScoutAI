@@ -180,7 +180,19 @@ class JobStore:
                 setattr(job, key, value)
 
     def set_progress(self, job: Job, status: str, message: str, progress: float) -> None:
-        self.update(job, status=status, message=message, progress=progress)
+        stages = list(job.thinking_stages or [])
+        stages.append(
+            {
+                "status": status,
+                "message": message,
+                "progress": round(float(progress), 1),
+                "at": _now(),
+            }
+        )
+        # Keep the panel snappy — last ~12 stage ticks.
+        if len(stages) > 12:
+            stages = stages[-12:]
+        self.update(job, status=status, message=message, progress=progress, thinking_stages=stages)
 
 
 STORE = JobStore()
@@ -271,12 +283,41 @@ def _run_demo(job: Job) -> None:
         overlay=reading.as_dict(),
         game=public_game(reading.year),
     )
+    STORE.set_progress(job, "views", "Sectioning camera angles…", 40)
+    STORE.set_progress(job, "tracking", "Depth → BEV calibration (demo)…", 55)
     STORE.set_progress(job, "scouting", "Building robot paths…", 70)
     samples = demo_tracks()
+    for sample in samples:
+        sample.setdefault("view", "overview")
+        sample.setdefault("bbox", [])
     assignments = {str(s["track_id"]): s["team"] for s in samples}
-    STORE.update(job, samples=samples, assignments=assignments, used_model=False, warnings=[
-        "Sample match — scores and teams were parsed from the broadcast title/overlay text. Paths are simulated."
-    ])
+    STORE.update(
+        job,
+        samples=samples,
+        assignments=assignments,
+        used_model=False,
+        bev={
+            "pitch_deg": 38.0,
+            "tilt_strength": 0.62,
+            "depth_source": "classical",
+            "detail": "Demo BEV — classical depth cues (no VOD).",
+            "used_depth": True,
+        },
+        views={
+            "mode": "stacked_sides",
+            "panes": [
+                {"role": "overview", "purpose": "Top wide-angle — general movement", "crop_top": 0.02, "crop_bottom": 0.48, "crop_left": 0, "crop_right": 1},
+                {"role": "blue_side", "purpose": "Blue scoring / climb", "crop_top": 0.52, "crop_bottom": 0.98, "crop_left": 0, "crop_right": 0.5, "alliance_bias": "blue"},
+                {"role": "red_side", "purpose": "Red scoring / climb", "crop_top": 0.52, "crop_bottom": 0.98, "crop_left": 0.5, "crop_right": 1, "alliance_bias": "red"},
+            ],
+            "side_cues": 0,
+        },
+        camera={"mode": "stacked_sides", "detail": "Demo multi-view layout.", "confidence": 0.9},
+        warnings=[
+            "Sample match — scores and teams were parsed from the broadcast title/overlay text. Paths are simulated.",
+            "Demo includes sectional camera roles + BEV camera-angle metadata.",
+        ],
+    )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Sample match is ready.", 100)
 
@@ -422,6 +463,7 @@ def _run_real(job: Job) -> None:
         try:
             from ramscout.multicam import analyze_video, apply_layout
 
+            STORE.set_progress(job, "views", "Sectioning camera angles…", 53)
             layout = analyze_video(job.video_path)
             top, bottom, chosen = apply_layout(
                 layout,
@@ -431,11 +473,18 @@ def _run_real(job: Job) -> None:
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
+            views = {
+                "mode": chosen.mode,
+                "panes": [p.as_dict() for p in (chosen.panes or [])],
+                "split_y": chosen.split_y,
+                "split_x": chosen.split_x,
+            }
             STORE.update(
                 job,
                 crop_top=top,
                 crop_bottom=bottom,
                 camera=chosen.as_dict(),
+                views=views,
                 warnings=warnings,
             )
         except Exception as exc:  # noqa: BLE001
@@ -443,14 +492,14 @@ def _run_real(job: Job) -> None:
             warnings.append(f"Multi-camera detect skipped: {exc}")
             STORE.update(job, warnings=warnings)
 
-    STORE.set_progress(job, "tracking", "Calibrating field and tracking robots…", 55)
+    STORE.set_progress(job, "tracking", "Depth → BEV calibration, then tracking overview…", 55)
     model = find_local_model(models_dirs()) or ensure_detector_weights()
     team_numbers = []
     if video_match:
         team_numbers = [str(v["team_number"]) for v in video_match.get("teams", {}).values() if v.get("team_number")]
 
     def track_progress(message: str, pct: float) -> None:
-        STORE.set_progress(job, "tracking", message, 55 + pct * 0.3)
+        STORE.set_progress(job, "tracking", message, 55 + pct * 0.25)
 
     result = track_video(
         video_path,
@@ -464,6 +513,7 @@ def _run_real(job: Job) -> None:
         tracker_mode=job.tracker_mode or "hybrid",
         openai_key=job.openai_key,
         google_key=job.google_key,
+        use_bev=not bool(job.user_calibrated),
     )
     frame_path = dest / "calibration.jpg"
     save_jpeg(result["first_frame"], frame_path)
@@ -482,6 +532,41 @@ def _run_real(job: Job) -> None:
             "For stronger detection: install ultralytics, or add an OpenAI / Google API key."
         )
 
+    # Side / lower cameras: scoring & climb reasoning (separate from overview paths).
+    side_cues: list[dict[str, Any]] = []
+    try:
+        from ramscout.multicam import CameraLayout, CameraPane
+        from ramscout.multiview import process_side_views
+
+        cam = job.camera or {}
+        panes = []
+        for raw in (cam.get("panes") or (job.views or {}).get("panes") or []):
+            panes.append(CameraPane(**{k: raw[k] for k in raw if k in CameraPane.__dataclass_fields__}))
+        layout_obj = CameraLayout(
+            mode=str(cam.get("mode") or "single"),
+            crop_top=float(cam.get("crop_top") or job.crop_top),
+            crop_bottom=float(cam.get("crop_bottom") or job.crop_bottom),
+            confidence=float(cam.get("confidence") or 0.0),
+            detail=str(cam.get("detail") or ""),
+            split_y=cam.get("split_y"),
+            split_x=cam.get("split_x"),
+            panes=panes,
+        )
+        if layout_obj.side_panes():
+            STORE.set_progress(job, "side_views", "Reading side cameras for scoring & climbs…", 82)
+
+            def side_progress(message: str, pct: float) -> None:
+                STORE.set_progress(job, "side_views", message, 82 + pct * 0.08)
+
+            mv = process_side_views(video_path, layout_obj, on_progress=side_progress)
+            side_cues = list(mv.side_cues or [])
+            warnings.extend(mv.warnings or [])
+            views = dict(job.views or {})
+            views["side_cues"] = len(side_cues)
+            STORE.update(job, views=views, side_cues=side_cues)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"Side-view processing skipped: {exc}")
+
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
     # Prefer OCR team labels when present.
     for sample in samples:
@@ -489,6 +574,8 @@ def _run_real(job: Job) -> None:
             assignments[str(sample["track_id"])] = str(sample["team"])
 
     src_points = job.src_points
+    if src_points is None:
+        src_points = result.get("src_points")
     if src_points is None:
         fw, fh = result["frame_size"]
         src_points = default_source_points(fw, fh, job.crop_top, job.crop_bottom).tolist()
@@ -505,6 +592,8 @@ def _run_real(job: Job) -> None:
         seeds=_seed_boxes(samples),
         tracker_strategies=list(result.get("strategies") or []),
         source_hits=dict(result.get("source_hits") or {}),
+        bev=dict(result.get("bev") or {}),
+        side_cues=side_cues,
     )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
@@ -668,9 +757,17 @@ def _reproject_and_scout(job: Job) -> None:
     card_dicts = [c.as_dict() for c in cards]
     try:
         from ramscout.event_editor import ensure_event_ids
+        from ramscout.multiview import merge_side_cues_into_events
         from ramscout.tba_stats import enrich_cards_with_tba
 
         event_dicts = ensure_event_ids(event_dicts)
+        if job.side_cues:
+            event_dicts = merge_side_cues_into_events(event_dicts, job.side_cues, cards=card_dicts)
+            event_dicts = ensure_event_ids(event_dicts)
+            # Rebuild cards so side-confirmed hub/climb counts stick.
+            from ramscout.event_editor import cards_from_events
+
+            card_dicts = cards_from_events(card_dicts, event_dicts)
         card_dicts = enrich_cards_with_tba(card_dicts, job.match)
     except Exception as exc:  # noqa: BLE001
         warnings = list(job.warnings or [])
@@ -682,7 +779,7 @@ def _reproject_and_scout(job: Job) -> None:
         events=event_dicts,
         cards=card_dicts,
         seeds=_seed_boxes(samples) or job.seeds,
-        status="ready" if job.status in {"ready", "scouting", "tracking"} else job.status,
+        status="ready" if job.status in {"ready", "scouting", "tracking", "side_views", "views"} else job.status,
     )
     _persist(job)
 

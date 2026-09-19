@@ -271,7 +271,68 @@ input:focus {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 16px 18px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: center;
+  overflow: hidden;
+  position: relative;
 }
+.progress-panel.thinking::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 40%, rgba(168, 199, 250, 0.06) 50%, transparent 60%);
+  background-size: 200% 100%;
+  animation: think-sweep 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes think-sweep {
+  0% { background-position: 120% 0; }
+  100% { background-position: -40% 0; }
+}
+.think-orbits {
+  width: 64px;
+  height: 64px;
+  position: relative;
+  flex-shrink: 0;
+}
+.think-orbits .core {
+  position: absolute;
+  inset: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #d3e3fd, var(--primary-container));
+  box-shadow: 0 0 18px rgba(168, 199, 250, 0.35);
+  animation: core-pulse 1.6s ease-in-out infinite;
+}
+.think-orbits .orbit {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  border-top-color: var(--primary);
+  border-right-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  animation: orbit-spin 2.4s linear infinite;
+}
+.think-orbits .o2 {
+  inset: 8px;
+  border-top-color: var(--blue);
+  animation-duration: 1.7s;
+  animation-direction: reverse;
+}
+.think-orbits .o3 {
+  inset: 16px;
+  border-top-color: var(--ok);
+  animation-duration: 3.1s;
+}
+@keyframes orbit-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes core-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.85; }
+}
+.progress-main { min-width: 0; }
 .progress-copy { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .progress-status { font-family: var(--font-display); font-weight: 650; }
 .progress-message { color: var(--ink-muted); font-size: 13px; }
@@ -280,13 +341,140 @@ input:focus {
   background: var(--surface-highest);
   border-radius: 999px;
   overflow: hidden;
+  position: relative;
 }
 .progress-fill {
   height: 100%;
   width: 0%;
   background: linear-gradient(90deg, var(--blue), var(--primary));
   transition: width 240ms ease;
+  position: relative;
+  z-index: 1;
 }
+.progress-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+.think-stages {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.think-stages li {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-lift);
+}
+.think-stages li.active {
+  color: var(--on-primary-container);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background: color-mix(in srgb, var(--primary-container) 70%, transparent);
+  animation: stage-glow 1.2s ease-in-out infinite;
+}
+.think-stages li.done {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+@keyframes stage-glow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.15); }
+}
+
+.views-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 16px 18px 18px;
+}
+.section-head.tight { margin-bottom: 12px; }
+.section-head.tight h2 { margin: 0 0 4px; }
+.section-head.tight p { margin: 0; color: var(--ink-muted); font-size: 13px; }
+.views-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.view-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  background: var(--bg-lift);
+  min-height: 88px;
+  position: relative;
+  overflow: hidden;
+}
+.view-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--primary);
+}
+.view-card.blue_side::before { background: var(--blue); }
+.view-card.red_side::before { background: var(--red); }
+.view-card.sideline::before { background: var(--warn); }
+.view-role {
+  font-family: var(--font-display);
+  font-weight: 650;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.view-purpose { color: var(--ink-muted); font-size: 12px; line-height: 1.35; }
+.view-crop {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.bev-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.video-frame { position: relative; }
+.track-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.overlay-toggle {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(14, 14, 16, 0.72);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12px;
+  backdrop-filter: blur(6px);
+}
+.overlay-toggle input { accent-color: var(--primary); }
 
 .scoreboard {
   display: grid;

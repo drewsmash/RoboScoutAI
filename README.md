@@ -1,8 +1,8 @@
-# RamScoutAI
+# RoboScoutAI
 
 Local web app that auto-scouts an FRC **match video** from a YouTube link.
 
-Paste a recorded FRC match VOD (not a live stream). RamScoutAI:
+Paste a recorded FRC match VOD (not a live stream). RoboScoutAI:
 
 1. Reads **teams and scores from the video** — YouTube title/description plus the on-screen scorebug
 2. Downloads the VOD and tracks robots onto that year’s field image
@@ -15,7 +15,7 @@ Action counts are **heuristics**. Confirm anything you put on a pick list.
 
 ## Desktop builds (Windows / macOS)
 
-RamScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
+RoboScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
 
 ```bash
 # from source
@@ -30,9 +30,9 @@ Use `--browser` for a normal browser tab, or `--no-browser` for server-only.
 
 GitHub Actions (`.github/workflows/release.yml`) builds:
 
-- `RamScoutAI-windows-x64.exe`
-- `RamScoutAI-macos-arm64.zip`
-- `RamScoutAI-macos-x64.zip`
+- `RoboScoutAI-windows-x64.exe`
+- `RoboScoutAI-macos-arm64.zip`
+- `RoboScoutAI-macos-x64.zip`
 
 ### In-app updater (git remote — not GitHub Releases)
 
@@ -64,6 +64,15 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `local` | Offline only (YOLO optional + OpenCV) |
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
+
+**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
+
+Optional neural depth (source installs):
+
+```bash
+pip install transformers torch pillow
+# Depth-Anything-V2-Small loads from Hugging Face on first use
+```
 
 API keys (optional, also in the UI Advanced panel):
 
@@ -100,9 +109,9 @@ After analyzing matches, use **Pick list** in the app to:
 
 Optional env vars:
 
-- `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)
-- `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
-- `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
+- `ROBOSCOUT_GITHUB_REPO` / `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RoboScoutAI`)
+- `ROBOSCOUT_GITHUB_TOKEN` / `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
+- `ROBOSCOUT_DATA` / `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
 
 Because this repository is private, open the release while signed into GitHub to download, or set `RAMSCOUT_GITHUB_TOKEN` for in-app updates:
 
@@ -111,9 +120,9 @@ https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.3
 
 Click **Try a sample match** to explore the UI without a download.
 
-For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RamScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
+For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RoboScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
 
-A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
+A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RoboScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
 ### YouTube download (bot checks)
 
@@ -171,6 +180,8 @@ pytest -q
 ## Limits
 
 - Wide, mostly fixed cameras work best
+- Multi-angle VODs: top overview + side cams improve scoring/climb confidence; single cams still work via BEV tilt cues
 - Scorebug OCR needs a readable graphic; title/description is the backup
 - Climb detection is “stayed on the Tower in endgame”, not rung level
 - Hub candidates are low-speed dwells next to the Hub, not counted fuel
+- Depth Anything V2 is optional; without it, classical depth still adjusts the BEV trapezoid

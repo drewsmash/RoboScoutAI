@@ -1,4 +1,4 @@
-"""RamScoutAI local web server."""
+"""RoboScoutAI local web server."""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="RamScoutAI", version=__version__, lifespan=lifespan)
+app = FastAPI(title="RoboScoutAI", version=__version__, lifespan=lifespan)
 register_suite_routes(app)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 

@@ -157,7 +157,9 @@ def platform_key() -> str:
 
 
 def preferred_asset_names() -> list[str]:
+    """Ordered candidates: new brand first, then legacy RamScoutAI names."""
     key = platform_key()
+    brands = (BINARY_NAME, LEGACY_BINARY_NAME)
     if key == "windows":
         return [
             "RamScoutAI-windows-x64.exe",
@@ -744,31 +746,46 @@ def _write_installed_sha(sha: str) -> None:
 
 def _apply_windows(package: Path) -> str:
     exe = Path(sys.executable).resolve()
-    staging = exe.with_suffix(exe.suffix + ".new")
+    target = _windows_install_target(exe)
+    staging = target.with_suffix(target.suffix + ".new")
     shutil.copy2(package, staging)
-    script = Path(tempfile.gettempdir()) / "ramscout_update.bat"
-    script.write_text(
-        "\r\n".join(
-            [
-                "@echo off",
-                "timeout /t 2 /nobreak >nul",
-                f'move /Y "{staging}" "{exe}"',
-                f'start "" "{exe}"',
-                f'del "%~f0"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    script = Path(tempfile.gettempdir()) / "roboscout_update.bat"
+    lines = [
+        "@echo off",
+        "timeout /t 2 /nobreak >nul",
+        f'move /Y "{staging}" "{target}"',
+    ]
+    if target.resolve() != exe.resolve():
+        lines.append(f'del /F /Q "{exe}"')
+    lines.extend(
+        [
+            f'start "" "{target}"',
+            'del "%~f0"',
+            "",
+        ]
     )
+    script.write_text("\r\n".join(lines), encoding="utf-8")
     subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
     return "Update staged from git. RamScoutAI will restart momentarily."
 
 
 def _apply_macos(package: Path) -> str:
     exe = Path(sys.executable).resolve()
-    extract_dir = Path(tempfile.mkdtemp(prefix="ramscout-update-"))
-    if package.suffix.lower() == ".zip":
-        shutil.unpack_archive(package, extract_dir)
+    extract_dir = Path(tempfile.mkdtemp(prefix="roboscout-update-"))
+    suffix = package.suffix.lower()
+    if suffix in {".zip", ".7z"}:
+        if suffix == ".7z":
+            # Prefer 7z CLI when present; zipfile cannot read 7z.
+            seven = shutil.which("7z") or shutil.which("7zz")
+            if seven:
+                subprocess.run([seven, "x", str(package), f"-o{extract_dir}", "-y"], check=True)
+            else:
+                raise RuntimeError(
+                    "macOS update is a .7z archive but 7z is not installed. "
+                    f"Download the .zip from the release page, or install p7zip."
+                )
+        else:
+            shutil.unpack_archive(package, extract_dir)
     else:
         shutil.copy2(package, extract_dir / package.name)
 
@@ -776,18 +793,20 @@ def _apply_macos(package: Path) -> str:
     if replacement is None:
         raise RuntimeError("Could not find RamScoutAI binary inside the macOS update package.")
 
-    staging = exe.with_name(exe.name + ".new")
+    staging = target.with_name(target.name + ".new")
     shutil.copy2(replacement, staging)
     os.chmod(staging, 0o755)
-    script = Path(tempfile.gettempdir()) / "ramscout_update.sh"
+    script = Path(tempfile.gettempdir()) / "roboscout_update.sh"
+    remove_old = f'rm -f "{exe}"' if target.resolve() != exe.resolve() else "true"
     script.write_text(
         "\n".join(
             [
                 "#!/bin/bash",
                 "sleep 2",
-                f'mv -f "{staging}" "{exe}"',
-                f'chmod +x "{exe}"',
-                f'"{exe}" >/dev/null 2>&1 &',
+                f'mv -f "{staging}" "{target}"',
+                f'chmod +x "{target}"',
+                remove_old,
+                f'"{target}" >/dev/null 2>&1 &',
                 f'rm -f "{script}"',
                 "",
             ]
@@ -800,11 +819,12 @@ def _apply_macos(package: Path) -> str:
 
 
 def _find_macos_binary(root: Path) -> Path | None:
-    candidates = sorted(root.rglob("RamScoutAI"))
-    for path in candidates:
-        if path.is_file() and os.access(path, os.X_OK):
-            return path
+    for name in (BINARY_NAME, LEGACY_BINARY_NAME):
+        candidates = sorted(root.rglob(name))
+        for path in candidates:
+            if path.is_file() and os.access(path, os.X_OK):
+                return path
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix == "" and "RamScout" in path.name:
+        if path.is_file() and path.suffix == "" and ("RoboScout" in path.name or "RamScout" in path.name):
             return path
     return None

@@ -40,7 +40,7 @@ def resolve_firstevents(hints: TitleHints, event_key: str | None = None) -> dict
         code = key[4:] if key.startswith(str(year)) else key
         url = f"https://frc-events.firstinspires.org/{year}/{code.upper()}/{path_level}/{hints.match_number}"
         try:
-            html = httpx.get(url, timeout=20.0, follow_redirects=True, headers={"User-Agent": "RamScoutAI/0.2"}).text
+            html = httpx.get(url, timeout=20.0, follow_redirects=True, headers={"User-Agent": "RoboScoutAI/0.2"}).text
         except Exception as exc:  # noqa: BLE001
             log.info("FIRST Events fetch failed for %s: %s", url, exc)
             continue

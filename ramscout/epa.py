@@ -14,7 +14,7 @@ STATBOTICS_BASE = "https://api.statbotics.io/v3"
 
 def fetch_team_epa(team: int, year: int = 2026, timeout: float = 12.0) -> dict[str, Any] | None:
     try:
-        with httpx.Client(timeout=timeout, headers={"User-Agent": "RamScoutAI/0.4"}) as client:
+        with httpx.Client(timeout=timeout, headers={"User-Agent": "RoboScoutAI/0.4"}) as client:
             response = client.get(f"{STATBOTICS_BASE}/team_year/{int(team)}/{int(year)}")
             if response.status_code == 404:
                 return None

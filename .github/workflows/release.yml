@@ -25,9 +25,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: RamScoutAI-windows-x64.exe
+            artifact: RoboScoutAI-windows-x64.exe
           - os: macos-14
-            artifact: RamScoutAI-macos-arm64.zip
+            artifact: RoboScoutAI-macos-arm64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -52,7 +52,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/release | Out-Null
-          Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
+          Copy-Item dist/RoboScoutAI.exe "dist/release/${{ matrix.artifact }}"
+          # Legacy filename so older RamScoutAI installs can still auto-update.
+          Copy-Item dist/RoboScoutAI.exe "dist/release/RamScoutAI-windows-x64.exe"
 
       - name: Sign Windows exe (optional)
         if: runner.os == 'Windows'
@@ -67,9 +69,10 @@ jobs:
           }
           $pfx = Join-Path $env:RUNNER_TEMP "ramscout-codesign.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
-          $exe = "dist/release/${{ matrix.artifact }}"
-          & signtool sign /fd SHA256 /f $pfx /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $exe
-          & signtool verify /pa $exe
+          Get-ChildItem dist/release/*.exe | ForEach-Object {
+            & signtool sign /fd SHA256 /f $pfx /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+            & signtool verify /pa $_.FullName
+          }
           Remove-Item $pfx -Force -ErrorAction SilentlyContinue
 
       - name: Sign & notarize macOS binary (optional)
@@ -102,16 +105,16 @@ jobs:
             echo "::error::No Developer ID Application identity found in imported certificate."
             exit 1
           fi
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RamScoutAI
-          codesign --verify --verbose=2 dist/RamScoutAI
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RoboScoutAI
+          codesign --verify --verbose=2 dist/RoboScoutAI
           if [[ -n "${MACOS_API_KEY_P8_BASE64:-}" && -n "${MACOS_API_KEY_ID:-}" && -n "${MACOS_API_ISSUER_ID:-}" ]]; then
             KEY_P8="$RUNNER_TEMP/AuthKey_${MACOS_API_KEY_ID}.p8"
             echo "$MACOS_API_KEY_P8_BASE64" | base64 --decode > "$KEY_P8"
-            ditto -c -k --keepParent dist/RamScoutAI "$RUNNER_TEMP/RamScoutAI-notarize.zip"
-            xcrun notarytool submit "$RUNNER_TEMP/RamScoutAI-notarize.zip" \
+            ditto -c -k --keepParent dist/RoboScoutAI "$RUNNER_TEMP/RoboScoutAI-notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/RoboScoutAI-notarize.zip" \
               --key "$KEY_P8" --key-id "$MACOS_API_KEY_ID" --issuer "$MACOS_API_ISSUER_ID" \
               --wait
-            xcrun stapler staple dist/RamScoutAI || true
+            xcrun stapler staple dist/RoboScoutAI || true
           else
             echo "::warning::Notarization secrets missing — binary is signed but not notarized."
           fi
@@ -124,14 +127,18 @@ jobs:
         run: |
           mkdir -p dist/release
           cd dist
+          chmod +x RoboScoutAI
+          zip -9 "release/${{ matrix.artifact }}" RoboScoutAI
+          # Legacy zip name + binary alias so older RamScoutAI updaters still match.
+          cp RoboScoutAI RamScoutAI
           chmod +x RamScoutAI
-          zip -9 "release/${{ matrix.artifact }}" RamScoutAI
+          zip -9 "release/RamScoutAI-macos-arm64.zip" RamScoutAI
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/release/${{ matrix.artifact }}
+          path: dist/release/
           if-no-files-found: error
 
   publish:
@@ -166,6 +173,9 @@ jobs:
           mkdir -p out
           find release-assets -type f -print -exec cp {} out/ \;
           ls -lah out
+          test -f out/RoboScoutAI-windows-x64.exe
+          test -f out/RoboScoutAI-macos-arm64.zip
+          # Legacy names for in-app updates from pre-rebrand installs.
           test -f out/RamScoutAI-windows-x64.exe
           test -f out/RamScoutAI-macos-arm64.zip
 
@@ -173,15 +183,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: RamScoutAI ${{ steps.meta.outputs.tag }}
+          name: RoboScoutAI ${{ steps.meta.outputs.tag }}
           draft: false
+          make_latest: true
           generate_release_notes: true
           files: out/*
           body: |
-            Desktop builds for RamScoutAI.
+            Desktop builds for **RoboScoutAI** (rebranded from RamScoutAI).
 
-            - **Windows:** download `RamScoutAI-windows-x64.exe` and run it
-            - **Mac (Apple Silicon):** download `RamScoutAI-macos-arm64.zip`, unzip, then run `./RamScoutAI`
+            - **Windows:** download `RoboScoutAI-windows-x64.exe` and run it
+            - **Mac (Apple Silicon):** download `RoboScoutAI-macos-arm64.zip`, unzip, then run `./RoboScoutAI`
+
+            Legacy `RamScoutAI-*` assets are also attached so older installs can auto-update.
 
             If SmartScreen / Gatekeeper warns, see `docs/SIGNING.md`. Signed builds ship when repo signing secrets are configured.
 

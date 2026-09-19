@@ -1,4 +1,4 @@
-# RamScoutAI desktop builds
+# RoboScoutAI desktop builds
 
 The packaged app opens in a **chrome-less window** (native WebView when available, otherwise Chrome/Edge `--app` mode). There is no browser URL bar. Pass `--browser` to the launcher if you want a normal tab instead.
 

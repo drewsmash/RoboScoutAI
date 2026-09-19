@@ -1,6 +1,6 @@
 # Potato mode — no-AI tracking fallback
 
-When YOLO is missing, API keys are unset, or the machine is underpowered, RamScoutAI
+When YOLO is missing, API keys are unset, or the machine is underpowered, RoboScoutAI
 still tracks robots with **dumb OpenCV** methods. Nothing downloads a model. Nothing
 calls the cloud.
 

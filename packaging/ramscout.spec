@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for RamScoutAI desktop builds (Windows .exe / macOS binary).
+"""PyInstaller spec for RoboScoutAI desktop builds (Windows .exe / macOS binary).
 
 Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
 YouTube ingest, and the git-remote in-app updater all work. Drop a robot .pt next to the
@@ -106,7 +106,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="RamScoutAI",
+    name="RoboScoutAI",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

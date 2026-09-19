@@ -44,7 +44,7 @@ def discover_gemini_models(api_key: str) -> list[str]:
     discovered: list[str] = []
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "RamScoutAI/0.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "RoboScoutAI/0.4"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         for row in payload.get("models") or []:

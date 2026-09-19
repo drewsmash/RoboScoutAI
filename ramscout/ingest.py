@@ -9,7 +9,7 @@ YouTube aggressively bot-checks datacenter IPs. This module tries a ladder:
 5. Optional auto-proxy ladder when ``YTDLP_AUTO_PROXY`` is enabled (default on)
 6. Local files / uploads (``file://`` / absolute paths) — always preferred when available
 
-Prefer running RamScoutAI on a residential network, or set cookies / a proxy.
+Prefer running RoboScoutAI on a residential network, or set cookies / a proxy.
 """
 
 from __future__ import annotations

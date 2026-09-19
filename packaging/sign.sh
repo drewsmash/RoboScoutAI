@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign RamScoutAI desktop artifacts.
+# Sign RoboScoutAI desktop artifacts.
 #
 # Real trust (no SmartScreen / Gatekeeper nag) needs a paid CA / Apple Developer ID.
 # This script also supports a LOCAL self-signed Windows Authenticode signature so the
@@ -10,8 +10,8 @@
 #   or WINDOWS_CERT_PFX_BASE64
 #
 # Usage:
-#   ./packaging/sign.sh path/to/RamScoutAI-windows-x64.exe
-#   ./packaging/sign.sh --self-sign path/to/RamScoutAI-windows-x64.exe
+#   ./packaging/sign.sh path/to/RoboScoutAI-windows-x64.exe
+#   ./packaging/sign.sh --self-sign path/to/RoboScoutAI-windows-x64.exe
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF_SIGN=0
@@ -53,8 +53,8 @@ sign_windows() {
   osslsigncode sign \
     -pkcs12 "$pfx" \
     -pass "$pass" \
-    -n "RamScoutAI" \
-    -i "https://github.com/drewsmash/RamScoutAI" \
+    -n "RoboScoutAI" \
+    -i "https://github.com/drewsmash/RoboScoutAI" \
     -t http://timestamp.digicert.com \
     -in "$exe" \
     -out "$out"
@@ -75,7 +75,7 @@ if [[ "$SELF_SIGN" -eq 1 || ( -z "${WINDOWS_CERT_PFX:-}" && -z "${WINDOWS_CERT_P
     openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
       -keyout "$CERT_DIR/ramscout-selfsigned.key" \
       -out "$CERT_DIR/ramscout-selfsigned.crt" \
-      -subj "/CN=RamScoutAI Local Dev/O=RamScoutAI/C=US" \
+      -subj "/CN=RoboScoutAI Local Dev/O=RoboScoutAI/C=US" \
       -addext "extendedKeyUsage=codeSigning"
     openssl pkcs12 -export \
       -out "$PFX" \

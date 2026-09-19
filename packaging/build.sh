@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build RamScoutAI desktop release artifacts on the CURRENT OS.
-# Run this on a Mac to produce RamScoutAI-macos-arm64.zip / macos-x64.zip.
-# Run on Windows (Git Bash / PowerShell) to produce RamScoutAI-windows-x64.exe.
+# Build RoboScoutAI desktop release artifacts on the CURRENT OS.
+# Run this on a Mac to produce RoboScoutAI-macos-arm64.zip / macos-x64.zip.
+# Run on Windows (Git Bash / PowerShell) to produce RoboScoutAI-windows-x64.exe.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -22,9 +22,9 @@ if [[ "$OS" == "darwin" ]]; then
   if [[ "$ARCH" == "x86_64" ]]; then KEY="macos-x64"; fi
   (
     cd dist
-    chmod +x RamScoutAI
+    chmod +x RoboScoutAI
     # Prefer a zip that expands to a runnable binary (same layout as CI releases)
-    zip -9 "release/RamScoutAI-${KEY}.zip" RamScoutAI
+    zip -9 "release/RoboScoutAI-${KEY}.zip" RoboScoutAI
   )
   echo ""
   echo "Built: dist/release/RamScoutAI-${KEY}.zip"

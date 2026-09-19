@@ -1,4 +1,4 @@
-"""Open RamScoutAI in a chrome-less desktop window (native app feel)."""
+"""Open RoboScoutAI in a chrome-less desktop window (native app feel)."""
 
 from __future__ import annotations
 
@@ -16,16 +16,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger("ramscout.desktop")
+log = logging.getLogger("roboscout.desktop")
 
-APP_TITLE = "RamScoutAI"
+APP_TITLE = "RoboScoutAI"
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 840
 
 
 def _chrome_user_data_dir() -> Path:
     """Isolated profile so --app stays its own process (not an existing Chrome session)."""
-    base = Path(tempfile.gettempdir()) / "ramscout-app-chrome"
+    base = Path(tempfile.gettempdir()) / "roboscout-app-chrome"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -115,14 +115,20 @@ def _should_try_pywebview() -> bool:
     """Frozen Windows + pywebview/pythonnet often dies with an uncatchable
     NullReferenceException on a .NET UI thread when setting window Text.
 
-    Skip pywebview in frozen Windows builds unless RAMSCOUT_FORCE_WEBVIEW=1.
+    Skip pywebview in frozen Windows builds unless ROBOSCOUT_FORCE_WEBVIEW=1
+    (or legacy RAMSCOUT_FORCE_WEBVIEW=1).
     """
-    force = (os.environ.get("RAMSCOUT_FORCE_WEBVIEW") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    force = (
+        (os.environ.get("ROBOSCOUT_FORCE_WEBVIEW") or os.environ.get("RAMSCOUT_FORCE_WEBVIEW") or "")
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
     if force:
         return True
     if sys.platform == "win32" and _is_frozen():
