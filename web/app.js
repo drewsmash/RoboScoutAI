@@ -1395,7 +1395,7 @@ async function initUpdater() {
         } else {
           cookiesEl.hidden = false;
           cookiesEl.textContent =
-            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\ / set YTDLP_COOKIES.";
+            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RoboScoutAI\\ / set YTDLP_COOKIES.";
         }
       }
     } catch (_err) {
@@ -1438,7 +1438,7 @@ async function initUpdater() {
         const body = update.body ? `\n${update.body}` : "";
         alert(
           update.message === "up to date" || !update.message
-            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
+            ? `RoboScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
             : `${update.message}${body}`
         );
       }

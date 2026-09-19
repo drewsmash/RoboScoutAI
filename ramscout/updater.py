@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 from ramscout import __version__
-from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO, LEGACY_APP_NAME, LEGACY_BINARY_NAME
+from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO
 from ramscout.paths import app_dir, data_dir, is_frozen
 
 log = logging.getLogger(__name__)
@@ -71,22 +71,12 @@ _ARTIFACT_REL_PATHS = (
     "release-artifacts/RoboScoutAI-macos-arm64.zip",
     "release-artifacts/RoboScoutAI-macos-x64.zip",
     "release-artifacts/RoboScoutAI-linux-x86_64.tar.gz",
-    "release-artifacts/RamScoutAI-windows-x64.exe",
-    "release-artifacts/RamScoutAI-windows-x64-signed.exe",
-    "release-artifacts/RamScoutAI-macos-arm64.zip",
-    "release-artifacts/RamScoutAI-macos-x64.zip",
-    "release-artifacts/RamScoutAI-linux-x86_64.tar.gz",
     "desktop-downloads/RoboScoutAI-windows-x64.exe",
-    "desktop-downloads/RamScoutAI-windows-x64.exe",
-    "desktop-downloads/RamScoutAI-windows-x64-signed.exe",
-    "desktop-downloads/RamScoutAI-macos-arm64.zip",
-    "desktop-downloads/RamScoutAI-macos-x64.zip",
-    "desktop-downloads/RamScoutAI-macos-arm64.7z",
-    "desktop-downloads/RamScoutAI-linux-x86_64.tar.gz",
+    "desktop-downloads/RoboScoutAI-macos-arm64.zip",
+    "desktop-downloads/RoboScoutAI-macos-x64.zip",
+    "desktop-downloads/RoboScoutAI-linux-x86_64.tar.gz",
     "dist/release/RoboScoutAI-windows-x64.exe",
-    "dist/release/RamScoutAI-windows-x64.exe",
     "dist/release/RoboScoutAI-macos-arm64.zip",
-    "dist/release/RamScoutAI-macos-arm64.zip",
 )
 
 
@@ -138,7 +128,7 @@ def github_repo() -> str:
     if path.count("/") >= 1:
         parts = path.split("/")
         return f"{parts[-2]}/{parts[-1]}"
-    return path or "drewsmash/RamScoutAI"
+    return path or "drewsmash/RoboScoutAI"
 
 
 def update_cache_dir() -> Path:
@@ -172,9 +162,9 @@ def platform_key() -> str:
 
 
 def preferred_asset_names() -> list[str]:
-    """Ordered candidates: new brand first, then legacy RamScoutAI names."""
+    """Ordered RoboScoutAI desktop artifact names for this platform."""
     key = platform_key()
-    brands = (BINARY_NAME, LEGACY_BINARY_NAME)
+    brands = (BINARY_NAME,)
     if key == "windows":
         names: list[str] = []
         for brand in brands:
@@ -297,7 +287,7 @@ def check_for_update(current: str | None = None, timeout: float = 60.0) -> Updat
         release_url=_browse_url(git_remote()),
     )
     if not shutil.which("git"):
-        info.error = "git is not installed, so RamScoutAI cannot check for updates from the remote."
+        info.error = f"git is not installed, so {APP_NAME} cannot check for updates from the remote."
         info.message = "git remote unreachable"
         return _store(info)
 
@@ -338,7 +328,7 @@ def apply_downloaded_update(package: Path) -> str:
     package = Path(package)
     root = source_git_root()
     if root is not None and package.resolve() == root.resolve():
-        return "Source tree updated from git. Restart RamScoutAI to load the new code."
+        return f"Source tree updated from git. Restart {APP_NAME} to load the new code."
 
     if not is_frozen():
         raise RuntimeError("Auto-apply of a binary package only works from the desktop build.")
@@ -996,9 +986,8 @@ def _windows_user_install_dir() -> Path:
 
 
 def _windows_install_target(exe: Path) -> Path:
-    """Prefer RoboScoutAI.exe when upgrading a legacy RamScoutAI.exe install."""
-    lower_name = exe.name.lower()
-    if LEGACY_BINARY_NAME.lower() in lower_name and BINARY_NAME.lower() not in lower_name:
+    """Install / refresh target as RoboScoutAI.exe next to the running binary."""
+    if exe.suffix.lower() == ".exe":
         return exe.with_name(f"{BINARY_NAME}.exe")
     return exe
 
@@ -1053,12 +1042,12 @@ def _apply_macos(package: Path) -> str:
 
 
 def _find_macos_binary(root: Path) -> Path | None:
-    for name in (BINARY_NAME, LEGACY_BINARY_NAME):
+    for name in (BINARY_NAME,):
         candidates = sorted(root.rglob(name))
         for path in candidates:
             if path.is_file() and os.access(path, os.X_OK):
                 return path
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix == "" and ("RoboScout" in path.name or "RamScout" in path.name):
+        if path.is_file() and path.suffix == "" and "RoboScout" in path.name:
             return path
     return None
