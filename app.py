@@ -162,23 +162,38 @@ def updates_download() -> dict:
     try:
         result = apply_update_now()
     except Exception as exc:  # noqa: BLE001
-        # Never leave the user stuck on WinError 5 — always offer the direct download.
+        # Last-resort manual fallback only — prefer newest release, never auto-open on success.
         from ramscout.updater import manual_download_url
 
         return {
             "ok": False,
             "open_url": manual_download_url(),
             "message": (
-                f"Auto-update failed ({exc}). "
-                "Opening the download page — save RoboScoutAI-windows-x64.exe and run it."
+                f"Git update failed ({exc}). "
+                "Open the newest RoboScoutAI-windows-x64.exe from Releases (or the local "
+                "update-cache) and run it — More info → Run anyway if SmartScreen blocks."
             ),
             "error": str(exc),
+            "restarting": False,
         }
-    update = result.get("update") or {}
-    if not result.get("ok"):
-        if not result.get("open_url") and update.get("release_url"):
-            result["open_url"] = update["release_url"]
+    # Successful git apply must never include open_url (UI would browser-download).
+    if result.get("ok"):
+        result.pop("open_url", None)
         return result
+    update = result.get("update") or {}
+    if not result.get("open_url"):
+        # Prefer a versioned/latest Releases link over a bare git browse URL.
+        from ramscout.updater import manual_download_url
+
+        latest = ""
+        if isinstance(update, dict):
+            latest = str(update.get("latest_version") or "")
+        asset = ""
+        if isinstance(update, dict):
+            asset = str(update.get("asset_name") or "")
+            if asset.startswith("git:"):
+                asset = ""
+        result["open_url"] = manual_download_url(version=latest, asset_name=asset)
     return result
 
 
