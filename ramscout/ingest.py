@@ -24,9 +24,11 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import httpx
 
+from ramscout.paths import app_dir, data_dir
 from ramscout.titles import extract_youtube_id
 
 log = logging.getLogger(__name__)
@@ -35,11 +37,13 @@ ProgressFn = Callable[[str, float], None]
 
 _BOT_HINT = (
     "YouTube blocked this download (bot check / sign-in required). "
-    "Fixes that usually work: run RamScoutAI on your own network, set "
-    "YTDLP_COOKIES to a Netscape cookies.txt from a signed-in browser, "
-    "set YTDLP_BROWSER=chrome (or edge/firefox) on a signed-in machine, "
-    "set YTDLP_PROXY to a residential HTTP proxy, or upload the match video file."
+    "Best fix: upload the MP4/MKV you already downloaded. "
+    "Or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\, "
+    "set YTDLP_COOKIES, use YTDLP_BROWSER=chrome|edge|firefox, "
+    "or set YTDLP_PROXY to a residential HTTP proxy."
 )
+
+_UPLOAD_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
 
 # Prefer clients that still work with guest sessions / PO tokens when not IP-blocked.
 _CLIENT_STRATEGIES: tuple[tuple[str, ...], ...] = (
@@ -242,11 +246,11 @@ def _download_via_cli(
         "mp4",
         url,
     ]
-    cookies = (os.environ.get("YTDLP_COOKIES") or "").strip()
-    if cookies and Path(cookies).is_file():
-        cmd[3:3] = ["--cookies", cookies]
+    cookie_file = resolve_cookies_path()
+    if cookie_file is not None:
+        cmd[3:3] = ["--cookies", str(cookie_file)]
     browser = (os.environ.get("YTDLP_BROWSER") or "").strip()
-    if browser and not (cookies and Path(cookies).is_file()):
+    if browser and cookie_file is None:
         cmd[3:3] = ["--cookies-from-browser", browser]
     if strategy.proxy:
         proxy = strategy.proxy if "://" in strategy.proxy else f"http://{strategy.proxy}"
@@ -297,9 +301,9 @@ def _download_via_auto_proxy(
         "mp4",
         url,
     ]
-    cookies = (os.environ.get("YTDLP_COOKIES") or "").strip()
-    if cookies and Path(cookies).is_file():
-        cmd[3:3] = ["--cookies", cookies]
+    cookie_file = resolve_cookies_path()
+    if cookie_file is not None:
+        cmd[3:3] = ["--cookies", str(cookie_file)]
     if on_progress:
         on_progress(f"Trying proxy {proxy}…", 8.0)
     try:
@@ -323,14 +327,75 @@ def _download_via_auto_proxy(
 
 def store_uploaded_video(upload_path: Path, dest_dir: Path, preferred_name: str | None = None) -> Path:
     """Move/copy an uploaded match video into the job folder."""
+    upload_path = Path(upload_path)
+    if not upload_path.is_file():
+        raise FileNotFoundError(
+            f"Uploaded video is missing: {upload_path}. "
+            "Re-select the MP4/MKV and try again."
+        )
+    if upload_path.stat().st_size <= 0:
+        raise ValueError("Uploaded video file is empty.")
     dest_dir.mkdir(parents=True, exist_ok=True)
     suffix = upload_path.suffix.lower() or ".mp4"
+    if suffix not in _UPLOAD_SUFFIXES:
+        suffix = ".mp4"
     name = preferred_name or upload_path.name or f"upload{suffix}"
-    if not Path(name).suffix:
-        name = f"{name}{suffix}"
-    target = dest_dir / Path(name).name
-    shutil.copy2(upload_path, target)
+    # Strip accidental UUID staging prefixes like "a1b2…_match.mp4".
+    clean = Path(name).name
+    if "_" in clean and len(clean.split("_", 1)[0]) == 32:
+        maybe = clean.split("_", 1)[1]
+        if maybe:
+            clean = maybe
+    if not Path(clean).suffix:
+        clean = f"{clean}{suffix}"
+    target = dest_dir / clean
+    if upload_path.resolve() != target.resolve():
+        shutil.copy2(upload_path, target)
     return target
+
+
+def resolve_cookies_path() -> Path | None:
+    """Locate Netscape cookies.txt for yt-dlp (env, app dir, or APPDATA)."""
+    env = (os.environ.get("YTDLP_COOKIES") or "").strip()
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.extend(
+        [
+            app_dir() / "cookies.txt",
+            data_dir().parent / "cookies.txt",
+            Path.home() / "RamScoutAI" / "cookies.txt",
+        ]
+    )
+    appdata = (os.environ.get("APPDATA") or "").strip()
+    if appdata:
+        candidates.append(Path(appdata) / "RamScoutAI" / "cookies.txt")
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        candidates.append(Path(xdg) / "RamScoutAI" / "cookies.txt")
+    else:
+        candidates.append(Path.home() / ".config" / "RamScoutAI" / "cookies.txt")
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def is_youtube_url(url: str) -> bool:
+    text = (url or "").strip().lower()
+    if not text or text.startswith("file://") or text.startswith("demo://"):
+        return False
+    if extract_youtube_id(url):
+        return True
+    return any(host in text for host in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
 
 
 def _iter_download_strategies(download: bool) -> Iterable[_Strategy]:
@@ -447,9 +512,9 @@ def _ytdlp_opts(
     if strategy.proxy:
         opts["proxy"] = strategy.proxy if "://" in strategy.proxy else f"http://{strategy.proxy}"
 
-    cookies = (os.environ.get("YTDLP_COOKIES") or "").strip()
-    if cookies and Path(cookies).is_file():
-        opts["cookiefile"] = cookies
+    cookie_file = resolve_cookies_path()
+    if cookie_file is not None:
+        opts["cookiefile"] = str(cookie_file)
     browser = (os.environ.get("YTDLP_BROWSER") or "").strip()
     if browser and "cookiefile" not in opts:
         opts["cookiesfrombrowser"] = (browser,)
@@ -543,11 +608,21 @@ def _as_local_path(url: str) -> Path | None:
         return None
     if text.startswith("file://"):
         parsed = urlparse(text)
-        path = Path(unquote(parsed.path))
-        return path if path.is_file() else None
-    path = Path(text)
-    if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".avi"}:
-        return path
+        # url2pathname handles Windows file:///C:/… → C:\…
+        raw = url2pathname(unquote(parsed.path or ""))
+        if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+            # UNC or host-qualified paths — uncommon for local uploads.
+            raw = f"//{parsed.netloc}{raw}"
+        path = Path(raw)
+        if path.is_file() and path.suffix.lower() in _UPLOAD_SUFFIXES:
+            return path
+        return None
+    path = Path(text).expanduser()
+    try:
+        if path.is_file() and path.suffix.lower() in _UPLOAD_SUFFIXES:
+            return path.resolve()
+    except OSError:
+        return None
     return None
 
 

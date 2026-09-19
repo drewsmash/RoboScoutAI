@@ -34,19 +34,27 @@ GitHub Actions (`.github/workflows/release.yml`) builds:
 - `RamScoutAI-macos-arm64.zip`
 - `RamScoutAI-macos-x64.zip`
 
-Publish the first downloadable builds by pushing a version tag (this creates the GitHub Release the in-app updater looks for):
+### In-app updater (git remote — not GitHub Releases)
 
-```bash
-git tag v0.4.2
-git push origin v0.4.2
-```
+RamScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
 
-Until that release exists, Check for updates will say the desktop files are not published yet — that is expected. The release uploads:
+| Mode | Behavior |
+| --- | --- |
+| Source (`.git` present) | `git fetch` → compare `HEAD` to `origin/<branch>` → pull / reset → restart hint |
+| Frozen EXE | Shallow clone/fetch into an update cache → look for tracked binaries under `desktop-downloads/` → replace EXE and relaunch |
 
-- `RamScoutAI-windows-x64.exe`
-- `RamScoutAI-macos-arm64.zip` (Apple Silicon Macs)
+Config:
 
-The desktop UI shows the current version and an **Update** chip when a newer GitHub Release exists. Frozen builds can download and relaunch automatically; source installs open the release page (or use `git pull`).
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RamScoutAI.git` | Git remote URL |
+| `RAMSCOUT_GIT_BRANCH` | `main` | Branch to track |
+| `RAMSCOUT_UPDATE_CACHE` | appdata / `.ramscout-update-cache` | Mirror + package cache |
+| `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` | — | Optional HTTPS auth for private remotes |
+
+UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available from git*, or *git remote unreachable*.
+
+For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RamScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
 
 Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
 
@@ -96,9 +104,9 @@ Optional env vars:
 - `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
 - `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
 
-Because this repository is private, open the release while signed into GitHub to download:
+Because this repository is private, open the release while signed into GitHub to download, or set `RAMSCOUT_GITHUB_TOKEN` for in-app updates:
 
-https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.2
+https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.3
 
 
 Click **Try a sample match** to explore the UI without a download.
@@ -120,11 +128,13 @@ Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not 
 Also supported:
 
 - `YTDLP_COOKIES=/path/to/cookies.txt` — Netscape cookies from a signed-in browser  
+- Desktop auto-discovery (no env required): `cookies.txt` next to the EXE, `%APPDATA%\RamScoutAI\cookies.txt`, or `~/RamScoutAI/cookies.txt`  
+- Export with a browser extension such as **Get cookies.txt LOCALLY**, then drop the file in one of those locations  
 - `YTDLP_BROWSER=chrome` (or `edge` / `firefox`) — cookies-from-browser on a signed-in machine  
 - `YTDLP_FORMAT=…` — override the format selector  
 - `YTDLP_AUTO_PROXY=0` — disable the public-proxy ladder  
 
-Title metadata still loads via oEmbed when the file download is blocked.
+**Upload a local MP4/MKV** in the UI whenever YouTube blocks — that path never goes through yt-dlp.
 
 ### Tracking modes
 

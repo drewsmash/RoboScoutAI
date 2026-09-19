@@ -1,55 +1,275 @@
-from ramscout.updater import check_for_update, is_newer, normalize_version, preferred_asset_names, version_tuple
+from pathlib import Path
+
+import pytest
+
+from ramscout import updater
 
 
 def test_normalize_version_strips_v_prefix():
-    assert normalize_version("v1.2.3") == "1.2.3"
-    assert normalize_version("0.4.0") == "0.4.0"
+    assert updater.normalize_version("v1.2.3") == "1.2.3"
+    assert updater.normalize_version("0.4.0") == "0.4.0"
 
 
 def test_is_newer_compares_semver_ish():
-    assert is_newer("0.4.1", "0.4.0")
-    assert is_newer("1.0.0", "0.9.9")
-    assert not is_newer("0.4.0", "0.4.0")
-    assert not is_newer("0.3.9", "0.4.0")
+    assert updater.is_newer("0.4.1", "0.4.0")
+    assert updater.is_newer("1.0.0", "0.9.9")
+    assert not updater.is_newer("0.4.0", "0.4.0")
+    assert not updater.is_newer("0.3.9", "0.4.0")
 
 
 def test_version_tuple_ignores_junk():
-    assert version_tuple("v0.4.0-beta") == (0, 4, 0)
+    assert updater.version_tuple("v0.4.0-beta") == (0, 4, 0)
 
 
 def test_preferred_assets_include_windows_or_mac(monkeypatch):
-    monkeypatch.setattr("ramscout.updater.platform_key", lambda: "windows")
-    assert "RamScoutAI-windows-x64.exe" in preferred_asset_names()
-    monkeypatch.setattr("ramscout.updater.platform_key", lambda: "macos-arm64")
-    assert "RamScoutAI-macos-arm64.zip" in preferred_asset_names()
+    monkeypatch.setattr(updater, "platform_key", lambda: "windows")
+    assert "RamScoutAI-windows-x64.exe" in updater.preferred_asset_names()
+    monkeypatch.setattr(updater, "platform_key", lambda: "macos-arm64")
+    assert "RamScoutAI-macos-arm64.zip" in updater.preferred_asset_names()
 
 
-def test_missing_release_explains_next_step(monkeypatch):
-    class FakeResp:
-        status_code = 404
+def test_git_remote_env_and_legacy_repo(monkeypatch):
+    monkeypatch.setenv("RAMSCOUT_GIT_REMOTE", "https://example.com/ram.git")
+    monkeypatch.delenv("RAMSCOUT_GITHUB_REPO", raising=False)
+    assert updater.git_remote() == "https://example.com/ram.git"
+    monkeypatch.delenv("RAMSCOUT_GIT_REMOTE", raising=False)
+    monkeypatch.setenv("RAMSCOUT_GITHUB_REPO", "acme/RamScoutAI")
+    assert updater.git_remote().endswith("acme/RamScoutAI.git")
 
-        def raise_for_status(self):
-            return None
 
-        def json(self):
-            return {}
+def test_check_source_up_to_date(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").mkdir()
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return "abc123"
+        if args[:2] == ["rev-parse", "origin/main"]:
+            return "abc123"
+        if args[0] == "fetch":
+            return ""
+        if args[0] == "remote":
+            return ""
+        if args[0] == "show":
+            return '__version__ = "0.4.2"\n'
+        return ""
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url):
-            return FakeResp()
-
-    monkeypatch.setattr("ramscout.updater.httpx.Client", FakeClient)
-    monkeypatch.setattr("ramscout.updater.github_token", lambda: "")
-    info = check_for_update("0.4.0")
+    monkeypatch.setattr(updater, "source_git_root", lambda: root)
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.2")
     assert info.available is False
-    assert "private" in (info.error or "").lower() or "releases" in (info.error or "").lower()
-    assert "releases" in (info.release_url or "")
+    assert info.message == "up to date"
+    assert info.mode == "source"
+    assert info.local_sha == "abc123"
+
+
+def test_check_source_update_available(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").mkdir()
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return "aaa111"
+        if args[:2] == ["rev-parse", "origin/main"]:
+            return "bbb222"
+        if args[0] == "fetch":
+            return ""
+        if args[0] == "remote":
+            return ""
+        if args[0] == "show":
+            return '__version__ = "0.4.3"\n'
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: root)
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.2")
+    assert info.available is True
+    assert info.message == "update available from git"
+    assert info.can_apply is True
+    assert info.remote_sha == "bbb222"
+    assert "api.github.com" not in (info.error or "")
+    assert "releases" not in (info.release_url or "").lower() or "github.com" in info.release_url
+
+
+def test_check_git_remote_unreachable(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").mkdir()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("could not resolve host")
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: root)
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    monkeypatch.setattr(updater, "_run_git", boom)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.2")
+    assert info.available is False
+    assert "git remote unreachable" in (info.error or "").lower()
+    assert info.message == "git remote unreachable"
+
+
+def test_frozen_update_finds_artifact(monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    mirror = cache / "mirror"
+    mirror.mkdir(parents=True)
+    (mirror / ".git").mkdir()
+    artifact_dir = mirror / "desktop-downloads"
+    artifact_dir.mkdir()
+    exe = artifact_dir / "RamScoutAI-windows-x64.exe"
+    exe.write_bytes(b"MZ-fake")
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:1] == ["rev-parse"]:
+            return "ccc333"
+        if args[0] == "fetch":
+            return ""
+        if args[0] == "remote":
+            return ""
+        if args[0] == "show":
+            return '__version__ = "0.4.9"\n'
+        if args[0] == "ls-tree":
+            return "desktop-downloads/RamScoutAI-windows-x64.exe"
+        if args[0] == "cat-file":
+            return ""
+        if args[0] == "clone":
+            return ""
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: None)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: cache)
+    monkeypatch.setattr(updater, "platform_key", lambda: "windows")
+    monkeypatch.setattr(updater, "_read_installed_sha", lambda: "oldsha")
+    monkeypatch.setattr(updater, "_ensure_mirror", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.2")
+    assert info.available is True
+    assert info.mode == "frozen"
+    assert info.message == "update available from git"
+    assert info.asset_name == "RamScoutAI-windows-x64.exe"
+    assert info.asset_url.startswith("git:")
+
+
+def test_no_releases_api_usage():
+    source = Path(updater.__file__).read_text(encoding="utf-8")
+    assert "api.github.com" not in source
+    assert "/releases" not in source or "GitHub Releases" not in source
+    assert "RAMSCOUT_GIT_REMOTE" in source
+    assert "release-artifacts/" in source
+
+
+def test_artifact_paths_prefer_release_artifacts():
+    names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
+    assert "RamScoutAI-windows-x64.exe" in names
+    assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
+
+
+def test_classify_rejects_downgrade():
+    assert (
+        updater.classify_update(
+            current_version="0.4.4",
+            remote_version="0.4.2",
+            local_sha="",
+            remote_sha="bbbbbbb",
+        )
+        == "ahead"
+    )
+    assert (
+        updater.classify_update(
+            current_version="0.4.4",
+            remote_version="0.4.4",
+            local_sha="",
+            remote_sha="bbbbbbb",
+        )
+        == "up_to_date"
+    )
+    assert (
+        updater.classify_update(
+            current_version="0.4.2",
+            remote_version="0.4.4",
+            local_sha="old",
+            remote_sha="new",
+        )
+        == "available"
+    )
+
+
+def test_frozen_does_not_offer_older_main(monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    mirror = cache / "mirror"
+    mirror.mkdir(parents=True)
+    (mirror / ".git").mkdir()
+    written = {}
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:1] == ["rev-parse"]:
+            return "mainsha0"
+        if args[0] == "show":
+            return '__version__ = "0.4.2"\n'
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: None)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: cache)
+    monkeypatch.setattr(updater, "_read_installed_sha", lambda: "")
+    monkeypatch.setattr(updater, "_write_installed_sha", lambda sha: written.setdefault("sha", sha))
+    monkeypatch.setattr(updater, "_ensure_mirror", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.4")
+    assert info.available is False
+    assert info.message == "up to date"
+    assert info.can_apply is False
+    assert info.latest_version == "0.4.2"
+    assert written.get("sha") == "mainsha0"
+
+
+def test_frozen_no_binary_not_nagging(monkeypatch, tmp_path):
+    cache = tmp_path / "cache"
+    mirror = cache / "mirror"
+    mirror.mkdir(parents=True)
+    (mirror / ".git").mkdir()
+
+    def fake_git(args, *, cwd=None, timeout=60.0, check=True, env=None):
+        if args[:1] == ["rev-parse"]:
+            return "newsha99"
+        if args[0] == "show":
+            return '__version__ = "0.4.5"\n'
+        if args[0] == "ls-tree":
+            return ""
+        if args[0] == "cat-file":
+            raise RuntimeError("missing")
+        return ""
+
+    monkeypatch.setattr(updater, "source_git_root", lambda: None)
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: cache)
+    monkeypatch.setattr(updater, "platform_key", lambda: "windows")
+    monkeypatch.setattr(updater, "_read_installed_sha", lambda: "oldsha")
+    monkeypatch.setattr(updater, "_ensure_mirror", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_find_remote_artifact", lambda *a, **k: None)
+    monkeypatch.setattr(updater, "_run_git", fake_git)
+    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: "/usr/bin/git")
+    info = updater.check_for_update("0.4.4")
+    assert info.available is False
+    assert info.can_apply is False
+    assert "release-artifacts" in (info.error or "")
+
+
+def test_git_branch_bundled_channel(monkeypatch, tmp_path):
+    channel = tmp_path / "update-channel.txt"
+    channel.write_text("cursor/feature-e0ef\n", encoding="utf-8")
+    monkeypatch.delenv("RAMSCOUT_GIT_BRANCH", raising=False)
+    monkeypatch.setattr(updater, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr("ramscout.paths.bundle_root", lambda: tmp_path / "missing")
+    assert updater.git_branch() == "cursor/feature-e0ef"
+    monkeypatch.setenv("RAMSCOUT_GIT_BRANCH", "main")
+    assert updater.git_branch() == "main"

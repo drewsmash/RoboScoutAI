@@ -20,7 +20,12 @@ from ramscout.firstevents import resolve_firstevents
 from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import assign_by_start, keep_top_tracks, majority_alliance, stitch_occlusions
-from ramscout.ingest import download_video, fetch_video_info, store_uploaded_video
+from ramscout.ingest import (
+    download_video,
+    fetch_video_info,
+    is_youtube_url,
+    store_uploaded_video,
+)
 from ramscout.paths import jobs_dir, models_dirs
 from ramscout.simulate import DEMO_MATCH, DEMO_VIDEO, demo_tracks
 from ramscout.tba import TBAClient, TBAError, enrich_match, resolve_match
@@ -78,6 +83,7 @@ class Job:
     camera: dict[str, Any] = field(default_factory=dict)
     auto_multicam: bool = True
     edited_events: bool = False
+    media_source: str = "youtube"  # upload | youtube | demo
 
     def public(self) -> dict[str, Any]:
         return {
@@ -114,6 +120,7 @@ class Job:
             "camera": self.camera,
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
+            "media_source": self.media_source,
         }
 
 
@@ -208,8 +215,16 @@ def start_job(
     )
     if local_video:
         dest = DATA / job.id
-        stored = store_uploaded_video(Path(local_video), dest)
-        STORE.update(job, video_path=str(stored))
+        source = Path(local_video)
+        preferred = source.name
+        stored = store_uploaded_video(source, dest, preferred_name=preferred)
+        # Retarget URL away from ephemeral upload temps so metadata never hits a deleted path.
+        meta_url = job.url
+        if not is_youtube_url(meta_url):
+            meta_url = str(stored.resolve())
+        STORE.update(job, video_path=str(stored), url=meta_url, media_source="upload")
+    elif demo:
+        STORE.update(job, media_source="demo")
     thread = threading.Thread(target=_run_job, args=(job.id,), daemon=True)
     thread.start()
     return job
@@ -267,15 +282,40 @@ def _run_demo(job: Job) -> None:
 
 
 def _run_real(job: Job) -> None:
-    STORE.set_progress(job, "resolving", "Reading YouTube metadata…", 8)
-    info = fetch_video_info(job.url)
+    local_ready = bool(job.video_path and Path(job.video_path).is_file())
+    if local_ready:
+        STORE.set_progress(job, "resolving", "Reading uploaded match video…", 8)
+    else:
+        STORE.set_progress(job, "resolving", "Reading YouTube metadata…", 8)
+
+    info: dict[str, Any]
+    if local_ready and not is_youtube_url(job.url):
+        info = fetch_video_info(str(Path(job.video_path).resolve()))
+    elif local_ready and is_youtube_url(job.url):
+        # Upload + optional YouTube URL for title/teams — never fail the job on YT metadata.
+        try:
+            info = fetch_video_info(job.url)
+            if info.get("warning"):
+                info = dict(info)
+                info["warning"] = (
+                    "YouTube metadata used a fallback. Analyzing the uploaded VOD."
+                )
+        except Exception as exc:  # noqa: BLE001
+            info = fetch_video_info(str(Path(job.video_path).resolve()))
+            info = dict(info)
+            info["warning"] = (
+                f"YouTube metadata unavailable ({exc}). Analyzing the uploaded VOD."
+            )
+    else:
+        info = fetch_video_info(job.url)
+
     STORE.update(job, video_info=info)
     if info.get("warning"):
         warning = str(info["warning"])
-        if job.video_path and Path(job.video_path).is_file():
+        if local_ready and "uploaded" not in warning.lower():
             warning = "YouTube metadata used oEmbed fallback (player API blocked). Analyzing the uploaded VOD."
         job.warnings.append(warning)
-    if info.get("is_live"):
+    if info.get("is_live") and not local_ready:
         raise RuntimeError("This looks like a live stream. Paste a recorded match video instead.")
 
     hints = parse_match_title(info.get("title") or "", job.url)
@@ -353,6 +393,11 @@ def _run_real(job: Job) -> None:
     if job.video_path and Path(job.video_path).is_file():
         STORE.set_progress(job, "downloading", "Using uploaded match video…", 45)
         video_path = Path(job.video_path)
+    elif job.video_path:
+        raise RuntimeError(
+            f"Uploaded video is missing on disk ({job.video_path}). "
+            "Re-upload the MP4/MKV and try again."
+        )
     else:
         STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
 

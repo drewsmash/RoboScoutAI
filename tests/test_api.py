@@ -73,10 +73,9 @@ def test_analyze_requires_url():
 
 
 def test_upload_job_accepts_local_video(tmp_path):
-    # Tiny non-media payload is enough to exercise the upload route; the job will
-    # later fail OpenCV decode, which still proves multipart ingest works.
+    # Payload must clear the empty-file guard (>= 1 KiB); OpenCV may still fail later.
     video = tmp_path / "match.mp4"
-    video.write_bytes(b"not-a-real-mp4")
+    video.write_bytes(b"not-a-real-mp4" + b"\x00" * 2048)
     with video.open("rb") as fh:
         res = client.post(
             "/api/jobs/upload",
@@ -90,7 +89,35 @@ def test_upload_job_accepts_local_video(tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["id"]
-    assert body["status"] in {"queued", "resolving", "downloading", "error", "ready"}
+    assert body["has_video"] is True
+    assert body["status"] in {"queued", "resolving", "downloading", "tracking", "error", "ready"}
+    # Upload path must not surface as a YouTube bot-block error on create.
+    assert "bot" not in (body.get("error") or "").lower()
+    assert "sign in" not in (body.get("error") or "").lower()
+
+
+def test_upload_rejects_tiny_file(tmp_path):
+    video = tmp_path / "empty.mp4"
+    video.write_bytes(b"tiny")
+    with video.open("rb") as fh:
+        res = client.post(
+            "/api/jobs/upload",
+            data={"crop_top": "0.10", "crop_bottom": "0.65"},
+            files={"file": ("empty.mp4", fh, "video/mp4")},
+        )
+    assert res.status_code == 400
+    detail = str(res.json().get("detail") or "").lower()
+    assert "small" in detail or "empty" in detail
+
+
+def test_version_exposes_git_remote_and_cookies():
+    res = client.get("/api/version")
+    assert res.status_code == 200
+    body = res.json()
+    assert body.get("git_remote")
+    assert body.get("git_branch")
+    assert "cookies" in body
+    assert "found" in body["cookies"]
 
 
 def test_crop_bottom_must_exceed_top():

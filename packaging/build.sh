@@ -28,17 +28,19 @@ if [[ "$OS" == "darwin" ]]; then
   )
   echo ""
   echo "Built: dist/release/RamScoutAI-${KEY}.zip"
-  echo "Upload that zip to your GitHub Release."
+  echo "Commit under release-artifacts/ for the git updater, or distribute directly."
   echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RamScoutAI && chmod +x ./RamScoutAI"
 elif [[ "$OS" == linux* ]]; then
   tar -C dist -czf "dist/release/RamScoutAI-linux-${ARCH}.tar.gz" RamScoutAI
   echo "Built: dist/release/RamScoutAI-linux-${ARCH}.tar.gz"
+  echo "Copy to release-artifacts/ and commit for the git updater."
 else
   # Windows / Git Bash / MSYS
   if [[ -f dist/RamScoutAI.exe ]]; then
     cp dist/RamScoutAI.exe "dist/release/RamScoutAI-windows-x64.exe"
     echo "Built: dist/release/RamScoutAI-windows-x64.exe"
+    echo "Copy to release-artifacts/ and commit for the git updater."
   else
-    echo "Built dist/RamScoutAI — rename to RamScoutAI-windows-x64.exe for the release."
+    echo "Built dist/RamScoutAI — rename to RamScoutAI-windows-x64.exe for release-artifacts/."
   fi
 fi

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import re
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from pydantic import BaseModel, Field
 from ramscout import __version__
 from ramscout.detect import TRACKER_MODES, list_strategies
 from ramscout.gameconfig import public_game
-from ramscout.paths import is_frozen, web_dir
+from ramscout.ingest import is_youtube_url, resolve_cookies_path
+from ramscout.paths import is_frozen, jobs_dir, web_dir
 from ramscout.picklist import (
     aggregate_cards,
     alliance_summary,
@@ -33,10 +35,10 @@ from ramscout.pipeline import (
     start_job,
 )
 from ramscout.updater import (
-    UpdateInfo,
-    apply_downloaded_update,
+    apply_update_now,
     check_for_update,
-    download_update,
+    git_branch,
+    git_remote,
     github_repo,
     last_check,
     platform_key,
@@ -44,6 +46,15 @@ from ramscout.updater import (
 
 WEB = web_dir()
 _UPLOAD_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+_SAFE_UPLOAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_upload_name(filename: str | None, suffix: str) -> str:
+    raw = Path(filename or f"upload{suffix}").name
+    cleaned = _SAFE_UPLOAD_NAME.sub("_", raw).strip("._") or f"upload{suffix}"
+    if not Path(cleaned).suffix:
+        cleaned = f"{cleaned}{suffix}"
+    return cleaned
 
 
 @asynccontextmanager
@@ -123,12 +134,19 @@ def health() -> dict[str, str]:
 @app.get("/api/version")
 def version() -> dict:
     cached = last_check()
+    cookies = resolve_cookies_path()
     return {
         "version": __version__,
         "frozen": is_frozen(),
         "platform": platform_key(),
         "repo": github_repo(),
+        "git_remote": git_remote(),
+        "git_branch": git_branch(),
         "update": cached,
+        "cookies": {
+            "found": cookies is not None,
+            "path": str(cookies) if cookies else None,
+        },
     }
 
 
@@ -139,29 +157,15 @@ def updates_check() -> dict:
 
 @app.post("/api/updates/download")
 def updates_download() -> dict:
-    info = UpdateInfo(**(last_check() or check_for_update().as_dict()))
-    if not info.available:
-        raise HTTPException(400, info.error or "No update available.")
-    if not info.asset_url:
-        return {
-            "ok": False,
-            "open_url": info.release_url,
-            "message": "Open the GitHub release page to download this update.",
-            "update": info.as_dict(),
-        }
-    if not is_frozen():
-        return {
-            "ok": False,
-            "open_url": info.release_url,
-            "message": "Source installs update with git pull. Desktop builds can auto-apply.",
-            "update": info.as_dict(),
-        }
+    """Fetch and apply an update from the configured git remote."""
     try:
-        package = download_update(info)
-        message = apply_downloaded_update(package)
+        result = apply_update_now()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, str(exc)) from exc
-    return {"ok": True, "message": message, "update": info.as_dict(), "restarting": True}
+    update = result.get("update") or {}
+    if not result.get("ok") and update.get("available"):
+        raise HTTPException(400, result.get("message") or "Update failed.")
+    return result
 
 
 @app.get("/api/game")
@@ -240,15 +244,28 @@ async def create_job_upload(
     if suffix not in _UPLOAD_SUFFIXES:
         raise HTTPException(400, "Upload an mp4/mkv/webm/mov match video.")
     top, bottom = _normalize_crop(crop_top, crop_bottom)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp_path = Path(tmp.name)
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            tmp.write(chunk)
-    meta_url = (url or "").strip() or f"file://{tmp_path}"
+
+    staging = jobs_dir() / "_uploads"
+    staging.mkdir(parents=True, exist_ok=True)
+    safe_name = _safe_upload_name(file.filename, suffix)
+    tmp_path = staging / f"{uuid.uuid4().hex}_{safe_name}"
+    size = 0
     try:
+        with tmp_path.open("wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                fh.write(chunk)
+        if size < 1024:
+            raise HTTPException(
+                400,
+                "Uploaded file is empty or too small. Choose a real MP4/MKV match VOD.",
+            )
+        yt_url = (url or "").strip()
+        # Prefer YouTube URL only for metadata; local file is the media source.
+        meta_url = yt_url if is_youtube_url(yt_url) else str(tmp_path.resolve())
         job = start_job(
             url=meta_url,
             tba_key=(tba_key or "").strip() or os.environ.get("TBA_AUTH_KEY", ""),
@@ -264,7 +281,14 @@ async def create_job_upload(
             or os.environ.get("GEMINI_API_KEY", ""),
             auto_multicam=bool(auto_multicam),
         )
-    finally:
+    except HTTPException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    else:
+        # start_job copies into the job folder synchronously; staging file can go.
         try:
             tmp_path.unlink(missing_ok=True)
         except OSError:
