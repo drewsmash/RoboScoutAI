@@ -123,12 +123,24 @@ def test_check_for_update_uses_newest_semver(monkeypatch):
             return FakeResp()
 
     monkeypatch.setattr("ramscout.updater.httpx.Client", FakeClient)
-    monkeypatch.setattr("ramscout.updater.github_token", lambda: "")
+    monkeypatch.setattr("ramscout.updater.github_token", lambda: "tok")
     monkeypatch.setattr("ramscout.updater.platform_key", lambda: "windows")
     info = check_for_update("0.4.0")
     assert info.available is True
     assert info.latest_version == "0.4.2"
+    # Prefer browser CDN URL even when a token exists (avoids API 403 / Access Denied).
     assert info.asset_url.endswith("new.exe")
+    assert "api.example" not in info.asset_url
+
+
+def test_update_cache_dir_is_under_user_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROBOSCOUT_DATA", str(tmp_path / "root"))
+    from ramscout.paths import update_cache_dir, user_data_root
+
+    root = user_data_root()
+    cache = update_cache_dir()
+    assert cache == root / "updates"
+    assert cache.is_dir()
 
 
 def test_windows_install_target_rebrands_legacy():

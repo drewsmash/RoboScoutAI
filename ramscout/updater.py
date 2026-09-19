@@ -25,7 +25,7 @@ import httpx
 
 from ramscout import __version__
 from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO, LEGACY_APP_NAME, LEGACY_BINARY_NAME
-from ramscout.paths import app_dir, is_frozen
+from ramscout.paths import app_dir, is_frozen, update_cache_dir, user_data_root
 
 log = logging.getLogger(__name__)
 
@@ -215,11 +215,16 @@ def check_for_update(current: str | None = None, timeout: float = 15.0) -> Updat
 
     info.available = True
     info.asset_name = asset.get("name") or ""
-    # Private repos need the API asset URL + token; public repos can use the browser URL.
-    if github_token() and asset.get("url"):
-        info.asset_url = str(asset.get("url"))
+    # Prefer browser CDN URL so public downloads work without a token.
+    # API asset URLs require Authorization and are easy to get Access Denied / 403.
+    browser = str(asset.get("browser_download_url") or "").strip()
+    api_url = str(asset.get("url") or "").strip()
+    if browser:
+        info.asset_url = browser
+    elif github_token() and api_url:
+        info.asset_url = api_url
     else:
-        info.asset_url = str(asset.get("browser_download_url") or asset.get("url") or "")
+        info.asset_url = api_url
     return _store(info)
 
 
@@ -233,15 +238,43 @@ def download_update(info: UpdateInfo | None = None, dest_dir: Path | None = None
     update = info or UpdateInfo(**(last_check() or {}))
     if not update.available or not update.asset_url:
         raise RuntimeError(update.error or "No update asset is available to download.")
-    target_dir = dest_dir or (app_dir() / "updates")
+    # Never download next to a Program Files install — that causes Access Denied.
+    target_dir = dest_dir or update_cache_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     dest = target_dir / (update.asset_name or f"{BINARY_NAME}-update.bin")
+    # Prefer the browser CDN URL for public repos (API asset URLs need a token).
+    url = update.asset_url
     headers = _api_headers(__version__, download=True)
-    with httpx.stream("GET", update.asset_url, headers=headers, follow_redirects=True, timeout=120.0) as res:
-        res.raise_for_status()
-        with dest.open("wb") as fh:
-            for chunk in res.iter_bytes(1024 * 256):
-                fh.write(chunk)
+    # browser_download_url does not want the GitHub API Accept header.
+    if "api.github.com" not in url:
+        headers = {
+            "User-Agent": f"{APP_NAME}/{__version__}",
+            "Accept": "*/*",
+        }
+        token = github_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    try:
+        with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=180.0) as res:
+            if res.status_code in {401, 403}:
+                raise RuntimeError(
+                    "GitHub denied the download (private release or missing token). "
+                    f"Open {update.release_url} while signed in, or set ROBOSCOUT_GITHUB_TOKEN."
+                )
+            res.raise_for_status()
+            with dest.open("wb") as fh:
+                for chunk in res.iter_bytes(1024 * 256):
+                    fh.write(chunk)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Access denied writing the update file to {dest}. "
+            f"Download manually from {update.release_url}"
+        ) from exc
+    if not dest.is_file() or dest.stat().st_size < 1_000_000:
+        raise RuntimeError(
+            f"Download looks incomplete ({dest.stat().st_size if dest.is_file() else 0} bytes). "
+            f"Try again or download from {update.release_url}"
+        )
     return dest
 
 
@@ -313,28 +346,63 @@ def _store(info: UpdateInfo) -> UpdateInfo:
 
 
 def _apply_windows(package: Path) -> str:
+    """Install into %LOCALAPPDATA%\\RoboScoutAI so Program Files Access Denied is avoided.
+
+    Waits for this process PID to exit before copying, then relaunches.
+    """
     exe = Path(sys.executable).resolve()
-    target = _windows_install_target(exe)
-    staging = target.with_suffix(target.suffix + ".new")
-    shutil.copy2(package, staging)
+    pid = os.getpid()
+    install_dir = user_data_root()
+    install_dir.mkdir(parents=True, exist_ok=True)
+    target = install_dir / f"{BINARY_NAME}.exe"
+
+    # Also try to refresh the original location when it is writable (portable installs).
+    portable_target = _windows_install_target(exe)
     script = Path(tempfile.gettempdir()) / "roboscout_update.bat"
+    src = str(package.resolve())
+    dst = str(target.resolve())
+    portable = str(portable_target.resolve())
     lines = [
         "@echo off",
-        "timeout /t 2 /nobreak >nul",
-        f'move /Y "{staging}" "{target}"',
+        "setlocal",
+        f"set PID={pid}",
+        f'set SRC={src}',
+        f'set DST={dst}',
+        f'set PORTABLE={portable}',
+        ":waitloop",
+        'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
+        "if not errorlevel 1 (",
+        "  timeout /t 1 /nobreak >nul",
+        "  goto waitloop",
+        ")",
+        f'if not exist "{install_dir}" mkdir "{install_dir}"',
+        'copy /Y "%SRC%" "%DST%" >nul',
+        "if errorlevel 1 (",
+        f'  echo Failed to copy update into {install_dir}',
+        "  exit /b 1",
+        ")",
+        # Best-effort refresh of the original exe when the folder is writable.
+        'if /I not "%PORTABLE%"=="%DST%" (',
+        '  copy /Y "%SRC%" "%PORTABLE%" >nul 2>nul',
+        ")",
+        'start "" "%DST%"',
+        'del "%~f0" >nul 2>nul',
+        "endlocal",
+        "",
     ]
-    if target.resolve() != exe.resolve():
-        lines.append(f'del /F /Q "{exe}"')
-    lines.extend(
-        [
-            f'start "" "{target}"',
-            'del "%~f0"',
-            "",
-        ]
-    )
     script.write_text("\r\n".join(lines), encoding="utf-8")
-    subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
-    return f"Update staged. {APP_NAME} will restart momentarily."
+    subprocess.Popen(["cmd", "/c", str(script)], close_fds=True, creationflags=_windows_detach_flags())
+    # Unlock the running binary so the bat can finish after we return the HTTP response.
+    threading.Timer(0.75, lambda: os._exit(0)).start()
+    return (
+        f"Update downloaded. {APP_NAME} will restart from "
+        f"%LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe"
+    )
+
+
+def _windows_detach_flags() -> int:
+    # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS — keep bat alive after we exit.
+    return 0x00000200 | 0x00000008
 
 
 def _windows_install_target(exe: Path) -> Path:
@@ -351,14 +419,13 @@ def _apply_macos(package: Path) -> str:
     suffix = package.suffix.lower()
     if suffix in {".zip", ".7z"}:
         if suffix == ".7z":
-            # Prefer 7z CLI when present; zipfile cannot read 7z.
             seven = shutil.which("7z") or shutil.which("7zz")
             if seven:
                 subprocess.run([seven, "x", str(package), f"-o{extract_dir}", "-y"], check=True)
             else:
                 raise RuntimeError(
                     "macOS update is a .7z archive but 7z is not installed. "
-                    f"Download the .zip from the release page, or install p7zip."
+                    "Download the .zip from the release page, or install p7zip."
                 )
         else:
             shutil.unpack_archive(package, extract_dir)
@@ -369,23 +436,20 @@ def _apply_macos(package: Path) -> str:
     if replacement is None:
         raise RuntimeError(f"Could not find {APP_NAME} binary inside the macOS update archive.")
 
-    target = exe
-    if LEGACY_BINARY_NAME in exe.name and BINARY_NAME not in exe.name:
-        target = exe.with_name(BINARY_NAME)
+    install_dir = user_data_root()
+    install_dir.mkdir(parents=True, exist_ok=True)
+    target = install_dir / BINARY_NAME
+    shutil.copy2(replacement, target)
+    os.chmod(target, 0o755)
 
-    staging = target.with_name(target.name + ".new")
-    shutil.copy2(replacement, staging)
-    os.chmod(staging, 0o755)
+    pid = os.getpid()
     script = Path(tempfile.gettempdir()) / "roboscout_update.sh"
-    remove_old = f'rm -f "{exe}"' if target.resolve() != exe.resolve() else "true"
     script.write_text(
         "\n".join(
             [
                 "#!/bin/bash",
-                "sleep 2",
-                f'mv -f "{staging}" "{target}"',
+                f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done",
                 f'chmod +x "{target}"',
-                remove_old,
                 f'"{target}" >/dev/null 2>&1 &',
                 f'rm -f "{script}"',
                 "",
@@ -395,7 +459,8 @@ def _apply_macos(package: Path) -> str:
     )
     os.chmod(script, 0o755)
     subprocess.Popen(["/bin/bash", str(script)], start_new_session=True)
-    return f"Update staged. {APP_NAME} will restart momentarily."
+    threading.Timer(0.75, lambda: os._exit(0)).start()
+    return f"Update downloaded. {APP_NAME} will restart from {target}."
 
 
 def _find_macos_binary(root: Path) -> Path | None:

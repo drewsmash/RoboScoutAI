@@ -142,6 +142,7 @@ def updates_download() -> dict:
     info = UpdateInfo(**(last_check() or check_for_update().as_dict()))
     if not info.available:
         raise HTTPException(400, info.error or "No update available.")
+    manual_url = info.asset_url or info.release_url
     if not info.asset_url:
         return {
             "ok": False,
@@ -152,15 +153,26 @@ def updates_download() -> dict:
     if not is_frozen():
         return {
             "ok": False,
-            "open_url": info.release_url,
-            "message": "Source installs update with git pull. Desktop builds can auto-apply.",
+            "open_url": manual_url or info.release_url,
+            "message": "Source installs update with git pull. Desktop builds can auto-apply — or download the exe from the release page.",
             "update": info.as_dict(),
         }
     try:
         package = download_update(info)
         message = apply_downloaded_update(package)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, str(exc)) from exc
+        # Never leave the user stuck on WinError 5 — always offer the direct download.
+        detail = str(exc)
+        return {
+            "ok": False,
+            "open_url": manual_url or info.release_url,
+            "message": (
+                f"Auto-update failed ({detail}). "
+                "Opening the download page — save RoboScoutAI-windows-x64.exe and run it."
+            ),
+            "update": info.as_dict(),
+            "error": detail,
+        }
     return {"ok": True, "message": message, "update": info.as_dict(), "restarting": True}
 
 

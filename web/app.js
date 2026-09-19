@@ -1364,30 +1364,32 @@ async function initUpdater() {
     }
   });
   updateChip.addEventListener("click", async () => {
+    const releaseUrl = updateChip.dataset.releaseUrl || "";
     if (updateChip.dataset.canApply === "1") {
       updateChip.textContent = "Downloading…";
       updateChip.disabled = true;
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          alert(body.detail || "Update failed.");
+        if (body.open_url) {
+          window.open(body.open_url, "_blank", "noopener");
+        }
+        if (!res.ok || body.ok === false) {
+          alert(body.message || body.detail || "Update failed — opened the download page.");
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
-        if (body.open_url) {
-          window.open(body.open_url, "_blank", "noopener");
-        }
-        alert(body.message || "Update started.");
+        alert(body.message || "Update started — the app will restart.");
       } catch (_err) {
-        alert("Update failed.");
+        if (releaseUrl) window.open(releaseUrl, "_blank", "noopener");
+        alert("Update failed — opened the release page so you can download the exe manually.");
         updateChip.disabled = false;
+        updateChip.textContent = "Update available";
       }
       return;
     }
-    const url = updateChip.dataset.releaseUrl;
-    if (url) window.open(url, "_blank", "noopener");
+    if (releaseUrl) window.open(releaseUrl, "_blank", "noopener");
   });
 
   refresh(false);
