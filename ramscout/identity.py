@@ -165,10 +165,14 @@ def linear_assignment(cost: np.ndarray) -> list[tuple[int, int]]:
 
 def stitch_occlusions(
     samples: list[dict[str, Any]],
-    max_gap_s: float = 2.5,
-    max_dist_in: float = 56.0,
+    max_gap_s: float = 3.0,
+    max_dist_in: float = 72.0,
 ) -> list[dict[str, Any]]:
-    """Re-attach ByteTrack IDs that likely belong to the same robot after a gap."""
+    """Re-attach track IDs that likely belong to the same robot after a gap.
+
+    Uses Hungarian matching on (distance + time gap + alliance mismatch).
+    Wider defaults than before so SORT fragments from MOT still stitch.
+    """
     if len(samples) < 2:
         return samples
 
@@ -195,9 +199,13 @@ def stitch_occlusions(
     remap = {item["tid"]: item["tid"] for item in fragments}
     claimed: set[int] = set()
     for i, earlier in enumerate(fragments):
+        if remap[earlier["tid"]] != earlier["tid"]:
+            continue
         costs: list[tuple[float, int]] = []
         for later in fragments[i + 1 :]:
             if later["tid"] in claimed:
+                continue
+            if remap.get(later["tid"]) != later["tid"]:
                 continue
             if (
                 earlier["alliance"] in {"red", "blue"}
@@ -211,7 +219,7 @@ def stitch_occlusions(
             dist = float(np.hypot(later["start"][0] - earlier["end"][0], later["start"][1] - earlier["end"][1]))
             if dist > max_dist_in:
                 continue
-            costs.append((dist + gap * 10.0, later["tid"]))
+            costs.append((dist + gap * 8.0, later["tid"]))
         if not costs:
             continue
         cost = np.array([[c[0] for c in costs]], dtype=float)

@@ -8,13 +8,15 @@ calls the cloud.
 
 | Mode | What runs | Needs |
 | --- | --- | --- |
-| **potato** | Motion blobs + bumper color + optical flow | OpenCV only |
+| **hybrid** | Motion/color proposals → SORT MOT → sparse Gemini/YOLO/OpenAI confirm | OpenCV; optional keys |
+| **potato** | Motion blobs + bumper color + optical flow + SORT | OpenCV only |
 | **motion** | Background subtract + optical flow | OpenCV only |
 | **color** | HSV red/blue bumpers + motion | OpenCV only |
-| **auto** | YOLO / OpenAI / Gemini *if available*, else potato | Whatever is installed |
+| **auto** | Alias for **hybrid** | Whatever is installed |
 
-`auto` always appends the potato strategies, so empty paths from a missing model are
-avoided by design.
+`hybrid` / `auto` always keep the potato OpenCV strategies, so empty paths from a
+missing model are avoided by design. A SORT-style multi-object tracker assigns
+stable IDs across detectors (IoU + alliance + color histogram).
 
 ## Browser fallback
 

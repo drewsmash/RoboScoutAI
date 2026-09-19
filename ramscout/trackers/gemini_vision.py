@@ -33,10 +33,11 @@ class GeminiVisionTracker:
     kind = "cloud"
     description = "Google Gemini Vision keyframe boxes — needs GOOGLE_API_KEY / GEMINI_API_KEY"
 
-    def __init__(self, interval_s: float = 2.5, max_calls: int = 48) -> None:
+    def __init__(self, interval_s: float = 2.5, max_calls: int = 36) -> None:
         self.interval_s = interval_s
         self.max_calls = max_calls
         self._last_t = -999.0
+        self._last_frame = -10**9
         self._calls = 0
         self._cache: list[Detection] = []
         self._next_id = 6000
@@ -44,12 +45,14 @@ class GeminiVisionTracker:
         self._resolved_model: str | None = None
         self._fail_until = 0.0
         self._logged_fail = False
+        self.frame_stride = 24
 
     def available(self, ctx: TrackerContext | None = None) -> bool:
         return bool(_google_key(ctx).strip())
 
     def reset(self) -> None:
         self._last_t = -999.0
+        self._last_frame = -10**9
         self._calls = 0
         self._cache = []
         self._next_id = 6000
@@ -58,22 +61,34 @@ class GeminiVisionTracker:
         self._fail_until = 0.0
         self._logged_fail = False
 
+    def _should_sample(self, ctx: TrackerContext) -> bool:
+        """Sparse keyframes only — never hammer when cache is empty."""
+        if self._calls >= self.max_calls:
+            return False
+        if time.time() < self._fail_until:
+            return False
+        if self._last_frame > -10**8:
+            if (ctx.frame_index - self._last_frame) < self.frame_stride:
+                return False
+            if (ctx.t - self._last_t) < self.interval_s:
+                return False
+        return True
+
     def detect(self, cropped: np.ndarray, ctx: TrackerContext) -> list[Detection]:
         key = _google_key(ctx)
         if not key:
             return list(self._cache)
-        if self._calls >= self.max_calls:
+        if not self._should_sample(ctx):
             return list(self._cache)
-        if time.time() < self._fail_until:
-            return list(self._cache)
-        if ctx.t - self._last_t < self.interval_s and self._cache:
-            return list(self._cache)
+
+        # Reserve this keyframe before HTTP so empty/failures still pace calls.
+        self._last_t = ctx.t
+        self._last_frame = ctx.frame_index
+        self._calls += 1
 
         try:
             preferred = (ctx.google_model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
             robots = self._query(cropped, key, preferred)
-            self._calls += 1
-            self._last_t = ctx.t
             self._logged_fail = False
             dets: list[Detection] = []
             h, w = cropped.shape[:2]
@@ -98,7 +113,7 @@ class GeminiVisionTracker:
                         track_id=self._next_id,
                         bbox=[x1, y1, x2, y2],
                         source=self.name,
-                        confidence=0.55,
+                        confidence=0.62,
                         alliance=alliance,
                         team=team,
                     )
@@ -106,6 +121,10 @@ class GeminiVisionTracker:
                 self._next_id += 1
             if dets:
                 self._cache = dets
+            if self._calls >= self.max_calls:
+                msg = f"Gemini vision hit max {self.max_calls} calls for this match; holding last boxes."
+                if msg not in self.warnings:
+                    self.warnings.append(msg)
             return list(self._cache)
         except Exception as exc:  # noqa: BLE001
             self._fail_until = time.time() + 20.0

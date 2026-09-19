@@ -54,7 +54,7 @@ def track_video(
     crop_bottom: float = 0.65,
     on_progress: ProgressFn | None = None,
     motion_only: bool = False,
-    tracker_mode: str = "auto",
+    tracker_mode: str = "hybrid",
     openai_key: str = "",
     google_key: str = "",
     openai_model: str = "",
@@ -90,17 +90,20 @@ def track_video(
     crop_h = max(y1 - y0, 1)
     crop_w = max(frame_w, 1)
 
-    mode = "motion" if motion_only else (tracker_mode or "auto")
+    raw_mode = "motion" if motion_only else (tracker_mode or "hybrid")
+    mode = "hybrid" if (raw_mode or "").strip().lower() == "auto" else (raw_mode or "hybrid")
     strategies, setup_warnings = resolve_strategies(
         mode,
         model_path=model_path,
         openai_key=openai_key,
         google_key=google_key,
     )
-    ensemble = EnsembleTracker(strategies)
+    cascade = bool(TRACKER_MODES.get(mode, {}).get("cascade")) or mode == "hybrid"
+    ensemble = EnsembleTracker(strategies, cascade=cascade)
     warnings = list(setup_warnings)
     strategy_names = [getattr(s, "name", "?") for s in strategies]
-    warnings.append(f"Tracking mode '{mode}' using: {', '.join(strategy_names)}.")
+    label = "hybrid cascade" if cascade else mode
+    warnings.append(f"Tracking mode '{label}' using: {', '.join(strategy_names)} + SORT MOT.")
 
     samples: list[dict[str, Any]] = []
     frame_index = 0
