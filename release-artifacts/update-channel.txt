@@ -1,3 +1,3 @@
 # Default git branch for frozen EXE updates (override with RAMSCOUT_GIT_BRANCH).
-# Switch to main after this PR merges.
+# In-app updater sparse-fetches release-artifacts/RoboScoutAI-windows-x64.exe from this branch.
 cursor/upload-cookies-github-updater-e0ef
