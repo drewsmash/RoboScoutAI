@@ -27,18 +27,20 @@ if [[ "$OS" == "darwin" ]]; then
     zip -9 "release/RoboScoutAI-${KEY}.zip" RoboScoutAI
   )
   echo ""
-  echo "Built: dist/release/RoboScoutAI-${KEY}.zip"
-  echo "Upload that zip to your GitHub Release."
-  echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RoboScoutAI && chmod +x ./RoboScoutAI"
+  echo "Built: dist/release/RamScoutAI-${KEY}.zip"
+  echo "Commit under release-artifacts/ for the git updater, or distribute directly."
+  echo "First-run tip (unsigned): xattr -dr com.apple.quarantine ./RamScoutAI && chmod +x ./RamScoutAI"
 elif [[ "$OS" == linux* ]]; then
-  tar -C dist -czf "dist/release/RoboScoutAI-linux-${ARCH}.tar.gz" RoboScoutAI
-  echo "Built: dist/release/RoboScoutAI-linux-${ARCH}.tar.gz"
+  tar -C dist -czf "dist/release/RamScoutAI-linux-${ARCH}.tar.gz" RamScoutAI
+  echo "Built: dist/release/RamScoutAI-linux-${ARCH}.tar.gz"
+  echo "Copy to release-artifacts/ and commit for the git updater."
 else
   # Windows / Git Bash / MSYS
-  if [[ -f dist/RoboScoutAI.exe ]]; then
-    cp dist/RoboScoutAI.exe "dist/release/RoboScoutAI-windows-x64.exe"
-    echo "Built: dist/release/RoboScoutAI-windows-x64.exe"
+  if [[ -f dist/RamScoutAI.exe ]]; then
+    cp dist/RamScoutAI.exe "dist/release/RamScoutAI-windows-x64.exe"
+    echo "Built: dist/release/RamScoutAI-windows-x64.exe"
+    echo "Copy to release-artifacts/ and commit for the git updater."
   else
-    echo "Built dist/RoboScoutAI — rename to RoboScoutAI-windows-x64.exe for the release."
+    echo "Built dist/RamScoutAI — rename to RamScoutAI-windows-x64.exe for release-artifacts/."
   fi
 fi

@@ -2,7 +2,7 @@
 """PyInstaller spec for RoboScoutAI desktop builds (Windows .exe / macOS binary).
 
 Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
-YouTube ingest, and GitHub auto-update all work. Drop a robot .pt next to the
+YouTube ingest, and the git-remote in-app updater all work. Drop a robot .pt next to the
 app and install ultralytics in a source tree for full tracking.
 """
 
@@ -30,6 +30,10 @@ datas = [
     (str(ROOT / "web"), "web"),
     (str(ROOT / "ramscout" / "games"), "ramscout/games"),
 ]
+# Optional freeze-time update channel (branch name). Overridable by RAMSCOUT_GIT_BRANCH.
+_channel = ROOT / "release-artifacts" / "update-channel.txt"
+if _channel.is_file():
+    datas.append((str(_channel), "."))
 datas += collect_data_files("yt_dlp")
 
 hiddenimports = [

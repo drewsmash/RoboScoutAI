@@ -19,8 +19,8 @@ if str(_ROOT) not in sys.path:
 
 from desktop.app_window import run_app_ui
 from ramscout import __version__
-from ramscout.paths import is_frozen, jobs_dir, web_dir
-from ramscout.updater import apply_downloaded_update, check_for_update, download_update
+from ramscout.paths import jobs_dir, web_dir
+from ramscout.updater import apply_update_now, check_for_update
 
 log = logging.getLogger("roboscout.desktop")
 
@@ -53,25 +53,26 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.info("Update check: %s", info.error)
         return
     if not info.available:
-        log.info("RoboScoutAI %s is up to date.", info.current_version)
+        log.info("RamScoutAI %s is up to date (%s).", info.current_version, info.message or "git")
         return
     log.info(
-        "Update available: %s → %s (%s)",
+        "Update available from git: %s → %s (%s @ %s)",
         info.current_version,
-        info.latest_version,
-        info.asset_name or "open release page",
+        info.latest_version or info.remote_sha[:7],
+        info.branch,
+        info.remote_sha[:7] or info.asset_name or "remote",
     )
-    if not auto_apply or not is_frozen() or not info.asset_url:
-        log.info("Open %s or use Check for updates in the app.", info.release_url)
+    if not auto_apply or not info.can_apply:
+        log.info("Use Check for updates / Update now in the app (remote %s).", info.remote)
         return
     try:
-        package = download_update(info)
-        message = apply_downloaded_update(package)
-        log.info("%s", message)
-        time.sleep(1.0)
-        os._exit(0)
+        result = apply_update_now()
+        log.info("%s", result.get("message") or "Update applied.")
+        if result.get("restarting"):
+            time.sleep(1.0)
+            os._exit(0)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Could not auto-apply update: %s", exc)
+        log.warning("Could not auto-apply git update: %s", exc)
 
 
 def _stop_server(server: object) -> None:
@@ -103,7 +104,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Do not open a UI window; only start the local server",
     )
-    parser.add_argument("--auto-update", action="store_true", help="Download and apply a newer GitHub release on launch")
+    parser.add_argument(
+        "--auto-update",
+        action="store_true",
+        help="Fetch and apply a newer build from the git remote on launch",
+    )
     parser.add_argument("--skip-update-check", action="store_true")
     args = parser.parse_args(argv)
 

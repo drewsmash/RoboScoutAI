@@ -93,9 +93,9 @@ function storageSet(key, value) {
 function loadTbaKey() {
   const saved = storageGet("tbaKey", "") || "";
   $("tba-key").value = saved;
-  const openai = storageGet("openaiKey", "") || "";
-  const google = storageGet("googleKey", "") || "";
-  const mode = storageGet("trackerMode", "") || (google ? "gemini" : "auto");
+  const openai = localStorage.getItem("ramscout.openaiKey") || "";
+  const google = localStorage.getItem("ramscout.googleKey") || "";
+  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "hybrid");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
@@ -105,8 +105,8 @@ function loadTbaKey() {
 
 $("google-key")?.addEventListener("change", () => {
   const key = $("google-key")?.value.trim() || "";
-  if (key && $("tracker-mode") && $("tracker-mode").value === "auto") {
-    $("tracker-mode").value = "gemini";
+  if (key && $("tracker-mode") && ["auto", "hybrid"].includes($("tracker-mode").value)) {
+    // Keep hybrid — it already prefers Gemini when keyed. Do not force gemini-only.
   }
   saveScoutKeys();
 });
@@ -120,7 +120,7 @@ function saveScoutKeys() {
 
 function trackerPayload() {
   return {
-    tracker_mode: $("tracker-mode")?.value || "auto",
+    tracker_mode: $("tracker-mode")?.value || "hybrid",
     auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
@@ -132,8 +132,17 @@ $("start-form").addEventListener("submit", async (event) => {
   saveScoutKeys();
   const fileInput = $("video-file");
   const file = fileInput?.files?.[0] || null;
+  const url = $("url").value.trim();
+  if (!file && !url) {
+    alert("Upload an MP4/MKV match VOD, or paste a YouTube URL.");
+    return;
+  }
+  if (file && file.size < 1024) {
+    alert("That file looks empty. Choose a real downloaded MP4/MKV match video.");
+    return;
+  }
   await createJob({
-    url: $("url").value.trim(),
+    url,
     tba_key: $("tba-key").value.trim(),
     event_key: $("event-key").value.trim(),
     match_key: $("match-key").value.trim(),
@@ -227,7 +236,7 @@ async function createJob(payload) {
     form.append("match_key", payload.match_key || "");
     form.append("crop_top", String(payload.crop_top ?? 0.1));
     form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
-    form.append("tracker_mode", payload.tracker_mode || "auto");
+    form.append("tracker_mode", payload.tracker_mode || "hybrid");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
@@ -242,7 +251,11 @@ async function createJob(payload) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Could not start job." }));
-    alert(err.detail || "Could not start job.");
+    const detail = err.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+      : (detail || "Could not start job.");
+    alert(message);
     return;
   }
   const job = await res.json();
@@ -271,11 +284,38 @@ function renderJob(job) {
   window.__roboscoutJobId = job.id;
   window.dispatchEvent(new CustomEvent("roboscout:job", { detail: job }));
   const ytHelp = $("yt-help");
-  if (ytHelp) {
-    const err = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`.toLowerCase();
-    const blocked = err.includes("bot") || err.includes("sign in") || err.includes("youtube") && err.includes("block");
-    ytHelp.hidden = !blocked;
-  }
+  const uploadHelp = $("upload-help");
+  const errText = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`;
+  const errLower = errText.toLowerCase();
+  const failed = job.status === "error";
+  const hasVideo = Boolean(job.has_video);
+  const isUpload = job.media_source === "upload" || (hasVideo && !String(job.url || "").includes("youtu"));
+  // Never show YouTube-blocked help for local uploads — even if an error mentions "bot".
+  const youtubeBlocked =
+    failed
+    && !isUpload
+    && !hasVideo
+    && (
+      errLower.includes("bot")
+      || errLower.includes("sign in")
+      || (errLower.includes("youtube") && (errLower.includes("block") || errLower.includes("cookies")))
+    );
+  const uploadFailed =
+    failed
+    && (isUpload || hasVideo)
+    && !youtubeBlocked
+    && (
+      isUpload
+      || errLower.includes("upload")
+      || errLower.includes("missing on disk")
+      || errLower.includes("empty")
+      || errLower.includes("opencv")
+      || errLower.includes("could not")
+      || errLower.includes("decode")
+      || errLower.includes("video")
+    );
+  if (ytHelp) ytHelp.hidden = !youtubeBlocked;
+  if (uploadHelp) uploadHelp.hidden = !(uploadFailed || (failed && isUpload));
 
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
@@ -1330,11 +1370,28 @@ async function initUpdater() {
       versionChip.textContent = `v${version}`;
       const update = data.update || data;
       const available = Boolean(update?.available);
-      updateChip.hidden = !available;
-      if (available) {
-        updateChip.textContent = `Update ${update.latest_version}`;
-        updateChip.dataset.releaseUrl = update.release_url || "";
-        updateChip.dataset.canApply = update.asset_url && data.frozen ? "1" : "0";
+      const canApply = Boolean(update?.can_apply) || Boolean(update?.mode === "source" && available);
+      // Only show the chip when something can actually be applied (never for downgrades / missing binaries).
+      updateChip.hidden = !(available && canApply);
+      if (available && canApply) {
+        const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
+        updateChip.textContent = `Update ${label}`;
+        updateChip.title = update.message || "Update available from git";
+        updateChip.dataset.releaseUrl = update.release_url || update.remote || "";
+        updateChip.dataset.canApply = "1";
+      } else {
+        updateChip.dataset.canApply = "0";
+      }
+      const cookiesEl = $("cookies-status");
+      if (cookiesEl && data.cookies) {
+        if (data.cookies.found) {
+          cookiesEl.hidden = false;
+          cookiesEl.textContent = `YouTube cookies found (${data.cookies.path || "cookies.txt"}). Downloads can use them; upload is still the most reliable escape hatch.`;
+        } else {
+          cookiesEl.hidden = false;
+          cookiesEl.textContent =
+            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\ / set YTDLP_COOKIES.";
+        }
       }
     } catch (_err) {
       versionChip.textContent = "v?";
@@ -1346,48 +1403,70 @@ async function initUpdater() {
     try {
       const res = await fetch("/api/updates/check");
       const update = await res.json();
-      if (update.available) return;
+      if (update.available && (update.can_apply || update.mode === "source")) {
+        updateChip.hidden = false;
+        updateChip.dataset.canApply = "1";
+        const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
+        updateChip.textContent = `Update ${label}`;
+        alert(
+          `Update available: ${update.current_version} → ${label}\n${update.message || "Click Update to apply from git."}`
+        );
+        return;
+      }
+      if (update.available && !update.can_apply) {
+        updateChip.hidden = true;
+        alert(
+          update.error
+          || "A newer git revision exists, but no desktop binary is published on that branch yet."
+        );
+        return;
+      }
       if (update.error) {
-        const open = update.release_url
-          ? `\n\nOpen releases? ${update.release_url}`
-          : "";
-        if (update.release_url && window.confirm(`${update.error}${open}`)) {
+        const soft = /up to date|git remote unreachable|no desktop binary|unreachable|nothing to apply/i.test(
+          update.error
+        );
+        alert(update.error);
+        if (!soft && update.release_url && window.confirm(`Open git remote page?\n${update.release_url}`)) {
           window.open(update.release_url, "_blank", "noopener");
-        } else if (!update.release_url) {
-          alert(update.error);
         }
       } else {
-        alert(`RoboScoutAI ${update.current_version || versionChip.textContent} is up to date.`);
+        const body = update.body ? `\n${update.body}` : "";
+        alert(
+          update.message === "up to date" || !update.message
+            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
+            : `${update.message}${body}`
+        );
       }
     } catch (_err) {
-      alert("Could not check GitHub for updates.");
+      alert("Could not check the git remote for updates.");
     }
   });
   updateChip.addEventListener("click", async () => {
     if (updateChip.dataset.canApply === "1") {
-      updateChip.textContent = "Downloading…";
+      updateChip.textContent = "Updating from git…";
       updateChip.disabled = true;
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          alert(body.detail || "Update failed.");
+          alert(body.detail || body.message || "Update failed.");
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
-        if (body.open_url) {
-          window.open(body.open_url, "_blank", "noopener");
+        alert(body.message || "Update applied from git.");
+        if (!body.restarting) {
+          updateChip.disabled = false;
+          updateChip.hidden = true;
+          await refresh(true);
         }
-        alert(body.message || "Update started.");
       } catch (_err) {
-        alert("Update failed.");
+        alert("Update from git failed.");
         updateChip.disabled = false;
       }
       return;
     }
-    const url = updateChip.dataset.releaseUrl;
-    if (url) window.open(url, "_blank", "noopener");
+    alert("No applyable desktop update is available right now.");
   });
 
   refresh(false);

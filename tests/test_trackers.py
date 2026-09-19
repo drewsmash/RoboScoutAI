@@ -43,6 +43,7 @@ def _moving_robots(path: Path, frames: int = 60, fps: int = 30) -> Path:
 
 def test_tracker_modes_documented():
     assert "auto" in TRACKER_MODES
+    assert "hybrid" in TRACKER_MODES
     assert "potato" in TRACKER_MODES
     assert "openai" in TRACKER_MODES
     assert "gemini" in TRACKER_MODES
@@ -55,6 +56,7 @@ def test_list_strategies_api():
     assert res.status_code == 200
     body = res.json()
     assert any(m["id"] == "auto" for m in body["modes"])
+    assert any(m["id"] == "hybrid" for m in body["modes"])
     assert any(m["id"] == "potato" for m in body["modes"])
     names = {s["name"] for s in body["strategies"]}
     assert {"motion", "color", "optical_flow", "yolo", "openai", "gemini"} <= names
