@@ -78,9 +78,14 @@ class Job:
     tracker_mode: str = "hybrid"
     openai_key: str = ""
     google_key: str = ""
+    ai_gateway_key: str = ""
     tracker_strategies: list[str] = field(default_factory=list)
     source_hits: dict[str, int] = field(default_factory=dict)
     camera: dict[str, Any] = field(default_factory=dict)
+    views: dict[str, Any] = field(default_factory=dict)
+    bev: dict[str, Any] = field(default_factory=dict)
+    side_cues: list[dict[str, Any]] = field(default_factory=list)
+    thinking_stages: list[dict[str, Any]] = field(default_factory=list)
     auto_multicam: bool = True
     edited_events: bool = False
     media_source: str = "youtube"  # upload | youtube | demo
@@ -118,6 +123,10 @@ class Job:
             "tracker_strategies": self.tracker_strategies,
             "source_hits": self.source_hits,
             "camera": self.camera,
+            "views": self.views,
+            "bev": self.bev,
+            "side_cues": self.side_cues,
+            "thinking_stages": self.thinking_stages,
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
             "media_source": self.media_source,
@@ -180,15 +189,24 @@ class JobStore:
                 setattr(job, key, value)
 
     def set_progress(self, job: Job, status: str, message: str, progress: float) -> None:
-        stages = list(job.thinking_stages or [])
-        stages.append(
-            {
+        stages = list(getattr(job, "thinking_stages", None) or [])
+        # Dedupe consecutive identical status ticks so the panel stays readable.
+        if stages and stages[-1].get("status") == status and stages[-1].get("message") == message:
+            stages[-1] = {
                 "status": status,
                 "message": message,
                 "progress": round(float(progress), 1),
                 "at": _now(),
             }
-        )
+        else:
+            stages.append(
+                {
+                    "status": status,
+                    "message": message,
+                    "progress": round(float(progress), 1),
+                    "at": _now(),
+                }
+            )
         # Keep the panel snappy — last ~12 stage ticks.
         if len(stages) > 12:
             stages = stages[-12:]
@@ -210,6 +228,7 @@ def start_job(
     tracker_mode: str = "hybrid",
     openai_key: str = "",
     google_key: str = "",
+    ai_gateway_key: str = "",
     auto_multicam: bool = True,
 ) -> Job:
     job = STORE.create(
@@ -223,6 +242,7 @@ def start_job(
         tracker_mode=(tracker_mode or "hybrid").strip().lower() or "hybrid",
         openai_key=openai_key or "",
         google_key=google_key or "",
+        ai_gateway_key=ai_gateway_key or "",
         auto_multicam=bool(auto_multicam),
     )
     if local_video:
@@ -473,6 +493,42 @@ def _run_real(job: Job) -> None:
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
+            # When classical layout confidence is middling, ask Jev to classify.
+            try:
+                from ramscout.jev import classify_camera_layout, is_available
+
+                conf = float(getattr(chosen, "confidence", 0.0) or 0.0)
+                if is_available(job.ai_gateway_key) and 0.35 <= conf < 0.78:
+                    STORE.set_progress(job, "views", "Jev classifying camera layout…", 54)
+                    jev_mode, jev_conf, jev_notes = classify_camera_layout(
+                        {
+                            "classical_mode": chosen.mode,
+                            "classical_confidence": conf,
+                            "classical_detail": chosen.detail,
+                            "split_y": chosen.split_y,
+                            "split_x": chosen.split_x,
+                            "pane_count": len(chosen.panes or []),
+                            "pane_roles": [getattr(p, "role", "") for p in (chosen.panes or [])],
+                        },
+                        api_key=job.ai_gateway_key,
+                    )
+                    warnings.extend(jev_notes)
+                    if jev_mode and jev_conf >= 0.55:
+                        if jev_mode == chosen.mode:
+                            chosen.confidence = float(min(0.95, max(conf, jev_conf)))
+                            chosen.detail = (
+                                f"{chosen.detail} · Jev agrees ({jev_conf:.2f})"
+                            )
+                            warnings.append(
+                                f"Jev (typesafe-ai/jev) confirmed camera layout={jev_mode}."
+                            )
+                        else:
+                            warnings.append(
+                                f"Jev (typesafe-ai/jev) suggests layout={jev_mode} "
+                                f"({jev_conf:.2f}) vs classical {chosen.mode} — keeping classical panes."
+                            )
+            except Exception as jev_exc:  # noqa: BLE001
+                warnings.append(f"Jev camera layout skipped: {jev_exc}")
             views = {
                 "mode": chosen.mode,
                 "panes": [p.as_dict() for p in (chosen.panes or [])],
@@ -768,6 +824,29 @@ def _reproject_and_scout(job: Job) -> None:
             from ramscout.event_editor import cards_from_events
 
             card_dicts = cards_from_events(card_dicts, event_dicts)
+        # Optional Jev (Vercel AI Gateway) verification of heuristic scout events.
+        try:
+            from ramscout.jev import is_available, verify_scout_events
+
+            if is_available(job.ai_gateway_key):
+                STORE.set_progress(job, "scouting", "Jev verifying scout events…", 94)
+                event_dicts, jev_notes = verify_scout_events(
+                    event_dicts,
+                    match=job.match,
+                    side_cues=list(job.side_cues or []),
+                    api_key=job.ai_gateway_key,
+                )
+                if jev_notes:
+                    warnings = list(job.warnings or [])
+                    warnings.extend(jev_notes)
+                    STORE.update(job, warnings=warnings)
+                from ramscout.event_editor import cards_from_events
+
+                card_dicts = cards_from_events(card_dicts, event_dicts)
+        except Exception as jev_exc:  # noqa: BLE001
+            warnings = list(job.warnings or [])
+            warnings.append(f"Jev verification skipped: {jev_exc}")
+            STORE.update(job, warnings=warnings)
         card_dicts = enrich_cards_with_tba(card_dicts, job.match)
     except Exception as exc:  # noqa: BLE001
         warnings = list(job.warnings or [])

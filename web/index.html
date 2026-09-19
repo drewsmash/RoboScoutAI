@@ -102,6 +102,13 @@
           </label>
         </div>
         <div class="composer-row">
+          <label class="field grow">
+            <span>Vercel AI Gateway key (Jev)</span>
+            <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · AI_GATEWAY_API_KEY · verifies scout events" autocomplete="off" />
+          </label>
+        </div>
+        <p class="tool-meta">With an AI Gateway key, RoboScoutAI calls <code>typesafe-ai/jev</code> to verify hub/climb/defense candidates and help classify multi-view layouts. Get a key at vercel.com/ai-gateway.</p>
+        <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
             <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.10" />

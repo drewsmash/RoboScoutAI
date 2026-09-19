@@ -93,11 +93,13 @@ function storageSet(key, value) {
 function loadTbaKey() {
   const saved = storageGet("tbaKey", "") || "";
   $("tba-key").value = saved;
-  const openai = localStorage.getItem("ramscout.openaiKey") || "";
-  const google = localStorage.getItem("ramscout.googleKey") || "";
-  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "hybrid");
+  const openai = storageGet("openaiKey", "") || "";
+  const google = storageGet("googleKey", "") || "";
+  const gateway = storageGet("aiGatewayKey", "") || "";
+  const mode = storageGet("trackerMode", "") || (google ? "gemini" : "hybrid");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
+  if ($("ai-gateway-key")) $("ai-gateway-key").value = gateway;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
     $("tracker-mode").value = mode;
   }
@@ -115,6 +117,7 @@ function saveScoutKeys() {
   storageSet("tbaKey", $("tba-key").value.trim());
   if ($("openai-key")) storageSet("openaiKey", $("openai-key").value.trim());
   if ($("google-key")) storageSet("googleKey", $("google-key").value.trim());
+  if ($("ai-gateway-key")) storageSet("aiGatewayKey", $("ai-gateway-key").value.trim());
   if ($("tracker-mode")) storageSet("trackerMode", $("tracker-mode").value);
 }
 
@@ -124,6 +127,7 @@ function trackerPayload() {
     auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
+    ai_gateway_key: $("ai-gateway-key")?.value.trim() || "",
   };
 }
 
@@ -239,6 +243,7 @@ async function createJob(payload) {
     form.append("tracker_mode", payload.tracker_mode || "hybrid");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
+    form.append("ai_gateway_key", payload.ai_gateway_key || "");
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
