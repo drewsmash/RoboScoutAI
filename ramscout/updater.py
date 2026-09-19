@@ -883,6 +883,111 @@ def _write_installed_sha(sha: str) -> None:
         log.warning("Could not persist installed git sha: %s", exc)
 
 
+def _windows_update_bat_lines(
+    *,
+    pid: int,
+    src: str,
+    dst: str,
+    portable: str,
+    sha_path: str,
+    log_path: str,
+    sha: str,
+    install_dir: str,
+) -> list[str]:
+    """Build the Windows update .bat body (unit-tested for safety invariants).
+
+    Hardening notes vs older broken bats:
+    - Never ``move`` the package onto a locked running EXE (that produced
+      ``Access is denied. / 0 file(s) moved.``).
+    - Wait for PID exit via PowerShell ``Wait-Process`` (tasklist/findstr was flaky).
+    - If the install target is still locked, copy to ``.new`` then replace; on
+      failure open Explorer to the download and do **not** pin the SHA.
+    - Self-delete only as the final line via ``(goto) 2>nul & del`` so cmd does
+      not emit ``The batch file cannot be found.`` after a mid-run ``del``.
+    """
+    return [
+        "@echo off",
+        "setlocal EnableExtensions",
+        f"set PID={pid}",
+        f'set "SRC={src}"',
+        f'set "DST={dst}"',
+        f'set "DSTNEW={dst}.new"',
+        f'set "PORTABLE={portable}"',
+        f'set "SHAFILE={sha_path}"',
+        f'set "LOG={log_path}"',
+        f'set "SHA={sha}"',
+        f'set "INSTALLDIR={install_dir}"',
+        'echo [%DATE% %TIME%] update start pid=%PID% > "%LOG%"',
+        'echo SRC=%SRC%>> "%LOG%"',
+        'echo DST=%DST%>> "%LOG%"',
+        'echo PORTABLE=%PORTABLE%>> "%LOG%"',
+        'echo waiting for pid %PID% >> "%LOG%"',
+        # Reliable wait: Wait-Process; ignore if already gone. Extra ping settle for AV locks.
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Wait-Process -Id ([int]$env:PID) -Timeout 180 -ErrorAction Stop } catch { }" >> "%LOG%" 2>&1',
+        "ping -n 3 127.0.0.1 >nul",
+        'echo [%DATE% %TIME%] process exited >> "%LOG%"',
+        'if not exist "%INSTALLDIR%" mkdir "%INSTALLDIR%"',
+        # Prefer Copy-Item -Force (handles read-only attrs better than cmd copy).
+        "set COPY_OK=0",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Copy-Item -LiteralPath $env:SRC -Destination $env:DST -Force '
+            "-ErrorAction Stop; Write-Output 'COPY_OK'; exit 0 } catch { "
+            'Write-Output $_.Exception.Message; exit 1 }" >> "%LOG%" 2>&1'
+        ),
+        'if not errorlevel 1 set COPY_OK=1',
+        'if "%COPY_OK%"=="0" (',
+        '  echo direct copy failed, trying .new replace >> "%LOG%"',
+        '  copy /Y "%SRC%" "%DSTNEW%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo COPY_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  if exist "%DST%" del /F /Q "%DST%" >> "%LOG%" 2>&1',
+        '  if exist "%DST%" (',
+        '    echo TARGET_LOCKED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  copy /Y "%DSTNEW%" "%DST%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo REPLACE_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  del /F /Q "%DSTNEW%" >nul 2>nul',
+        "  set COPY_OK=1",
+        ")",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Unblock-File -LiteralPath $env:DST -ErrorAction SilentlyContinue } '
+            'catch {}" >> "%LOG%" 2>&1'
+        ),
+        # Best-effort refresh of original location (Program Files often denies — ignore).
+        'if /I not "%PORTABLE%"=="%DST%" (',
+        '  copy /Y "%SRC%" "%PORTABLE%" >> "%LOG%" 2>&1',
+        ")",
+        # Pin SHA only after a successful install copy.
+        'if defined SHA if not "%SHA%"=="" (',
+        '  >"%SHAFILE%" echo %SHA%',
+        '  echo wrote sha %SHA% >> "%LOG%"',
+        ")",
+        'echo launching "%DST%" >> "%LOG%"',
+        'start "" /D "%INSTALLDIR%" "%DST%"',
+        "if errorlevel 1 (",
+        '  echo START_FAILED >> "%LOG%"',
+        '  start "" explorer.exe /select,"%DST%"',
+        "  exit /b 1",
+        ")",
+        'echo OK >> "%LOG%"',
+        "endlocal",
+        # Last line only: exit parse context then delete self (avoids "batch file cannot be found").
+        '(goto) 2>nul & del "%~f0"',
+        "",
+    ]
+
+
 def _apply_windows(package: Path) -> str:
     r"""Install into %LOCALAPPDATA%\RoboScoutAI, wait for PID exit, then relaunch.
 
@@ -906,57 +1011,18 @@ def _apply_windows(package: Path) -> str:
     portable = str(portable_target.resolve())
     sha_path = str(sha_file.resolve())
     log_path = str(log_file.resolve())
-    lines = [
-        "@echo off",
-        "setlocal EnableExtensions",
-        f"set PID={pid}",
-        f'set "SRC={src}"',
-        f'set "DST={dst}"',
-        f'set "PORTABLE={portable}"',
-        f'set "SHAFILE={sha_path}"',
-        f'set "LOG={log_path}"',
-        f'set "SHA={sha}"',
-        f'set "INSTALLDIR={install_dir}"',
-        'echo [%DATE% %TIME%] update start pid=%PID% > "%LOG%"',
-        'echo SRC=%SRC%>> "%LOG%"',
-        'echo DST=%DST%>> "%LOG%"',
-        ":waitloop",
-        'tasklist /FI "PID eq %PID%" 2>nul | findstr /I /C:"%PID%" >nul',
-        "if not errorlevel 1 (",
-        "  rem Prefer ping over timeout — timeout fails when stdin is redirected.",
-        "  ping -n 2 127.0.0.1 >nul",
-        "  goto waitloop",
-        ")",
-        'echo [%DATE% %TIME%] process exited >> "%LOG%"',
-        'if not exist "%INSTALLDIR%" mkdir "%INSTALLDIR%"',
-        'copy /Y "%SRC%" "%DST%" >> "%LOG%" 2>&1',
-        "if errorlevel 1 (",
-        '  echo COPY_FAILED >> "%LOG%"',
-        '  start "" explorer.exe /select,"%SRC%"',
-        "  exit /b 1",
-        ")",
-        'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Unblock-File -LiteralPath $env:DST -ErrorAction SilentlyContinue } catch {}" >> "%LOG%" 2>&1',
-        'if /I not "%PORTABLE%"=="%DST%" (',
-        '  copy /Y "%SRC%" "%PORTABLE%" >> "%LOG%" 2>&1',
-        ")",
-        'if defined SHA if not "%SHA%"=="" (',
-        '  >"%SHAFILE%" echo %SHA%',
-        '  echo wrote sha %SHA% >> "%LOG%"',
-        ")",
-        'echo launching "%DST%" >> "%LOG%"',
-        'start "" /D "%INSTALLDIR%" "%DST%"',
-        "if errorlevel 1 (",
-        '  echo START_FAILED >> "%LOG%"',
-        '  start "" explorer.exe /select,"%DST%"',
-        "  exit /b 1",
-        ")",
-        'echo OK >> "%LOG%"',
-        'del "%~f0" >nul 2>nul',
-        "endlocal",
-        "",
-    ]
+    lines = _windows_update_bat_lines(
+        pid=pid,
+        src=src,
+        dst=dst,
+        portable=portable,
+        sha_path=sha_path,
+        log_path=log_path,
+        sha=sha,
+        install_dir=str(install_dir),
+    )
     script.write_text("\r\n".join(lines), encoding="utf-8")
-    # CREATE_NO_WINDOW keeps the console from flashing/closing in the user's face.
+    # CREATE_NO_WINDOW keeps the console from flashing; Explorer opens only on failure.
     creation = _windows_detach_flags() | 0x08000000  # CREATE_NO_WINDOW
     subprocess.Popen(
         ["cmd.exe", "/c", str(script)],

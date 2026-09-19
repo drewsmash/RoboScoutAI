@@ -261,6 +261,92 @@ def test_apply_windows_does_not_write_sha_immediately(monkeypatch, tmp_path):
     assert pending and pending["sha"] == "deadbeef"
 
 
+def test_windows_update_bat_hardening_invariants():
+    """Bat must not use premature self-delete / move-on-locked-exe patterns."""
+    lines = updater._windows_update_bat_lines(
+        pid=4242,
+        src=r"C:\Temp\pkg.exe",
+        dst=r"C:\Users\x\AppData\Local\RoboScoutAI\RoboScoutAI.exe",
+        portable=r"C:\Users\x\Downloads\RoboScoutAI.exe",
+        sha_path=r"C:\Users\x\AppData\Local\RoboScoutAI\update-git-sha.txt",
+        log_path=r"C:\Users\x\AppData\Local\RoboScoutAI\update.log",
+        sha="abc123",
+        install_dir=r"C:\Users\x\AppData\Local\RoboScoutAI",
+    )
+    text = "\r\n".join(lines)
+    lower = text.lower()
+
+    # Package install uses copy / Copy-Item — never move package→target.
+    assert "Copy-Item" in text
+    assert "copy /y" in lower
+    assert "move /y" not in lower
+    assert "move " not in lower
+
+    # Reliable PID wait + settle; no flaky tasklist/findstr loop.
+    assert "Wait-Process" in text
+    assert "tasklist" not in lower
+    assert "findstr" not in lower
+
+    # Logging + SmartScreen MOTW unblock + locked-target .new replace.
+    assert "update.log" in text
+    assert "Unblock-File" in text
+    assert ".new" in text
+    assert "TARGET_LOCKED" in text
+    assert "COPY_FAILED" in text
+    assert 'explorer.exe /select,"%SRC%"' in text
+
+    # SHA only after successful copy block (appears after COPY_OK / replace).
+    sha_idx = text.index('>"%SHAFILE%" echo %SHA%')
+    copy_idx = text.index("Copy-Item")
+    assert copy_idx < sha_idx
+
+    # Self-delete must be last actionable line via safe goto pattern.
+    non_empty = [ln for ln in lines if ln.strip()]
+    assert non_empty[-1] == '(goto) 2>nul & del "%~f0"'
+    # No bare mid-script del of self before work finishes.
+    premature = [
+        i
+        for i, ln in enumerate(lines)
+        if 'del "%~f0"' in ln and "(goto)" not in ln
+    ]
+    assert premature == []
+
+
+def test_apply_windows_writes_hardened_bat(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    pkg = tmp_path / "RoboScoutAI-windows-x64.exe"
+    pkg.write_bytes(b"MZ-fake-exe")
+    captured: dict = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured["creationflags"] = kwargs.get("creationflags", 0)
+        return None
+
+    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "last_check", lambda: {"remote_sha": "cafebabe"})
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(updater.threading, "Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(updater.sys, "executable", str(tmp_path / "old" / "RoboScoutAI.exe"))
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    updater.apply_downloaded_update(pkg)
+    bat = tmp_path / "tmp" / "roboscout_update.bat"
+    assert bat.is_file()
+    body = bat.read_text(encoding="utf-8")
+    assert "Wait-Process" in body
+    assert "Copy-Item" in body
+    assert "Unblock-File" in body
+    assert "update.log" in body
+    assert body.rstrip().endswith('(goto) 2>nul & del "%~f0"')
+    assert "move /Y" not in body
+    # CREATE_NO_WINDOW (0x08000000) so success path stays silent.
+    assert captured["creationflags"] & 0x08000000
+    assert "cmd.exe" in captured["args"][0]
+
+
 def test_frozen_does_not_offer_older_main(monkeypatch, tmp_path):
     cache = tmp_path / "cache"
     mirror = cache / "mirror"
