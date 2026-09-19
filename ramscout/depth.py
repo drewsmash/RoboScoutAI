@@ -152,7 +152,17 @@ def _try_depth_anything(frame_bgr: np.ndarray) -> np.ndarray | None:
         return None
     try:
         import cv2
-        from PIL import Image
+
+        try:
+            from PIL import Image
+        except ImportError:
+            log.info(
+                "Depth Anything V2 unavailable (No module named 'PIL') — "
+                "install with: pip install Pillow — using classical depth."
+            )
+            _PIPE_FAILED = True
+            _PIPE = None
+            return None
 
         pipe = _get_pipe()
         if pipe is None:
@@ -179,7 +189,14 @@ def _try_depth_anything(frame_bgr: np.ndarray) -> np.ndarray | None:
             depth = (depth - dmin) / (dmax - dmin)
         return depth.astype(np.float32)
     except Exception as exc:  # noqa: BLE001
-        log.info("Depth Anything V2 unavailable (%s) — using classical depth.", exc)
+        hint = ""
+        if "PIL" in str(exc) or "Pillow" in str(exc):
+            hint = " — install with: pip install Pillow"
+        log.info(
+            "Depth Anything V2 unavailable (%s)%s — using classical depth.",
+            exc,
+            hint,
+        )
         _PIPE_FAILED = True
         _PIPE = None
         return None

@@ -30,6 +30,30 @@ def test_classical_depth_estimates_pitch():
     assert sample_depth(result.depth, 10, 10) >= 0.0
 
 
+def test_missing_pil_falls_back_to_classical(monkeypatch, caplog):
+    """Depth Anything path should soft-fail with a Pillow install hint."""
+    import builtins
+    import logging
+
+    import ramscout.depth as depth_mod
+
+    monkeypatch.setattr(depth_mod, "_PIPE", None)
+    monkeypatch.setattr(depth_mod, "_PIPE_FAILED", False)
+
+    real_import = builtins.__import__
+
+    def _block_pil(name, *args, **kwargs):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ImportError("No module named 'PIL'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block_pil)
+    with caplog.at_level(logging.INFO, logger="ramscout.depth"):
+        result = estimate_depth(_fieldish_frame(), prefer_neural=True)
+    assert result.source == "classical"
+    assert any("pip install Pillow" in r.message for r in caplog.records)
+
+
 def test_refine_foot_point_blends_toward_deep_band():
     depth = np.zeros((40, 40), dtype=np.float32)
     depth[30:40, 10:30] = 1.0

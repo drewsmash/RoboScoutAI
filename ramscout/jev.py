@@ -2,7 +2,7 @@
 
 Jev answers typed questions (boolean / choice / score) about shared state —
 used here to verify heuristic scout events and optionally classify camera layout.
-Docs: https://vercel.com/ai-gateway/models/jev
+Docs: https://vercel.com/docs/ai-gateway/modalities/evaluation
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ DEFAULT_TIMEOUT_S = 45.0
 MAX_EVENT_QUESTIONS = 20
 TRUE_THRESHOLD = 0.55
 FALSE_THRESHOLD = 0.35
+
+_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def gateway_api_key(explicit: str | None = None) -> str:
@@ -42,6 +44,82 @@ def is_available(explicit: str | None = None) -> bool:
     return bool(gateway_api_key(explicit))
 
 
+def _env_truthy(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in _TRUTHY
+
+
+def _gateway_provider_options(
+    *,
+    zero_data_retention: bool | None = None,
+    only: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Build optional providerOptions.gateway — omitted by default (safer).
+
+    Strict ``only`` / ZDR filters commonly cause HTTP 403 when the key/plan
+    cannot route to that provider set. Opt in via env or explicit args:
+
+    - ``AI_GATEWAY_ZERO_DATA_RETENTION=1`` / ``JEV_ZERO_DATA_RETENTION=1``
+    - ``AI_GATEWAY_ONLY=typesafe-ai`` / ``JEV_GATEWAY_ONLY=typesafe-ai``
+      (comma-separated provider ids)
+    """
+    opts: dict[str, Any] = {}
+
+    zdr = zero_data_retention
+    if zdr is None:
+        zdr = _env_truthy("AI_GATEWAY_ZERO_DATA_RETENTION") or _env_truthy(
+            "JEV_ZERO_DATA_RETENTION"
+        )
+    if zdr:
+        opts["zeroDataRetention"] = True
+
+    providers = only
+    if providers is None:
+        raw = (
+            os.environ.get("AI_GATEWAY_ONLY")
+            or os.environ.get("JEV_GATEWAY_ONLY")
+            or ""
+        ).strip()
+        if raw:
+            providers = [p.strip() for p in raw.split(",") if p.strip()]
+    if providers:
+        opts["only"] = list(providers)
+
+    return {"gateway": opts} if opts else None
+
+
+def _response_detail(res: httpx.Response, *, limit: int = 240) -> str:
+    """Best-effort short body snippet for error messages (no traceback noise)."""
+    try:
+        data = res.json()
+        if isinstance(data, dict):
+            for key in ("error", "message", "detail"):
+                val = data.get(key)
+                if isinstance(val, dict):
+                    msg = val.get("message") or val.get("code") or str(val)
+                else:
+                    msg = val
+                if msg:
+                    return str(msg).strip()[:limit]
+            return str(data)[:limit]
+    except Exception:
+        pass
+    text = (res.text or "").strip()
+    return text[:limit] if text else ""
+
+
+def _denied_message(status_code: int, res: httpx.Response) -> str:
+    detail = _response_detail(res)
+    base = (
+        f"AI Gateway HTTP {status_code} on Jev /v1/evaluate. "
+        "Check AI_GATEWAY_API_KEY (Bearer) has evaluation access for typesafe-ai/jev. "
+        "If you set AI_GATEWAY_ONLY / JEV_GATEWAY_ONLY or "
+        "AI_GATEWAY_ZERO_DATA_RETENTION, clear them — strict only/ZDR often causes 403."
+    )
+    if detail:
+        return f"{base} Gateway said: {detail}"
+    return base
+
+
 def evaluate(
     state: Any,
     questions: dict[str, dict[str, Any]],
@@ -49,9 +127,15 @@ def evaluate(
     api_key: str | None = None,
     model: str = JEV_MODEL,
     timeout: float = DEFAULT_TIMEOUT_S,
-    zero_data_retention: bool = True,
+    zero_data_retention: bool | None = None,
+    only: list[str] | None = None,
 ) -> dict[str, Any]:
-    """POST /v1/evaluate on AI Gateway. Returns the full JSON body."""
+    """POST /v1/evaluate on AI Gateway. Returns the full JSON body.
+
+    Request shape matches Vercel docs: ``model``, ``state``, ``questions``
+    (boolean / choice / score). ``providerOptions.gateway`` is only sent when
+    ZDR or provider ``only`` is explicitly enabled.
+    """
     key = gateway_api_key(api_key)
     if not key:
         raise RuntimeError(
@@ -64,26 +148,38 @@ def evaluate(
         "model": model,
         "state": state,
         "questions": questions,
-        "providerOptions": {
-            "gateway": {
-                "zeroDataRetention": bool(zero_data_retention),
-                "only": ["typesafe-ai"],
-            }
-        },
     }
+    provider_options = _gateway_provider_options(
+        zero_data_retention=zero_data_retention,
+        only=only,
+    )
+    if provider_options:
+        payload["providerOptions"] = provider_options
+
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "User-Agent": "RoboScoutAI/jev",
     }
-    with httpx.Client(timeout=timeout) as client:
-        res = client.post(EVALUATE_URL, headers=headers, json=payload)
-        if res.status_code in {401, 403}:
-            raise RuntimeError(
-                "AI Gateway denied the Jev evaluate call. Check AI_GATEWAY_API_KEY."
-            )
-        res.raise_for_status()
-        data = res.json()
+    # Avoid httpx's default INFO "HTTP Request: ... 403" drowning the actionable warning.
+    httpx_log = logging.getLogger("httpx")
+    prev_level = httpx_log.level
+    try:
+        httpx_log.setLevel(logging.WARNING)
+        with httpx.Client(timeout=timeout) as client:
+            res = client.post(EVALUATE_URL, headers=headers, json=payload)
+            if res.status_code in {401, 403}:
+                raise RuntimeError(_denied_message(res.status_code, res))
+            if res.status_code >= 400:
+                detail = _response_detail(res)
+                msg = f"AI Gateway HTTP {res.status_code} on Jev /v1/evaluate."
+                if detail:
+                    msg = f"{msg} {detail}"
+                raise RuntimeError(msg)
+            data = res.json()
+    finally:
+        httpx_log.setLevel(prev_level)
+
     if not isinstance(data, dict):
         raise RuntimeError("Unexpected Jev response shape.")
     return data
@@ -266,6 +362,7 @@ def classify_camera_layout(
     try:
         result = evaluate(summary, questions, api_key=key)
     except Exception as exc:  # noqa: BLE001
+        log.warning("Jev camera layout skipped: %s", exc)
         return None, 0.0, [f"Jev camera layout skipped: {exc}"]
     answer = (result.get("answers") or {}).get("layout") or {}
     choice = choice_value(answer)
