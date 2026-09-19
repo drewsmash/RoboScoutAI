@@ -351,30 +351,116 @@ def apply_downloaded_update(package: Path) -> str:
 
 
 def manual_download_url(*, version: str = "", asset_name: str = "") -> str:
-    """Direct GitHub Releases URL for when auto-apply fails (e.g. Access Denied)."""
+    """Direct GitHub Releases URL for when auto-apply fails (e.g. Access Denied).
+
+    Prefer a concrete newest tag when known; otherwise ``/releases/latest`` so we
+    never hand the UI a stale pin like an old current_version.
+    """
     repo = github_repo()
     tag = normalize_version(version)
     name = asset_name or preferred_asset_names()[0]
-    if tag:
+    if tag and tag[0].isdigit():
         return f"https://github.com/{repo}/releases/download/v{tag}/{name}"
     return f"https://github.com/{repo}/releases/latest"
+
+
+def _latest_manual_download_url(info: UpdateInfo) -> str:
+    """Emergency Releases URL using the newest known channel version only."""
+    asset = info.asset_name if info.asset_name and not str(info.asset_name).startswith("git:") else ""
+    latest = normalize_version(info.latest_version or "")
+    if latest and latest[0].isdigit():
+        return manual_download_url(version=latest, asset_name=asset)
+    return manual_download_url(asset_name=asset)
+
+
+def _file_uri(path: Path) -> str:
+    return path.resolve().as_uri()
+
+
+def _reveal_path(path: Path) -> bool:
+    """Best-effort open Explorer/Finder on a local package (manual fallback)."""
+    try:
+        if not path.is_file() and not path.is_dir():
+            return False
+        system = platform.system().lower()
+        if system.startswith("win"):
+            subprocess.Popen(
+                ["explorer.exe", "/select,", str(path.resolve())],
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        if system == "darwin":
+            subprocess.Popen(
+                ["open", "-R", str(path.resolve())],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+    except OSError as exc:
+        log.warning("Could not reveal update package: %s", exc)
+    return False
+
+
+def manual_fallback_open_url(
+    info: UpdateInfo,
+    *,
+    package: Path | None = None,
+) -> str | None:
+    """Last-resort URL when git apply fails — prefer a local package over Releases."""
+    pending = _read_pending_update()
+    candidates: list[Path] = []
+    if package is not None:
+        candidates.append(Path(package))
+    if pending and pending.get("package"):
+        candidates.append(Path(str(pending["package"])))
+    # Already-fetched channel package in update-cache.
+    try:
+        cache_pkgs = update_cache_dir() / "packages"
+        if cache_pkgs.is_dir():
+            for name in preferred_asset_names():
+                hit = cache_pkgs / name
+                if hit.is_file():
+                    candidates.append(hit)
+                    break
+    except OSError:
+        pass
+
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                _reveal_path(cand)
+                return _file_uri(cand)
+        except OSError:
+            continue
+
+    # Never prefer browse/git URLs that look like Releases pins for old builds.
+    return _latest_manual_download_url(info)
+
+
+def should_open_manual_fallback(response: dict[str, Any]) -> bool:
+    """UI contract: open a URL only when apply failed and a fallback is present."""
+    return response.get("ok") is False and bool(response.get("open_url"))
 
 
 def apply_update_now() -> dict[str, Any]:
     """Check, fetch via git, and apply. Used by /api/updates/download."""
     info = check_for_update()
-    asset = info.asset_name if info.asset_name and not str(info.asset_name).startswith("git:") else ""
-    manual = manual_download_url(
-        version=info.latest_version or info.current_version,
-        asset_name=asset,
-    )
     if info.error and not info.available:
-        return {
+        fallback = manual_fallback_open_url(info)
+        result: dict[str, Any] = {
             "ok": False,
             "message": info.error,
-            "open_url": info.release_url or manual,
             "update": info.as_dict(),
+            "restarting": False,
         }
+        if fallback:
+            result["open_url"] = fallback
+        return result
     if not info.available:
         return {
             "ok": True,
@@ -382,28 +468,33 @@ def apply_update_now() -> dict[str, Any]:
             "update": info.as_dict(),
             "restarting": False,
         }
+    package: Path | None = None
     try:
         package = download_update(info)
         message = apply_downloaded_update(package)
     except Exception as exc:  # noqa: BLE001
         detail = str(exc)
-        return {
+        fallback = manual_fallback_open_url(info, package=package)
+        fail: dict[str, Any] = {
             "ok": False,
             "message": (
-                f"Auto-update failed ({detail}). "
-                f"Download {BINARY_NAME}-windows-x64.exe from the release page and run it "
-                "(More info → Run anyway if SmartScreen blocks the unsigned build)."
+                f"Git update failed ({detail}). "
+                f"If a package was downloaded, run it from the update-cache or "
+                f"%LOCALAPPDATA%\\{APP_NAME}\\. Otherwise download the newest "
+                f"{BINARY_NAME}-windows-x64.exe (More info → Run anyway if SmartScreen blocks)."
             ),
-            "open_url": info.release_url or manual,
             "error": detail,
             "update": info.as_dict(),
             "restarting": False,
         }
-    restarting = is_frozen() and package.is_file()
+        if fallback:
+            fail["open_url"] = fallback
+        return fail
+    restarting = bool(is_frozen() and package is not None and package.is_file())
+    # Success: never attach open_url — UI must not browser-download an old Release.
     return {
         "ok": True,
         "message": message,
-        "open_url": info.release_url or manual,
         "update": (last_check() or info.as_dict()),
         "restarting": restarting,
     }
@@ -603,8 +694,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
                 "Click Update again, or run the exe from "
                 f"%LOCALAPPDATA%\\{APP_NAME}\\ (unsigned builds need More info → Run anyway)."
             )
-            if info.latest_version and info.latest_version[0].isdigit():
-                info.release_url = manual_download_url(version=info.latest_version)
+            # Emergency-only newest Releases link (UI must not auto-open on check).
+            info.release_url = _latest_manual_download_url(info)
             return info
         if info.remote_sha and (
             not info.local_sha
@@ -629,9 +720,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
             f"{platform_key()} desktop binary under release-artifacts/, "
             "so nothing to apply automatically."
         )
-        # Still expose a Releases URL so the UI can offer a manual download.
-        if info.latest_version and info.latest_version[0].isdigit():
-            info.release_url = manual_download_url(version=info.latest_version)
+        # Emergency-only; keep browse URL otherwise — never auto-open on check.
+        info.release_url = _latest_manual_download_url(info)
         return info
 
     info.available = True
@@ -639,10 +729,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
     info.can_apply = True
     info.asset_name = Path(asset_rel).name
     info.asset_url = f"git:{asset_rel}"
-    if info.latest_version and info.latest_version[0].isdigit():
-        info.release_url = manual_download_url(
-            version=info.latest_version, asset_name=info.asset_name
-        )
+    # Keep release_url as the git browse URL (set at check start). Releases
+    # download links are emergency-only via apply_update_now failure paths.
     return info
 
 
@@ -1034,9 +1122,9 @@ def _apply_windows(package: Path) -> str:
     )
     threading.Timer(1.25, lambda: os._exit(0)).start()
     return (
-        f"Update downloaded to %LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe. "
-        "The app will close and relaunch. Builds are currently unsigned — if Windows "
-        "SmartScreen appears, click More info → Run anyway. "
+        f"Updating from git — installing into %LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe. "
+        "The app will close and relaunch from that LocalAppData install. "
+        "Builds are currently unsigned — if Windows SmartScreen appears, click More info → Run anyway. "
         f"If nothing opens, run that exe from File Explorer (log: %LOCALAPPDATA%\\{APP_NAME}\\update.log)."
     )
 

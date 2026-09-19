@@ -1362,6 +1362,11 @@ function initScoutTools() {
   refreshPicklist();
 }
 
+/** Only open a URL when git apply failed and the API attached a manual fallback. */
+function shouldOpenUpdateManualFallback(body) {
+  return Boolean(body) && body.ok === false && Boolean(body.open_url);
+}
+
 async function initUpdater() {
   const versionChip = $("version-chip");
   const updateChip = $("update-chip");
@@ -1454,19 +1459,25 @@ async function initUpdater() {
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
-        if (body.open_url) {
+        // Never open a URL on success/restarting — that was downloading an old Release exe.
+        if (shouldOpenUpdateManualFallback(body)) {
           window.open(body.open_url, "_blank", "noopener");
         }
         if (!res.ok || body.ok === false) {
-          alert(body.message || body.detail || "Update failed — opened the download page.");
+          alert(
+            body.message ||
+              body.detail ||
+              "Git update failed. If a fallback link opened, install the newest exe manually."
+          );
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
         alert(
-          (body.message || "Update started.") +
+          (body.message ||
+            "Updating from git — installing into %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe.") +
             "\n\nBuilds are unsigned for now — if SmartScreen appears: More info → Run anyway." +
-            "\nIf the app does not reopen, open %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe"
+            "\nAfter update, run from %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe"
         );
         if (!body.restarting) {
           updateChip.disabled = false;
@@ -1474,18 +1485,19 @@ async function initUpdater() {
           await refresh(true);
         }
       } catch (_err) {
-        if (releaseUrl) window.open(releaseUrl, "_blank", "noopener");
-        alert("Update from git failed — opened the release page so you can download the exe manually.");
+        // Network/parse failure only — last-resort manual fallback.
+        if (releaseUrl && /releases\//i.test(releaseUrl)) {
+          window.open(releaseUrl, "_blank", "noopener");
+        }
+        alert(
+          "Git update request failed. Install the newest RoboScoutAI-windows-x64.exe manually if needed."
+        );
         updateChip.disabled = false;
         updateChip.textContent = "Update available";
       }
       return;
     }
-    if (releaseUrl) {
-      window.open(releaseUrl, "_blank", "noopener");
-      return;
-    }
-    alert("No applyable desktop update is available right now.");
+    alert("No applyable desktop update is available right now. Updates install from git into LocalAppData.");
   });
 
   refresh(false);

@@ -160,7 +160,8 @@ def test_frozen_update_finds_artifact(monkeypatch, tmp_path):
     assert info.message == "update available from git"
     assert info.asset_name == "RoboScoutAI-windows-x64.exe"
     assert info.asset_url.startswith("git:")
-    assert "releases/download" in info.release_url
+    # Browse URL only — Releases download pins are emergency-only on apply failure.
+    assert "releases/download" not in (info.release_url or "").lower()
 
 
 def test_no_releases_api_usage():
@@ -189,6 +190,107 @@ def test_manual_download_url_points_at_github_cdn(monkeypatch):
         "https://github.com/drewsmash/RoboScoutAI/releases/download/"
         "v0.5.1/RoboScoutAI-windows-x64.exe"
     )
+    # Empty / non-semver must not invent a stale pin — use /releases/latest.
+    assert updater.manual_download_url(version="") == (
+        "https://github.com/drewsmash/RoboScoutAI/releases/latest"
+    )
+    assert updater.manual_download_url(version="deadbeef") == (
+        "https://github.com/drewsmash/RoboScoutAI/releases/latest"
+    )
+
+
+def test_should_open_manual_fallback_contract():
+    assert updater.should_open_manual_fallback({"ok": False, "open_url": "https://x"}) is True
+    assert updater.should_open_manual_fallback({"ok": True, "open_url": "https://x"}) is False
+    assert updater.should_open_manual_fallback({"ok": True, "restarting": True, "open_url": "https://x"}) is False
+    assert updater.should_open_manual_fallback({"ok": False}) is False
+    assert updater.should_open_manual_fallback({"ok": False, "open_url": ""}) is False
+
+
+def test_apply_update_now_success_omits_open_url(monkeypatch, tmp_path):
+    info = updater.UpdateInfo(
+        available=True,
+        current_version="0.5.2",
+        latest_version="0.5.6",
+        remote_sha="newsha",
+        local_sha="oldsha",
+        can_apply=True,
+        mode="frozen",
+        frozen=True,
+        asset_name="RoboScoutAI-windows-x64.exe",
+        release_url="https://github.com/drewsmash/RoboScoutAI/releases/download/v0.5.6/RoboScoutAI-windows-x64.exe",
+    )
+    pkg = tmp_path / "RoboScoutAI-windows-x64.exe"
+    pkg.write_bytes(b"MZ")
+
+    monkeypatch.setattr(updater, "check_for_update", lambda: info)
+    monkeypatch.setattr(updater, "download_update", lambda _info: pkg)
+    monkeypatch.setattr(
+        updater,
+        "apply_downloaded_update",
+        lambda _pkg: "Updating from git — installing into %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe.",
+    )
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "last_check", lambda: info.as_dict())
+
+    result = updater.apply_update_now()
+    assert result["ok"] is True
+    assert result["restarting"] is True
+    assert "open_url" not in result
+    assert "git" in result["message"].lower() or "LOCALAPPDATA" in result["message"]
+    assert updater.should_open_manual_fallback(result) is False
+
+
+def test_apply_update_now_failure_prefers_local_package(monkeypatch, tmp_path):
+    info = updater.UpdateInfo(
+        available=True,
+        current_version="0.5.2",
+        latest_version="0.5.6",
+        remote_sha="newsha",
+        can_apply=True,
+        mode="frozen",
+        frozen=True,
+        asset_name="RoboScoutAI-windows-x64.exe",
+    )
+    pkg = tmp_path / "packages" / "RoboScoutAI-windows-x64.exe"
+    pkg.parent.mkdir(parents=True)
+    pkg.write_bytes(b"MZ")
+    revealed = {}
+
+    monkeypatch.setattr(updater, "check_for_update", lambda: info)
+    monkeypatch.setattr(updater, "download_update", lambda _info: pkg)
+    monkeypatch.setattr(
+        updater,
+        "apply_downloaded_update",
+        lambda _pkg: (_ for _ in ()).throw(RuntimeError("Access is denied")),
+    )
+    monkeypatch.setattr(updater, "_reveal_path", lambda path: revealed.setdefault("path", path) or True)
+    monkeypatch.setattr(updater, "update_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "_read_pending_update", lambda: None)
+
+    result = updater.apply_update_now()
+    assert result["ok"] is False
+    assert result["restarting"] is False
+    assert result.get("open_url", "").startswith("file:")
+    assert revealed.get("path") == pkg
+    assert updater.should_open_manual_fallback(result) is True
+    # Must not fall back to an outdated Releases pin when a local package exists.
+    assert "releases/download/v0.5.0" not in (result.get("open_url") or "")
+
+
+def test_apply_update_now_up_to_date_no_open_url(monkeypatch):
+    info = updater.UpdateInfo(
+        available=False,
+        current_version="0.5.6",
+        latest_version="0.5.6",
+        message="up to date",
+        mode="frozen",
+    )
+    monkeypatch.setattr(updater, "check_for_update", lambda: info)
+    result = updater.apply_update_now()
+    assert result["ok"] is True
+    assert result["restarting"] is False
+    assert "open_url" not in result
 
 
 def test_windows_user_install_dir_uses_localappdata(monkeypatch, tmp_path):
