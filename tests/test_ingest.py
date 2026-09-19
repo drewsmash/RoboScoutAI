@@ -72,7 +72,7 @@ def test_resolve_cookies_path_env_and_appdata(tmp_path, monkeypatch):
 
     monkeypatch.delenv("YTDLP_COOKIES", raising=False)
     appdata = tmp_path / "AppData"
-    dest = appdata / "RamScoutAI" / "cookies.txt"
+    dest = appdata / "RoboScoutAI" / "cookies.txt"
     dest.parent.mkdir(parents=True)
     dest.write_text(cookie.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setenv("APPDATA", str(appdata))

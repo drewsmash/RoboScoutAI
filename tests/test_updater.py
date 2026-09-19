@@ -23,9 +23,10 @@ def test_version_tuple_ignores_junk():
 
 def test_preferred_assets_include_windows_or_mac(monkeypatch):
     monkeypatch.setattr(updater, "platform_key", lambda: "windows")
-    assert "RamScoutAI-windows-x64.exe" in updater.preferred_asset_names()
+    assert "RoboScoutAI-windows-x64.exe" in updater.preferred_asset_names()
+    assert all("RamScout" not in n for n in updater.preferred_asset_names())
     monkeypatch.setattr(updater, "platform_key", lambda: "macos-arm64")
-    assert "RamScoutAI-macos-arm64.zip" in updater.preferred_asset_names()
+    assert "RoboScoutAI-macos-arm64.zip" in updater.preferred_asset_names()
 
 
 def test_git_remote_env_and_legacy_repo(monkeypatch):
@@ -33,8 +34,8 @@ def test_git_remote_env_and_legacy_repo(monkeypatch):
     monkeypatch.delenv("RAMSCOUT_GITHUB_REPO", raising=False)
     assert updater.git_remote() == "https://example.com/ram.git"
     monkeypatch.delenv("RAMSCOUT_GIT_REMOTE", raising=False)
-    monkeypatch.setenv("RAMSCOUT_GITHUB_REPO", "acme/RamScoutAI")
-    assert updater.git_remote().endswith("acme/RamScoutAI.git")
+    monkeypatch.setenv("RAMSCOUT_GITHUB_REPO", "acme/RoboScoutAI")
+    assert updater.git_remote().endswith("acme/RoboScoutAI.git")
 
 
 def test_check_source_up_to_date(monkeypatch, tmp_path):
@@ -175,7 +176,8 @@ def test_no_releases_api_usage():
 def test_artifact_paths_prefer_release_artifacts():
     names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
     assert "RoboScoutAI-windows-x64.exe" in names
-    assert "RamScoutAI-windows-x64.exe" in names
+    assert "RoboScoutAI-windows-x64.exe" in names
+    assert all("RamScout" not in n for n in names)
     assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
 
 

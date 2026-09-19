@@ -4,11 +4,9 @@ Frozen RoboScoutAI builds look here when **Check for updates** / **Update now** 
 
 Commit platform binaries on the branch tracked by `RAMSCOUT_GIT_BRANCH` / `update-channel.txt`:
 
-- `RoboScoutAI-windows-x64.exe` (preferred) and legacy `RamScoutAI-windows-x64.exe`
-- Optional signed copies (`*-windows-x64-signed.exe`)
-- `RoboScoutAI-linux-x86_64.tar.gz` / `RoboScoutAI-macos-arm64.zip` (and legacy RamScoutAI names)
+- `RoboScoutAI-windows-x64.exe`
+- Optional signed copy (`RoboScoutAI-windows-x64-signed.exe`)
+- `RoboScoutAI-linux-x86_64.tar.gz` / `RoboScoutAI-macos-arm64.zip`
 
-This directory is the git updater source of truth. Local-only copies may still live under `desktop-downloads/` (gitignored).
-
-If in-app apply hits **Access Denied** (Program Files), download the Windows exe from
-GitHub Releases and run it — newer builds install under `%LOCALAPPDATA%\RoboScoutAI`.
+If in-app apply hits Access Denied or SmartScreen, download the Windows exe from
+GitHub Releases and run it from `%LOCALAPPDATA%\RoboScoutAI` (More info → Run anyway while unsigned).

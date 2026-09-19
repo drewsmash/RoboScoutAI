@@ -9,8 +9,8 @@ bash packaging/build.sh
 ```
 
 ### Windows
-- Output: `dist/release/RamScoutAI-windows-x64.exe` (or `dist/RamScoutAI.exe`)
-- Optional signed copy: `RamScoutAI-windows-x64-signed.exe`
+- Output: `dist/release/RoboScoutAI-windows-x64.exe` (or `dist/RoboScoutAI.exe`)
+- Optional signed copy: `RoboScoutAI-windows-x64-signed.exe`
 - For the **git updater** to auto-apply frozen builds, commit the EXE under `release-artifacts/` on the tracked branch (see below). `desktop-downloads/` is only for local staging and is gitignored.
 
 The Windows app opens Edge/Chrome in `--app` mode (no URL bar). It does **not** use the
@@ -21,13 +21,13 @@ bundled WinForms WebView path, which crashed some installs with
 ### Linux
 ```bash
 # after packaging/build.sh
-# dist/release/RamScoutAI-linux-<arch>.tar.gz
+# dist/release/RoboScoutAI-linux-<arch>.tar.gz
 ```
 
 ### macOS (build on a Mac)
 ```bash
 bash packaging/build.sh
-# dist/release/RamScoutAI-macos-arm64.zip (or macos-x64)
+# dist/release/RoboScoutAI-macos-arm64.zip (or macos-x64)
 ```
 
 ## In-app updater (git)
@@ -36,7 +36,7 @@ The updater **never** calls GitHub Releases (`/releases/latest`). It uses git:
 
 1. Resolve remote: `RAMSCOUT_GIT_REMOTE` (default repo URL) and `RAMSCOUT_GIT_BRANCH` (default `main`)
 2. **Source installs** (`.git` present): fetch, compare SHAs, pull/reset, ask for restart
-3. **Frozen EXE**: shallow clone/fetch into `%APPDATA%/RamScoutAI/update-cache` (or `RAMSCOUT_UPDATE_CACHE`), sparse-checkout known artifact paths under `release-artifacts/` (fallback: `desktop-downloads/`), replace the running binary
+3. **Frozen EXE**: shallow clone/fetch into `%APPDATA%/RoboScoutAI/update-cache` (or `RAMSCOUT_UPDATE_CACHE`), sparse-checkout known artifact paths under `release-artifacts/` (fallback: `desktop-downloads/`), replace the running binary
 
 | Check result | User-facing message |
 | --- | --- |
@@ -50,9 +50,9 @@ The updater **never** calls GitHub Releases (`/releases/latest`). It uses git:
 ```bash
 bash packaging/build.sh
 mkdir -p release-artifacts
-cp dist/release/RamScoutAI-windows-x64.exe release-artifacts/
+cp dist/release/RoboScoutAI-windows-x64.exe release-artifacts/
 # optional: echo "$(git rev-parse HEAD)" > release-artifacts/UPDATE.txt
-git add -f release-artifacts/RamScoutAI-windows-x64.exe
+git add -f release-artifacts/RoboScoutAI-windows-x64.exe
 git commit -m "Publish Windows desktop build for git updater"
 git push
 ```
@@ -66,9 +66,9 @@ Legacy `RAMSCOUT_GITHUB_REPO=owner/repo` is still accepted and rewritten to `htt
 If YouTube bot-checks downloads, either **upload the MP4/MKV** or place Netscape `cookies.txt` in one of:
 
 1. `YTDLP_COOKIES` env var
-2. Next to `RamScoutAI-windows-x64.exe`
-3. `%APPDATA%\RamScoutAI\cookies.txt` (Windows)
-4. `~/RamScoutAI/cookies.txt`
+2. Next to `RoboScoutAI-windows-x64.exe`
+3. `%APPDATA%\RoboScoutAI\cookies.txt` (Windows)
+4. `~/RoboScoutAI/cookies.txt`
 
 Export with a browser extension such as **Get cookies.txt LOCALLY**. Upload failures are classified separately from YouTube bot blocks — uploading a local file never shows the YouTube-blocked banner.
 

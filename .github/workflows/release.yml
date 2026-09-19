@@ -53,8 +53,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/release | Out-Null
           Copy-Item dist/RoboScoutAI.exe "dist/release/${{ matrix.artifact }}"
-          # Legacy filename so older RamScoutAI installs can still auto-update.
-          Copy-Item dist/RoboScoutAI.exe "dist/release/RamScoutAI-windows-x64.exe"
 
       - name: Sign Windows exe (optional)
         if: runner.os == 'Windows'
@@ -129,10 +127,6 @@ jobs:
           cd dist
           chmod +x RoboScoutAI
           zip -9 "release/${{ matrix.artifact }}" RoboScoutAI
-          # Legacy zip name + binary alias so older RamScoutAI updaters still match.
-          cp RoboScoutAI RamScoutAI
-          chmod +x RamScoutAI
-          zip -9 "release/RamScoutAI-macos-arm64.zip" RamScoutAI
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -175,9 +169,6 @@ jobs:
           ls -lah out
           test -f out/RoboScoutAI-windows-x64.exe
           test -f out/RoboScoutAI-macos-arm64.zip
-          # Legacy names for in-app updates from pre-rebrand installs.
-          test -f out/RamScoutAI-windows-x64.exe
-          test -f out/RamScoutAI-macos-arm64.zip
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -189,15 +180,13 @@ jobs:
           generate_release_notes: true
           files: out/*
           body: |
-            Desktop builds for **RoboScoutAI** (rebranded from RamScoutAI).
+            Desktop builds for **RoboScoutAI**.
 
             - **Windows:** download `RoboScoutAI-windows-x64.exe` and run it
             - **Mac (Apple Silicon):** download `RoboScoutAI-macos-arm64.zip`, unzip, then run `./RoboScoutAI`
 
-            Legacy `RamScoutAI-*` assets are also attached so older installs can auto-update.
-
             If SmartScreen / Gatekeeper warns, see `docs/SIGNING.md`. Signed builds ship when repo signing secrets are configured.
 
-            The in-app updater checks this release for newer versions.
+            The in-app updater pulls desktop binaries from the git update channel / this release.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
