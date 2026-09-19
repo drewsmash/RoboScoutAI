@@ -57,6 +57,15 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
+**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
+
+Optional neural depth (source installs):
+
+```bash
+pip install transformers torch pillow
+# Depth-Anything-V2-Small loads from Hugging Face on first use
+```
+
 API keys (optional, also in the UI Advanced panel):
 
 - `OPENAI_API_KEY`
@@ -149,6 +158,8 @@ pytest -q
 ## Limits
 
 - Wide, mostly fixed cameras work best
+- Multi-angle VODs: top overview + side cams improve scoring/climb confidence; single cams still work via BEV tilt cues
 - Scorebug OCR needs a readable graphic; title/description is the backup
 - Climb detection is “stayed on the Tower in endgame”, not rung level
 - Hub candidates are low-speed dwells next to the Hub, not counted fuel
+- Depth Anything V2 is optional; without it, classical depth still adjusts the BEV trapezoid

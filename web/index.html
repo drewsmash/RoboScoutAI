@@ -108,12 +108,12 @@
             <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
           </label>
           <label class="check field">
-            <span>Auto top-camera crop</span>
+            <span>Auto multi-view crop</span>
             <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
           </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, upload the file you already saved (best fix), or set cookies / a proxy. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts: top wide-angle drives the top-down map (Depth Anything V2 / BEV for camera angle); bottom side cams feed blue/red scoring &amp; climb cues. If YouTube blocks the cloud download, upload the file you already saved. Scores come from the broadcast overlay when possible.</p>
     </form>
     <div class="yt-help" id="yt-help" hidden>
       <strong>YouTube download blocked.</strong>
@@ -122,14 +122,33 @@
   </section>
 
   <main class="workspace" id="workspace" hidden>
-    <section class="progress-panel" id="progress-panel">
-      <div class="progress-copy">
-        <div class="progress-status" id="progress-status">Starting…</div>
-        <div class="progress-message" id="progress-message"></div>
+    <section class="progress-panel thinking" id="progress-panel">
+      <div class="think-orbits" aria-hidden="true">
+        <span class="orbit o1"></span>
+        <span class="orbit o2"></span>
+        <span class="orbit o3"></span>
+        <span class="core"></span>
       </div>
-      <div class="progress-track" aria-hidden="true">
-        <div class="progress-fill" id="progress-fill"></div>
+      <div class="progress-main">
+        <div class="progress-copy">
+          <div class="progress-status" id="progress-status">Starting…</div>
+          <div class="progress-message" id="progress-message"></div>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" id="progress-fill"></div>
+          <div class="progress-shimmer"></div>
+        </div>
+        <ol class="think-stages" id="think-stages"></ol>
       </div>
+    </section>
+
+    <section class="views-panel" id="views-panel" hidden>
+      <header class="section-head tight">
+        <h2>Camera views</h2>
+        <p id="views-lede">Sectioned angles — overview for movement, side cams for scoring &amp; climbs.</p>
+      </header>
+      <div class="views-grid" id="views-grid"></div>
+      <div class="bev-chip-row" id="bev-meta" hidden></div>
     </section>
 
     <section class="scoreboard" id="scoreboard" hidden>
@@ -166,10 +185,15 @@
         </header>
         <div class="video-frame">
           <video id="match-video" controls playsinline></video>
+          <canvas id="track-overlay" class="track-overlay" aria-hidden="true"></canvas>
           <div class="video-empty" id="video-empty">
             <p>Sample matches don’t include a download. Watch the field replay instead.</p>
           </div>
           <canvas id="cal-canvas" hidden></canvas>
+          <label class="overlay-toggle" title="Show tracking boxes on the broadcast">
+            <input type="checkbox" id="overlay-toggle" checked />
+            <span>Tracking overlay</span>
+          </label>
         </div>
         <div class="cal-bar" id="cal-bar" hidden>
           <p id="cal-help">Click the four field corners on the frame: top-left, top-right, bottom-right, bottom-left.</p>

@@ -1,13 +1,16 @@
-"""Detect multi-angle FRC broadcast layouts and prefer the top camera.
+"""Detect multi-angle FRC broadcast layouts and section them into roles.
 
-Many event VODs stack two feeds vertically: a correctly oriented high/wide
-field camera on top, and a sideline/close-up angle below. Tracking should use
-the top pane so field geometry matches blue-left / red-right orientation.
+Many event VODs stack feeds:
+- Top wide / high camera → overview for general movement (top-down map)
+- Bottom pane → often a closer sideline; when wide enough we split it into
+  blue-side (left) and red-side (right) for scoring / climb reasoning
+
+Older single-camera broadcasts keep the classic scorebug-aware crop.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,18 +18,57 @@ import numpy as np
 
 
 @dataclass
-class CameraLayout:
-    """Normalized vertical crop that isolates the preferred camera."""
+class CameraPane:
+    """One camera crop with a scouting role."""
 
-    mode: str  # "single" | "stacked_top" | "stacked_bottom" | "manual"
+    role: str  # overview | blue_side | red_side | sideline
+    crop_top: float
+    crop_bottom: float
+    crop_left: float = 0.0
+    crop_right: float = 1.0
+    purpose: str = ""
+    alliance_bias: str | None = None  # blue | red | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def slice_frame(self, frame: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        y0 = int(np.clip(self.crop_top, 0, 1) * h)
+        y1 = int(np.clip(self.crop_bottom, 0, 1) * h)
+        x0 = int(np.clip(self.crop_left, 0, 1) * w)
+        x1 = int(np.clip(self.crop_right, 0, 1) * w)
+        y0, y1 = max(0, min(y0, h - 1)), max(y0 + 1, min(y1, h))
+        x0, x1 = max(0, min(x0, w - 1)), max(x0 + 1, min(x1, w))
+        return frame[y0:y1, x0:x1]
+
+
+@dataclass
+class CameraLayout:
+    """Normalized crop layout for preferred + side camera panes."""
+
+    mode: str  # single | stacked_top | stacked_sides | manual
     crop_top: float
     crop_bottom: float
     confidence: float
     detail: str
     split_y: float | None = None
+    split_x: float | None = None
+    panes: list[CameraPane] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["panes"] = [p.as_dict() if hasattr(p, "as_dict") else p for p in self.panes]
+        return data
+
+    def overview_pane(self) -> CameraPane | None:
+        for pane in self.panes:
+            if pane.role == "overview":
+                return pane
+        return None
+
+    def side_panes(self) -> list[CameraPane]:
+        return [p for p in self.panes if p.role in {"blue_side", "red_side", "sideline"}]
 
 
 def analyze_frame(frame: np.ndarray) -> CameraLayout:
@@ -35,16 +77,21 @@ def analyze_frame(frame: np.ndarray) -> CameraLayout:
     Heuristic: look for a strong horizontal band of low-motion / dark gutter
     near mid-frame (letterbox / divider between stacked angles). Prefer the
     upper pane when found — that feed is typically the correctly oriented
-    field overview.
+    field overview. When stacked, also try to split the lower pane left/right
+    for blue vs red side cameras.
     """
     if frame is None or getattr(frame, "size", 0) == 0:
-        return CameraLayout("single", 0.10, 0.65, 0.0, "Empty frame.")
+        layout = CameraLayout("single", 0.10, 0.65, 0.0, "Empty frame.")
+        layout.panes = [_single_overview(0.10, 0.65)]
+        return layout
 
     import cv2
 
     h, w = frame.shape[:2]
     if h < 120 or w < 160:
-        return CameraLayout("single", 0.10, 0.65, 0.2, "Frame too small to classify.")
+        layout = CameraLayout("single", 0.10, 0.65, 0.2, "Frame too small to classify.")
+        layout.panes = [_single_overview(0.10, 0.65)]
+        return layout
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     # Row energy: mean absolute horizontal gradient — dividers are flat.
@@ -68,7 +115,9 @@ def analyze_frame(frame: np.ndarray) -> CameraLayout:
     best_score, split_y = scores[0]
     median_score = float(np.median([s for s, _ in scores]))
     if median_score <= 1e-3:
-        return CameraLayout("single", 0.10, 0.65, 0.2, "Could not measure frame energy.")
+        layout = CameraLayout("single", 0.10, 0.65, 0.2, "Could not measure frame energy.")
+        layout.panes = [_single_overview(0.10, 0.65)]
+        return layout
 
     contrast = (median_score - best_score) / median_score
     split_norm = split_y / float(h)
@@ -79,25 +128,80 @@ def analyze_frame(frame: np.ndarray) -> CameraLayout:
     panes_ok = upper > best_score * 1.35 and lower > best_score * 1.35
 
     if contrast >= 0.22 and panes_ok and 0.32 <= split_norm <= 0.68:
-        # Top camera: from a small headroom crop down to just above the split.
         crop_top = 0.02
         crop_bottom = min(max(split_norm - 0.01, 0.35), 0.70)
         if crop_bottom - crop_top < 0.25:
             crop_bottom = min(crop_top + 0.40, 0.70)
+
+        lower_top = min(max(split_norm + 0.01, crop_bottom), 0.95)
+        lower_bottom = 0.98
+        split_x = _vertical_split(gray, lower_top, lower_bottom)
+
+        panes = [
+            CameraPane(
+                role="overview",
+                crop_top=round(crop_top, 3),
+                crop_bottom=round(crop_bottom, 3),
+                purpose="Top wide-angle — general movement for the top-down map",
+            )
+        ]
+        mode = "stacked_top"
+        detail = (
+            "Detected a stacked dual-camera layout. Top wide-angle drives movement "
+            "tracking; lower angle feeds scoring / climb reasoning."
+        )
+
+        if split_x is not None and 0.35 <= split_x <= 0.65:
+            panes.extend(
+                [
+                    CameraPane(
+                        role="blue_side",
+                        crop_top=round(lower_top, 3),
+                        crop_bottom=round(lower_bottom, 3),
+                        crop_left=0.0,
+                        crop_right=round(split_x, 3),
+                        purpose="Bottom-left side camera — blue scoring / climb",
+                        alliance_bias="blue",
+                    ),
+                    CameraPane(
+                        role="red_side",
+                        crop_top=round(lower_top, 3),
+                        crop_bottom=round(lower_bottom, 3),
+                        crop_left=round(split_x, 3),
+                        crop_right=1.0,
+                        purpose="Bottom-right side camera — red scoring / climb",
+                        alliance_bias="red",
+                    ),
+                ]
+            )
+            mode = "stacked_sides"
+            detail = (
+                "Stacked layout with split lower pane: top wide-angle for movement, "
+                "bottom-left for blue scoring/climb, bottom-right for red scoring/climb."
+            )
+        else:
+            panes.append(
+                CameraPane(
+                    role="sideline",
+                    crop_top=round(lower_top, 3),
+                    crop_bottom=round(lower_bottom, 3),
+                    purpose="Lower sideline / close-up — scoring and climb cues",
+                )
+            )
+
         return CameraLayout(
-            mode="stacked_top",
+            mode=mode,
             crop_top=round(crop_top, 3),
             crop_bottom=round(crop_bottom, 3),
             confidence=round(min(0.95, 0.45 + contrast), 3),
-            detail=(
-                "Detected a stacked dual-camera layout. Using the top camera "
-                "(correct field orientation) and ignoring the lower angle."
-            ),
+            detail=detail,
             split_y=round(split_norm, 3),
+            split_x=round(split_x, 3) if split_x is not None else None,
+            panes=panes,
         )
 
     # Single wide broadcast — keep the classic scorebug-aware crop.
-    return CameraLayout(
+    layout = CameraLayout(
         mode="single",
         crop_top=0.10,
         crop_bottom=0.65,
@@ -105,6 +209,8 @@ def analyze_frame(frame: np.ndarray) -> CameraLayout:
         detail="Single-camera (or unclear) layout — using the default field crop.",
         split_y=round(split_norm, 3) if contrast > 0.12 else None,
     )
+    layout.panes = [_single_overview(0.10, 0.65)]
+    return layout
 
 
 def analyze_video(video_path: Path | str, sample_times_s: list[float] | None = None) -> CameraLayout:
@@ -114,7 +220,9 @@ def analyze_video(video_path: Path | str, sample_times_s: list[float] | None = N
     path = Path(video_path)
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
-        return CameraLayout("single", 0.10, 0.65, 0.0, f"Could not open video: {path}")
+        layout = CameraLayout("single", 0.10, 0.65, 0.0, f"Could not open video: {path}")
+        layout.panes = [_single_overview(0.10, 0.65)]
+        return layout
 
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -130,23 +238,35 @@ def analyze_video(video_path: Path | str, sample_times_s: list[float] | None = N
     cap.release()
 
     if not votes:
-        return CameraLayout("single", 0.10, 0.65, 0.0, "No frames readable for camera layout.")
+        layout = CameraLayout("single", 0.10, 0.65, 0.0, "No frames readable for camera layout.")
+        layout.panes = [_single_overview(0.10, 0.65)]
+        return layout
 
-    stacked = [v for v in votes if v.mode == "stacked_top"]
+    stacked = [v for v in votes if v.mode in {"stacked_top", "stacked_sides"}]
     if len(stacked) >= max(1, (len(votes) + 1) // 2):
+        # Prefer the richest sectional vote when available.
+        sides = [v for v in stacked if v.mode == "stacked_sides"]
+        best = sides[len(sides) // 2] if sides else stacked[len(stacked) // 2]
         crop_top = float(np.median([v.crop_top for v in stacked]))
         crop_bottom = float(np.median([v.crop_bottom for v in stacked]))
         conf = float(np.mean([v.confidence for v in stacked]))
         split = float(np.median([v.split_y for v in stacked if v.split_y is not None] or [0.5]))
+        split_x_vals = [v.split_x for v in stacked if v.split_x is not None]
+        split_x = float(np.median(split_x_vals)) if split_x_vals else best.split_x
         return CameraLayout(
-            mode="stacked_top",
+            mode=best.mode,
             crop_top=round(crop_top, 3),
             crop_bottom=round(crop_bottom, 3),
             confidence=round(conf, 3),
-            detail=stacked[0].detail,
+            detail=best.detail,
             split_y=round(split, 3),
+            split_x=round(split_x, 3) if split_x is not None else None,
+            panes=list(best.panes),
         )
-    return votes[len(votes) // 2]
+    mid = votes[len(votes) // 2]
+    if not mid.panes:
+        mid.panes = [_single_overview(mid.crop_top, mid.crop_bottom)]
+    return mid
 
 
 def apply_layout(
@@ -156,11 +276,12 @@ def apply_layout(
     user_crop_bottom: float | None = None,
     auto: bool = True,
 ) -> tuple[float, float, CameraLayout]:
-    """Return crop bounds, honoring manual crops unless auto multi-cam wins."""
+    """Return overview crop bounds, honoring manual crops unless auto multi-cam wins."""
     if not auto:
         top = 0.10 if user_crop_top is None else float(user_crop_top)
         bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
         manual = CameraLayout("manual", top, bottom, 1.0, "Using manual crop bounds.")
+        manual.panes = [_single_overview(top, bottom)]
         return top, bottom, manual
 
     # If the user already widened/narrowed away from defaults, respect them.
@@ -175,11 +296,56 @@ def apply_layout(
             1.0,
             "Using manual crop bounds (multi-camera auto-detect skipped).",
         )
+        manual.panes = [_single_overview(float(user_crop_top), float(user_crop_bottom))]
         return float(user_crop_top), float(user_crop_bottom), manual
 
-    if layout.mode == "stacked_top" and layout.confidence >= 0.5:
+    if layout.mode in {"stacked_top", "stacked_sides"} and layout.confidence >= 0.5:
+        if not layout.panes:
+            layout.panes = [_single_overview(layout.crop_top, layout.crop_bottom)]
         return layout.crop_top, layout.crop_bottom, layout
 
     top = 0.10 if user_crop_top is None else float(user_crop_top)
     bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
+    if not layout.panes:
+        layout.panes = [_single_overview(top, bottom)]
     return top, bottom, layout
+
+
+def _single_overview(top: float, bottom: float) -> CameraPane:
+    return CameraPane(
+        role="overview",
+        crop_top=top,
+        crop_bottom=bottom,
+        purpose="Wide field overview — general movement for the top-down map",
+    )
+
+
+def _vertical_split(gray: np.ndarray, top: float, bottom: float) -> float | None:
+    """Find a vertical gutter in the lower pane (two side-by-side close-ups)."""
+    import cv2
+
+    h, w = gray.shape[:2]
+    y0 = int(np.clip(top, 0, 1) * h)
+    y1 = int(np.clip(bottom, 0, 1) * h)
+    y0, y1 = max(0, min(y0, h - 2)), max(y0 + 1, min(y1, h))
+    band = gray[y0:y1, :]
+    if band.size == 0 or band.shape[1] < 80:
+        return None
+    sobel = cv2.Sobel(band, cv2.CV_32F, 0, 1, ksize=3)
+    col_energy = np.mean(np.abs(sobel), axis=0)
+    x0 = int(w * 0.30)
+    x1 = int(w * 0.70)
+    window = max(2, w // 100)
+    scores: list[tuple[float, int]] = []
+    for x in range(x0, x1):
+        sl = slice(max(0, x - window), min(w, x + window + 1))
+        scores.append((float(np.mean(col_energy[sl])), x))
+    scores.sort(key=lambda item: item[0])
+    best, best_x = scores[0]
+    median = float(np.median([s for s, _ in scores]))
+    if median <= 1e-3:
+        return None
+    contrast = (median - best) / median
+    if contrast < 0.18:
+        return None
+    return best_x / float(w)
