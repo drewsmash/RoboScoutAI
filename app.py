@@ -161,10 +161,23 @@ def updates_download() -> dict:
     try:
         result = apply_update_now()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, str(exc)) from exc
+        # Never leave the user stuck on WinError 5 — always offer the direct download.
+        from ramscout.updater import manual_download_url
+
+        return {
+            "ok": False,
+            "open_url": manual_download_url(),
+            "message": (
+                f"Auto-update failed ({exc}). "
+                "Opening the download page — save RoboScoutAI-windows-x64.exe and run it."
+            ),
+            "error": str(exc),
+        }
     update = result.get("update") or {}
-    if not result.get("ok") and update.get("available"):
-        raise HTTPException(400, result.get("message") or "Update failed.")
+    if not result.get("ok"):
+        if not result.get("open_url") and update.get("release_url"):
+            result["open_url"] = update["release_url"]
+        return result
     return result
 
 
