@@ -314,24 +314,35 @@ def _store(info: UpdateInfo) -> UpdateInfo:
 
 def _apply_windows(package: Path) -> str:
     exe = Path(sys.executable).resolve()
-    staging = exe.with_suffix(exe.suffix + ".new")
+    target = _windows_install_target(exe)
+    staging = target.with_suffix(target.suffix + ".new")
     shutil.copy2(package, staging)
     script = Path(tempfile.gettempdir()) / "roboscout_update.bat"
-    script.write_text(
-        "\r\n".join(
-            [
-                "@echo off",
-                "timeout /t 2 /nobreak >nul",
-                f'move /Y "{staging}" "{exe}"',
-                f'start "" "{exe}"',
-                f'del "%~f0"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    lines = [
+        "@echo off",
+        "timeout /t 2 /nobreak >nul",
+        f'move /Y "{staging}" "{target}"',
+    ]
+    if target.resolve() != exe.resolve():
+        lines.append(f'del /F /Q "{exe}"')
+    lines.extend(
+        [
+            f'start "" "{target}"',
+            'del "%~f0"',
+            "",
+        ]
     )
+    script.write_text("\r\n".join(lines), encoding="utf-8")
     subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
     return f"Update staged. {APP_NAME} will restart momentarily."
+
+
+def _windows_install_target(exe: Path) -> Path:
+    """Prefer RoboScoutAI.exe when upgrading a legacy RamScoutAI.exe install."""
+    lower_name = exe.name.lower()
+    if LEGACY_BINARY_NAME.lower() in lower_name and BINARY_NAME.lower() not in lower_name:
+        return exe.with_name(f"{BINARY_NAME}.exe")
+    return exe
 
 
 def _apply_macos(package: Path) -> str:
@@ -358,18 +369,24 @@ def _apply_macos(package: Path) -> str:
     if replacement is None:
         raise RuntimeError(f"Could not find {APP_NAME} binary inside the macOS update archive.")
 
-    staging = exe.with_name(exe.name + ".new")
+    target = exe
+    if LEGACY_BINARY_NAME in exe.name and BINARY_NAME not in exe.name:
+        target = exe.with_name(BINARY_NAME)
+
+    staging = target.with_name(target.name + ".new")
     shutil.copy2(replacement, staging)
     os.chmod(staging, 0o755)
     script = Path(tempfile.gettempdir()) / "roboscout_update.sh"
+    remove_old = f'rm -f "{exe}"' if target.resolve() != exe.resolve() else "true"
     script.write_text(
         "\n".join(
             [
                 "#!/bin/bash",
                 "sleep 2",
-                f'mv -f "{staging}" "{exe}"',
-                f'chmod +x "{exe}"',
-                f'"{exe}" >/dev/null 2>&1 &',
+                f'mv -f "{staging}" "{target}"',
+                f'chmod +x "{target}"',
+                remove_old,
+                f'"{target}" >/dev/null 2>&1 &',
                 f'rm -f "{script}"',
                 "",
             ]

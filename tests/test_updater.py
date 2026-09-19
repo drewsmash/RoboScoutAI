@@ -131,6 +131,17 @@ def test_check_for_update_uses_newest_semver(monkeypatch):
     assert info.asset_url.endswith("new.exe")
 
 
+def test_windows_install_target_rebrands_legacy():
+    from pathlib import Path
+
+    from ramscout.updater import _windows_install_target
+
+    legacy = Path("/apps/RamScoutAI.exe")
+    assert _windows_install_target(legacy).name == "RoboScoutAI.exe"
+    modern = Path("/apps/RoboScoutAI.exe")
+    assert _windows_install_target(modern).name == "RoboScoutAI.exe"
+
+
 def test_missing_release_explains_next_step(monkeypatch):
     class FakeResp:
         status_code = 404
