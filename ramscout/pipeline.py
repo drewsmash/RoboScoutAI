@@ -82,6 +82,10 @@ class Job:
     tracker_strategies: list[str] = field(default_factory=list)
     source_hits: dict[str, int] = field(default_factory=dict)
     camera: dict[str, Any] = field(default_factory=dict)
+    views: dict[str, Any] = field(default_factory=dict)
+    bev: dict[str, Any] = field(default_factory=dict)
+    side_cues: list[dict[str, Any]] = field(default_factory=list)
+    thinking_stages: list[dict[str, Any]] = field(default_factory=list)
     auto_multicam: bool = True
     edited_events: bool = False
     media_source: str = "youtube"  # upload | youtube | demo
@@ -119,6 +123,10 @@ class Job:
             "tracker_strategies": self.tracker_strategies,
             "source_hits": self.source_hits,
             "camera": self.camera,
+            "views": self.views,
+            "bev": self.bev,
+            "side_cues": self.side_cues,
+            "thinking_stages": self.thinking_stages,
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
             "media_source": self.media_source,
@@ -181,15 +189,24 @@ class JobStore:
                 setattr(job, key, value)
 
     def set_progress(self, job: Job, status: str, message: str, progress: float) -> None:
-        stages = list(job.thinking_stages or [])
-        stages.append(
-            {
+        stages = list(getattr(job, "thinking_stages", None) or [])
+        # Dedupe consecutive identical status ticks so the panel stays readable.
+        if stages and stages[-1].get("status") == status and stages[-1].get("message") == message:
+            stages[-1] = {
                 "status": status,
                 "message": message,
                 "progress": round(float(progress), 1),
                 "at": _now(),
             }
-        )
+        else:
+            stages.append(
+                {
+                    "status": status,
+                    "message": message,
+                    "progress": round(float(progress), 1),
+                    "at": _now(),
+                }
+            )
         # Keep the panel snappy — last ~12 stage ticks.
         if len(stages) > 12:
             stages = stages[-12:]
