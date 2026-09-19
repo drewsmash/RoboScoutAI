@@ -1463,7 +1463,11 @@ async function initUpdater() {
           updateChip.textContent = "Update available";
           return;
         }
-        alert(body.message || "Update applied from git — the app will restart.");
+        alert(
+          (body.message || "Update started.") +
+            "\n\nBuilds are unsigned for now — if SmartScreen appears: More info → Run anyway." +
+            "\nIf the app does not reopen, open %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe"
+        );
         if (!body.restarting) {
           updateChip.disabled = false;
           updateChip.hidden = true;

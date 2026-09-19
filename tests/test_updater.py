@@ -225,6 +225,40 @@ def test_classify_rejects_downgrade():
     )
 
 
+def test_classify_semver_beats_matching_sha():
+    # Failed Windows apply used to pin remote SHA while still on the old exe.
+    assert (
+        updater.classify_update(
+            current_version="0.5.2",
+            remote_version="0.5.4",
+            local_sha="samesha",
+            remote_sha="samesha",
+        )
+        == "available"
+    )
+
+
+def test_apply_windows_does_not_write_sha_immediately(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    pkg = tmp_path / "RoboScoutAI-windows-x64.exe"
+    pkg.write_bytes(b"MZ-fake-exe")
+    written = {}
+
+    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "last_check", lambda: {"remote_sha": "deadbeef"})
+    monkeypatch.setattr(updater, "_write_installed_sha", lambda sha: written.setdefault("sha", sha))
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(updater.threading, "Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(updater.sys, "executable", str(tmp_path / "old" / "RoboScoutAI.exe"))
+
+    msg = updater.apply_downloaded_update(pkg)
+    assert "SmartScreen" in msg or "unsigned" in msg.lower()
+    assert "sha" not in written
+    pending = updater._read_pending_update()
+    assert pending and pending["sha"] == "deadbeef"
+
+
 def test_frozen_does_not_offer_older_main(monkeypatch, tmp_path):
     cache = tmp_path / "cache"
     mirror = cache / "mirror"
