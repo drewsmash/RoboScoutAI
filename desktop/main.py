@@ -53,7 +53,7 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.info("Update check: %s", info.error)
         return
     if not info.available:
-        log.info("RamScoutAI %s is up to date (%s).", info.current_version, info.message or "git")
+        log.info("RoboScoutAI %s is up to date (%s).", info.current_version, info.message or "git")
         return
     log.info(
         "Update available from git: %s → %s (%s @ %s)",

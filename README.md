@@ -36,7 +36,7 @@ GitHub Actions (`.github/workflows/release.yml`) builds:
 
 ### In-app updater (git remote — not GitHub Releases)
 
-RamScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
+RoboScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
 
 | Mode | Behavior |
 | --- | --- |
@@ -47,14 +47,14 @@ Config:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RamScoutAI.git` | Git remote URL |
+| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RoboScoutAI.git` | Git remote URL |
 | `RAMSCOUT_GIT_BRANCH` | `main` | Branch to track |
 | `RAMSCOUT_UPDATE_CACHE` | appdata / `.ramscout-update-cache` | Mirror + package cache |
 | `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` | — | Optional HTTPS auth for private remotes |
 
 UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available from git*, or *git remote unreachable*.
 
-For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RamScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
+For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RoboScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
 
 Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
 
@@ -116,7 +116,7 @@ Optional env vars:
 
 Because this repository is private, open the release while signed into GitHub to download, or set `RAMSCOUT_GITHUB_TOKEN` for in-app updates:
 
-https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.3
+https://github.com/drewsmash/RoboScoutAI/releases/tag/v0.4.3
 
 
 Click **Try a sample match** to explore the UI without a download.
@@ -127,7 +127,7 @@ A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the f
 
 ### YouTube download (bot checks)
 
-Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI tries a resilient ladder:
+Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RoboScoutAI tries a resilient ladder:
 
 1. **yt-dlp** with multiple player clients (`android`/`ios`, `tv`, `web_embedded`, …) and a **format ladder** (progressive `18` → muxed 720p → `worst`)  
 2. Your **`YTDLP_PROXY`** / `HTTPS_PROXY` residential proxy (recommended for servers)  
@@ -138,7 +138,7 @@ Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not 
 Also supported:
 
 - `YTDLP_COOKIES=/path/to/cookies.txt` — Netscape cookies from a signed-in browser  
-- Desktop auto-discovery (no env required): `cookies.txt` next to the EXE, `%APPDATA%\RamScoutAI\cookies.txt`, or `~/RamScoutAI/cookies.txt`  
+- Desktop auto-discovery (no env required): `cookies.txt` next to the EXE, `%APPDATA%\RoboScoutAI\cookies.txt`, or `~/RoboScoutAI/cookies.txt`  
 - Export with a browser extension such as **Get cookies.txt LOCALLY**, then drop the file in one of those locations  
 - `YTDLP_BROWSER=chrome` (or `edge` / `firefox`) — cookies-from-browser on a signed-in machine  
 - `YTDLP_FORMAT=…` — override the format selector  

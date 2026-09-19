@@ -23,9 +23,10 @@ def test_version_tuple_ignores_junk():
 
 def test_preferred_assets_include_windows_or_mac(monkeypatch):
     monkeypatch.setattr(updater, "platform_key", lambda: "windows")
-    assert "RamScoutAI-windows-x64.exe" in updater.preferred_asset_names()
+    assert "RoboScoutAI-windows-x64.exe" in updater.preferred_asset_names()
+    assert all("RamScout" not in n for n in updater.preferred_asset_names())
     monkeypatch.setattr(updater, "platform_key", lambda: "macos-arm64")
-    assert "RamScoutAI-macos-arm64.zip" in updater.preferred_asset_names()
+    assert "RoboScoutAI-macos-arm64.zip" in updater.preferred_asset_names()
 
 
 def test_git_remote_env_and_legacy_repo(monkeypatch):
@@ -33,8 +34,8 @@ def test_git_remote_env_and_legacy_repo(monkeypatch):
     monkeypatch.delenv("RAMSCOUT_GITHUB_REPO", raising=False)
     assert updater.git_remote() == "https://example.com/ram.git"
     monkeypatch.delenv("RAMSCOUT_GIT_REMOTE", raising=False)
-    monkeypatch.setenv("RAMSCOUT_GITHUB_REPO", "acme/RamScoutAI")
-    assert updater.git_remote().endswith("acme/RamScoutAI.git")
+    monkeypatch.setenv("RAMSCOUT_GITHUB_REPO", "acme/RoboScoutAI")
+    assert updater.git_remote().endswith("acme/RoboScoutAI.git")
 
 
 def test_check_source_up_to_date(monkeypatch, tmp_path):
@@ -175,7 +176,8 @@ def test_no_releases_api_usage():
 def test_artifact_paths_prefer_release_artifacts():
     names = {Path(p).name for p in updater._ARTIFACT_REL_PATHS}
     assert "RoboScoutAI-windows-x64.exe" in names
-    assert "RamScoutAI-windows-x64.exe" in names
+    assert "RoboScoutAI-windows-x64.exe" in names
+    assert all("RamScout" not in n for n in names)
     assert updater._ARTIFACT_REL_PATHS[0].startswith("release-artifacts/")
 
 
@@ -223,6 +225,126 @@ def test_classify_rejects_downgrade():
         )
         == "available"
     )
+
+
+def test_classify_semver_beats_matching_sha():
+    # Failed Windows apply used to pin remote SHA while still on the old exe.
+    assert (
+        updater.classify_update(
+            current_version="0.5.2",
+            remote_version="0.5.4",
+            local_sha="samesha",
+            remote_sha="samesha",
+        )
+        == "available"
+    )
+
+
+def test_apply_windows_does_not_write_sha_immediately(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    pkg = tmp_path / "RoboScoutAI-windows-x64.exe"
+    pkg.write_bytes(b"MZ-fake-exe")
+    written = {}
+
+    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "last_check", lambda: {"remote_sha": "deadbeef"})
+    monkeypatch.setattr(updater, "_write_installed_sha", lambda sha: written.setdefault("sha", sha))
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(updater.threading, "Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(updater.sys, "executable", str(tmp_path / "old" / "RoboScoutAI.exe"))
+
+    msg = updater.apply_downloaded_update(pkg)
+    assert "SmartScreen" in msg or "unsigned" in msg.lower()
+    assert "sha" not in written
+    pending = updater._read_pending_update()
+    assert pending and pending["sha"] == "deadbeef"
+
+
+def test_windows_update_bat_hardening_invariants():
+    """Bat must not use premature self-delete / move-on-locked-exe patterns."""
+    lines = updater._windows_update_bat_lines(
+        pid=4242,
+        src=r"C:\Temp\pkg.exe",
+        dst=r"C:\Users\x\AppData\Local\RoboScoutAI\RoboScoutAI.exe",
+        portable=r"C:\Users\x\Downloads\RoboScoutAI.exe",
+        sha_path=r"C:\Users\x\AppData\Local\RoboScoutAI\update-git-sha.txt",
+        log_path=r"C:\Users\x\AppData\Local\RoboScoutAI\update.log",
+        sha="abc123",
+        install_dir=r"C:\Users\x\AppData\Local\RoboScoutAI",
+    )
+    text = "\r\n".join(lines)
+    lower = text.lower()
+
+    # Package install uses copy / Copy-Item — never move package→target.
+    assert "Copy-Item" in text
+    assert "copy /y" in lower
+    assert "move /y" not in lower
+    assert "move " not in lower
+
+    # Reliable PID wait + settle; no flaky tasklist/findstr loop.
+    assert "Wait-Process" in text
+    assert "tasklist" not in lower
+    assert "findstr" not in lower
+
+    # Logging + SmartScreen MOTW unblock + locked-target .new replace.
+    assert "update.log" in text
+    assert "Unblock-File" in text
+    assert ".new" in text
+    assert "TARGET_LOCKED" in text
+    assert "COPY_FAILED" in text
+    assert 'explorer.exe /select,"%SRC%"' in text
+
+    # SHA only after successful copy block (appears after COPY_OK / replace).
+    sha_idx = text.index('>"%SHAFILE%" echo %SHA%')
+    copy_idx = text.index("Copy-Item")
+    assert copy_idx < sha_idx
+
+    # Self-delete must be last actionable line via safe goto pattern.
+    non_empty = [ln for ln in lines if ln.strip()]
+    assert non_empty[-1] == '(goto) 2>nul & del "%~f0"'
+    # No bare mid-script del of self before work finishes.
+    premature = [
+        i
+        for i, ln in enumerate(lines)
+        if 'del "%~f0"' in ln and "(goto)" not in ln
+    ]
+    assert premature == []
+
+
+def test_apply_windows_writes_hardened_bat(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    pkg = tmp_path / "RoboScoutAI-windows-x64.exe"
+    pkg.write_bytes(b"MZ-fake-exe")
+    captured: dict = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured["creationflags"] = kwargs.get("creationflags", 0)
+        return None
+
+    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater, "last_check", lambda: {"remote_sha": "cafebabe"})
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(updater.threading, "Timer", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(updater.sys, "executable", str(tmp_path / "old" / "RoboScoutAI.exe"))
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    updater.apply_downloaded_update(pkg)
+    bat = tmp_path / "tmp" / "roboscout_update.bat"
+    assert bat.is_file()
+    body = bat.read_text(encoding="utf-8")
+    assert "Wait-Process" in body
+    assert "Copy-Item" in body
+    assert "Unblock-File" in body
+    assert "update.log" in body
+    assert body.rstrip().endswith('(goto) 2>nul & del "%~f0"')
+    assert "move /Y" not in body
+    # CREATE_NO_WINDOW (0x08000000) so success path stays silent.
+    assert captured["creationflags"] & 0x08000000
+    assert "cmd.exe" in captured["args"][0]
 
 
 def test_frozen_does_not_offer_older_main(monkeypatch, tmp_path):

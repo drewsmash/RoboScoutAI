@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 from ramscout import __version__
-from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO, LEGACY_APP_NAME, LEGACY_BINARY_NAME
+from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO
 from ramscout.paths import app_dir, data_dir, is_frozen
 
 log = logging.getLogger(__name__)
@@ -71,22 +71,12 @@ _ARTIFACT_REL_PATHS = (
     "release-artifacts/RoboScoutAI-macos-arm64.zip",
     "release-artifacts/RoboScoutAI-macos-x64.zip",
     "release-artifacts/RoboScoutAI-linux-x86_64.tar.gz",
-    "release-artifacts/RamScoutAI-windows-x64.exe",
-    "release-artifacts/RamScoutAI-windows-x64-signed.exe",
-    "release-artifacts/RamScoutAI-macos-arm64.zip",
-    "release-artifacts/RamScoutAI-macos-x64.zip",
-    "release-artifacts/RamScoutAI-linux-x86_64.tar.gz",
     "desktop-downloads/RoboScoutAI-windows-x64.exe",
-    "desktop-downloads/RamScoutAI-windows-x64.exe",
-    "desktop-downloads/RamScoutAI-windows-x64-signed.exe",
-    "desktop-downloads/RamScoutAI-macos-arm64.zip",
-    "desktop-downloads/RamScoutAI-macos-x64.zip",
-    "desktop-downloads/RamScoutAI-macos-arm64.7z",
-    "desktop-downloads/RamScoutAI-linux-x86_64.tar.gz",
+    "desktop-downloads/RoboScoutAI-macos-arm64.zip",
+    "desktop-downloads/RoboScoutAI-macos-x64.zip",
+    "desktop-downloads/RoboScoutAI-linux-x86_64.tar.gz",
     "dist/release/RoboScoutAI-windows-x64.exe",
-    "dist/release/RamScoutAI-windows-x64.exe",
     "dist/release/RoboScoutAI-macos-arm64.zip",
-    "dist/release/RamScoutAI-macos-arm64.zip",
 )
 
 
@@ -138,7 +128,7 @@ def github_repo() -> str:
     if path.count("/") >= 1:
         parts = path.split("/")
         return f"{parts[-2]}/{parts[-1]}"
-    return path or "drewsmash/RamScoutAI"
+    return path or "drewsmash/RoboScoutAI"
 
 
 def update_cache_dir() -> Path:
@@ -172,9 +162,9 @@ def platform_key() -> str:
 
 
 def preferred_asset_names() -> list[str]:
-    """Ordered candidates: new brand first, then legacy RamScoutAI names."""
+    """Ordered RoboScoutAI desktop artifact names for this platform."""
     key = platform_key()
-    brands = (BINARY_NAME, LEGACY_BINARY_NAME)
+    brands = (BINARY_NAME,)
     if key == "windows":
         names: list[str] = []
         for brand in brands:
@@ -244,10 +234,11 @@ def classify_update(
     local_sha: str,
     remote_sha: str,
 ) -> str:
-    """Return up_to_date | available | ahead (local newer than remote channel)."""
-    if local_sha and remote_sha and local_sha == remote_sha:
-        return "up_to_date"
+    """Return up_to_date | available | ahead (local newer than remote channel).
 
+    Semver wins over SHA. A pinned SHA must never hide a newer remote version
+    (that was the 'closed then up to date' failure mode after a botched apply).
+    """
     remote_ver = normalize_version(remote_version or "")
     current_ver = normalize_version(current_version or "")
     if remote_ver and re.match(r"^\d", remote_ver) and current_ver and re.match(r"^\d", current_ver):
@@ -258,6 +249,9 @@ def classify_update(
         # Same semver: only offer when we know the installed SHA and it differs (hotfix).
         if local_sha and remote_sha and local_sha != remote_sha:
             return "available"
+        return "up_to_date"
+
+    if local_sha and remote_sha and local_sha == remote_sha:
         return "up_to_date"
 
     # No usable semver — require a known local SHA drift (never empty→anything).
@@ -293,7 +287,7 @@ def check_for_update(current: str | None = None, timeout: float = 60.0) -> Updat
         release_url=_browse_url(git_remote()),
     )
     if not shutil.which("git"):
-        info.error = "git is not installed, so RamScoutAI cannot check for updates from the remote."
+        info.error = f"git is not installed, so {APP_NAME} cannot check for updates from the remote."
         info.message = "git remote unreachable"
         return _store(info)
 
@@ -334,7 +328,7 @@ def apply_downloaded_update(package: Path) -> str:
     package = Path(package)
     root = source_git_root()
     if root is not None and package.resolve() == root.resolve():
-        return "Source tree updated from git. Restart RamScoutAI to load the new code."
+        return f"Source tree updated from git. Restart {APP_NAME} to load the new code."
 
     if not is_frozen():
         raise RuntimeError("Auto-apply of a binary package only works from the desktop build.")
@@ -343,8 +337,9 @@ def apply_downloaded_update(package: Path) -> str:
 
     system = platform.system().lower()
     if system.startswith("win"):
-        message = _apply_windows(package)
-    elif system == "darwin":
+        # Windows bat writes the SHA only after a successful copy.
+        return _apply_windows(package)
+    if system == "darwin":
         message = _apply_macos(package)
     else:
         raise RuntimeError("Auto-apply of binaries is only supported on Windows and macOS.")
@@ -368,9 +363,10 @@ def manual_download_url(*, version: str = "", asset_name: str = "") -> str:
 def apply_update_now() -> dict[str, Any]:
     """Check, fetch via git, and apply. Used by /api/updates/download."""
     info = check_for_update()
+    asset = info.asset_name if info.asset_name and not str(info.asset_name).startswith("git:") else ""
     manual = manual_download_url(
         version=info.latest_version or info.current_version,
-        asset_name=info.asset_name if info.asset_name and not info.asset_name.startswith("git:") else "",
+        asset_name=asset,
     )
     if info.error and not info.available:
         return {
@@ -395,7 +391,8 @@ def apply_update_now() -> dict[str, Any]:
             "ok": False,
             "message": (
                 f"Auto-update failed ({detail}). "
-                f"Download {BINARY_NAME}-windows-x64.exe from the release page and run it."
+                f"Download {BINARY_NAME}-windows-x64.exe from the release page and run it "
+                "(More info → Run anyway if SmartScreen blocks the unsigned build)."
             ),
             "open_url": info.release_url or manual,
             "error": detail,
@@ -406,6 +403,7 @@ def apply_update_now() -> dict[str, Any]:
     return {
         "ok": True,
         "message": message,
+        "open_url": info.release_url or manual,
         "update": (last_check() or info.as_dict()),
         "restarting": restarting,
     }
@@ -592,10 +590,29 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
                 f"Installed {info.current_version} is newer than {branch} "
                 f"({info.latest_version or info.remote_sha[:7]})."
             )
-        # Pin installed SHA so empty→remote never flaps as an "update".
+        # Only pin SHA when versions already match (or no semver). Never pin when
+        # a newer remote version exists — that hid failed Windows applies.
+        pending = _read_pending_update()
+        if pending and pending.get("sha") and pending.get("sha") == info.remote_sha:
+            # Last apply never finished — keep offering / expose manual download.
+            info.available = True
+            info.can_apply = True
+            info.message = "previous update did not finish installing"
+            info.error = (
+                "A previous update closed the app but did not relaunch. "
+                "Click Update again, or run the exe from "
+                f"%LOCALAPPDATA%\\{APP_NAME}\\ (unsigned builds need More info → Run anyway)."
+            )
+            if info.latest_version and info.latest_version[0].isdigit():
+                info.release_url = manual_download_url(version=info.latest_version)
+            return info
         if info.remote_sha and (
             not info.local_sha
-            or (status == "up_to_date" and info.local_sha != info.remote_sha and not is_newer(info.latest_version, info.current_version))
+            or (
+                status == "up_to_date"
+                and info.local_sha != info.remote_sha
+                and not is_newer(info.latest_version, info.current_version)
+            )
         ):
             _write_installed_sha(info.remote_sha)
             info.local_sha = info.remote_sha
@@ -797,7 +814,46 @@ def _apply_source_pull(root: Path, branch: str) -> None:
 
 
 def _installed_sha_path() -> Path:
+    """Prefer always-writable LocalAppData — Program Files often denies writes."""
+    system = platform.system().lower()
+    if system.startswith("win"):
+        return _windows_user_install_dir() / "update-git-sha.txt"
+    if system == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "update-git-sha.txt"
     return app_dir() / "update-git-sha.txt"
+
+
+def _pending_update_path() -> Path:
+    return update_cache_dir() / "pending-update.json"
+
+
+def _write_pending_update(*, sha: str, package: Path, target: Path) -> None:
+    payload = {
+        "sha": (sha or "").strip(),
+        "package": str(package),
+        "target": str(target),
+    }
+    path = _pending_update_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _clear_pending_update() -> None:
+    try:
+        _pending_update_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _read_pending_update() -> dict[str, Any] | None:
+    path = _pending_update_path()
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def _read_installed_sha() -> str:
@@ -807,72 +863,181 @@ def _read_installed_sha() -> str:
             return path.read_text(encoding="utf-8").strip()
     except OSError:
         pass
+    # Legacy: older builds wrote next to the EXE.
+    legacy = app_dir() / "update-git-sha.txt"
+    try:
+        if legacy.is_file() and legacy.resolve() != path.resolve():
+            return legacy.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
     return ""
 
 
 def _write_installed_sha(sha: str) -> None:
     try:
-        _installed_sha_path().write_text(sha.strip() + "\n", encoding="utf-8")
+        path = _installed_sha_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sha.strip() + "\n", encoding="utf-8")
+        _clear_pending_update()
     except OSError as exc:
         log.warning("Could not persist installed git sha: %s", exc)
 
 
-def _apply_windows(package: Path) -> str:
-    r"""Install into %LOCALAPPDATA%\RoboScoutAI so Program Files Access Denied is avoided.
+def _windows_update_bat_lines(
+    *,
+    pid: int,
+    src: str,
+    dst: str,
+    portable: str,
+    sha_path: str,
+    log_path: str,
+    sha: str,
+    install_dir: str,
+) -> list[str]:
+    """Build the Windows update .bat body (unit-tested for safety invariants).
 
-    Waits for this process PID to exit before copying, then relaunches.
+    Hardening notes vs older broken bats:
+    - Never ``move`` the package onto a locked running EXE (that produced
+      ``Access is denied. / 0 file(s) moved.``).
+    - Wait for PID exit via PowerShell ``Wait-Process`` (tasklist/findstr was flaky).
+    - If the install target is still locked, copy to ``.new`` then replace; on
+      failure open Explorer to the download and do **not** pin the SHA.
+    - Self-delete only as the final line via ``(goto) 2>nul & del`` so cmd does
+      not emit ``The batch file cannot be found.`` after a mid-run ``del``.
+    """
+    return [
+        "@echo off",
+        "setlocal EnableExtensions",
+        f"set PID={pid}",
+        f'set "SRC={src}"',
+        f'set "DST={dst}"',
+        f'set "DSTNEW={dst}.new"',
+        f'set "PORTABLE={portable}"',
+        f'set "SHAFILE={sha_path}"',
+        f'set "LOG={log_path}"',
+        f'set "SHA={sha}"',
+        f'set "INSTALLDIR={install_dir}"',
+        'echo [%DATE% %TIME%] update start pid=%PID% > "%LOG%"',
+        'echo SRC=%SRC%>> "%LOG%"',
+        'echo DST=%DST%>> "%LOG%"',
+        'echo PORTABLE=%PORTABLE%>> "%LOG%"',
+        'echo waiting for pid %PID% >> "%LOG%"',
+        # Reliable wait: Wait-Process; ignore if already gone. Extra ping settle for AV locks.
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Wait-Process -Id ([int]$env:PID) -Timeout 180 -ErrorAction Stop } catch { }" >> "%LOG%" 2>&1',
+        "ping -n 3 127.0.0.1 >nul",
+        'echo [%DATE% %TIME%] process exited >> "%LOG%"',
+        'if not exist "%INSTALLDIR%" mkdir "%INSTALLDIR%"',
+        # Prefer Copy-Item -Force (handles read-only attrs better than cmd copy).
+        "set COPY_OK=0",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Copy-Item -LiteralPath $env:SRC -Destination $env:DST -Force '
+            "-ErrorAction Stop; Write-Output 'COPY_OK'; exit 0 } catch { "
+            'Write-Output $_.Exception.Message; exit 1 }" >> "%LOG%" 2>&1'
+        ),
+        'if not errorlevel 1 set COPY_OK=1',
+        'if "%COPY_OK%"=="0" (',
+        '  echo direct copy failed, trying .new replace >> "%LOG%"',
+        '  copy /Y "%SRC%" "%DSTNEW%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo COPY_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  if exist "%DST%" del /F /Q "%DST%" >> "%LOG%" 2>&1',
+        '  if exist "%DST%" (',
+        '    echo TARGET_LOCKED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  copy /Y "%DSTNEW%" "%DST%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo REPLACE_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  del /F /Q "%DSTNEW%" >nul 2>nul',
+        "  set COPY_OK=1",
+        ")",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Unblock-File -LiteralPath $env:DST -ErrorAction SilentlyContinue } '
+            'catch {}" >> "%LOG%" 2>&1'
+        ),
+        # Best-effort refresh of original location (Program Files often denies — ignore).
+        'if /I not "%PORTABLE%"=="%DST%" (',
+        '  copy /Y "%SRC%" "%PORTABLE%" >> "%LOG%" 2>&1',
+        ")",
+        # Pin SHA only after a successful install copy.
+        'if defined SHA if not "%SHA%"=="" (',
+        '  >"%SHAFILE%" echo %SHA%',
+        '  echo wrote sha %SHA% >> "%LOG%"',
+        ")",
+        'echo launching "%DST%" >> "%LOG%"',
+        'start "" /D "%INSTALLDIR%" "%DST%"',
+        "if errorlevel 1 (",
+        '  echo START_FAILED >> "%LOG%"',
+        '  start "" explorer.exe /select,"%DST%"',
+        "  exit /b 1",
+        ")",
+        'echo OK >> "%LOG%"',
+        "endlocal",
+        # Last line only: exit parse context then delete self (avoids "batch file cannot be found").
+        '(goto) 2>nul & del "%~f0"',
+        "",
+    ]
+
+
+def _apply_windows(package: Path) -> str:
+    r"""Install into %LOCALAPPDATA%\RoboScoutAI, wait for PID exit, then relaunch.
+
+    Does NOT mark the SHA installed yet — the bat writes that after a successful
+    copy so a failed relaunch cannot falsely report "up to date".
     """
     exe = Path(sys.executable).resolve()
     pid = os.getpid()
     install_dir = _windows_user_install_dir()
     install_dir.mkdir(parents=True, exist_ok=True)
     target = install_dir / f"{BINARY_NAME}.exe"
-
-    # Also try to refresh the original location when it is writable (portable installs).
     portable_target = _windows_install_target(exe)
+    sha = (last_check() or {}).get("remote_sha") or ""
+    sha_file = _installed_sha_path()
+    log_file = install_dir / "update.log"
+    _write_pending_update(sha=sha, package=package, target=target)
+
     script = Path(tempfile.gettempdir()) / "roboscout_update.bat"
     src = str(package.resolve())
     dst = str(target.resolve())
     portable = str(portable_target.resolve())
-    lines = [
-        "@echo off",
-        "setlocal",
-        f"set PID={pid}",
-        f'set SRC={src}',
-        f'set DST={dst}',
-        f'set PORTABLE={portable}',
-        ":waitloop",
-        'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-        "if not errorlevel 1 (",
-        "  timeout /t 1 /nobreak >nul",
-        "  goto waitloop",
-        ")",
-        f'if not exist "{install_dir}" mkdir "{install_dir}"',
-        'copy /Y "%SRC%" "%DST%" >nul',
-        "if errorlevel 1 (",
-        f'  echo Failed to copy update into {install_dir}',
-        "  exit /b 1",
-        ")",
-        # Best-effort refresh of the original exe when the folder is writable.
-        'if /I not "%PORTABLE%"=="%DST%" (',
-        '  copy /Y "%SRC%" "%PORTABLE%" >nul 2>nul',
-        ")",
-        'start "" "%DST%"',
-        'del "%~f0" >nul 2>nul',
-        "endlocal",
-        "",
-    ]
-    script.write_text("\r\n".join(lines), encoding="utf-8")
-    subprocess.Popen(
-        ["cmd", "/c", str(script)],
-        close_fds=True,
-        creationflags=_windows_detach_flags(),
+    sha_path = str(sha_file.resolve())
+    log_path = str(log_file.resolve())
+    lines = _windows_update_bat_lines(
+        pid=pid,
+        src=src,
+        dst=dst,
+        portable=portable,
+        sha_path=sha_path,
+        log_path=log_path,
+        sha=sha,
+        install_dir=str(install_dir),
     )
-    # Unlock the running binary so the bat can finish after we return the HTTP response.
-    threading.Timer(0.75, lambda: os._exit(0)).start()
+    script.write_text("\r\n".join(lines), encoding="utf-8")
+    # CREATE_NO_WINDOW keeps the console from flashing; Explorer opens only on failure.
+    creation = _windows_detach_flags() | 0x08000000  # CREATE_NO_WINDOW
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script)],
+        close_fds=True,
+        creationflags=creation,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    threading.Timer(1.25, lambda: os._exit(0)).start()
     return (
-        f"Update downloaded. {APP_NAME} will restart from "
-        f"%LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe"
+        f"Update downloaded to %LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe. "
+        "The app will close and relaunch. Builds are currently unsigned — if Windows "
+        "SmartScreen appears, click More info → Run anyway. "
+        f"If nothing opens, run that exe from File Explorer (log: %LOCALAPPDATA%\\{APP_NAME}\\update.log)."
     )
 
 
@@ -887,9 +1052,8 @@ def _windows_user_install_dir() -> Path:
 
 
 def _windows_install_target(exe: Path) -> Path:
-    """Prefer RoboScoutAI.exe when upgrading a legacy RamScoutAI.exe install."""
-    lower_name = exe.name.lower()
-    if LEGACY_BINARY_NAME.lower() in lower_name and BINARY_NAME.lower() not in lower_name:
+    """Install / refresh target as RoboScoutAI.exe next to the running binary."""
+    if exe.suffix.lower() == ".exe":
         return exe.with_name(f"{BINARY_NAME}.exe")
     return exe
 
@@ -944,12 +1108,12 @@ def _apply_macos(package: Path) -> str:
 
 
 def _find_macos_binary(root: Path) -> Path | None:
-    for name in (BINARY_NAME, LEGACY_BINARY_NAME):
+    for name in (BINARY_NAME,):
         candidates = sorted(root.rglob(name))
         for path in candidates:
             if path.is_file() and os.access(path, os.X_OK):
                 return path
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix == "" and ("RoboScout" in path.name or "RamScout" in path.name):
+        if path.is_file() and path.suffix == "" and "RoboScout" in path.name:
             return path
     return None
