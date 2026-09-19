@@ -91,6 +91,7 @@ class StartRequest(BaseModel):
     tracker_mode: str = "hybrid"
     openai_key: str = ""
     google_key: str = ""
+    ai_gateway_key: str = ""
     auto_multicam: bool = True
 
 
@@ -199,6 +200,7 @@ def trackers() -> dict:
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
             "yolo": "pip install ultralytics (+ optional models/*.pt)",
+            "jev": "AI_GATEWAY_API_KEY (Vercel AI Gateway → typesafe-ai/jev)",
         },
     }
 
@@ -233,6 +235,9 @@ def create_job(body: StartRequest) -> dict:
         google_key=body.google_key.strip()
         or os.environ.get("GOOGLE_API_KEY", "")
         or os.environ.get("GEMINI_API_KEY", ""),
+        ai_gateway_key=body.ai_gateway_key.strip()
+        or os.environ.get("AI_GATEWAY_API_KEY", "")
+        or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
         auto_multicam=bool(body.auto_multicam),
     )
     return job.public()
@@ -250,6 +255,7 @@ async def create_job_upload(
     tracker_mode: str = Form("hybrid"),
     openai_key: str = Form(""),
     google_key: str = Form(""),
+    ai_gateway_key: str = Form(""),
     auto_multicam: bool = Form(True),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
@@ -292,6 +298,9 @@ async def create_job_upload(
             google_key=(google_key or "").strip()
             or os.environ.get("GOOGLE_API_KEY", "")
             or os.environ.get("GEMINI_API_KEY", ""),
+            ai_gateway_key=(ai_gateway_key or "").strip()
+            or os.environ.get("AI_GATEWAY_API_KEY", "")
+            or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
             auto_multicam=bool(auto_multicam),
         )
     except HTTPException:

@@ -78,6 +78,7 @@ API keys (optional, also in the UI Advanced panel):
 
 - `OPENAI_API_KEY`
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+- `AI_GATEWAY_API_KEY` — Vercel AI Gateway; enables [Jev](https://vercel.com/ai-gateway/models/jev) (`typesafe-ai/jev`) to verify hub/climb/defense candidates and help classify multi-view layouts
 
 For stronger local neural detection from source:
 
