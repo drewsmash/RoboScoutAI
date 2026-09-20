@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from ramscout.trackers.color import ColorTracker
+from ramscout.trackers.field_gate import FieldGate
 from ramscout.trackers.flow import OpticalFlowTracker
 from ramscout.trackers.gemini_vision import GeminiVisionTracker
 from ramscout.trackers.motion import MotionTracker
 from ramscout.trackers.mot import MotTracker
 from ramscout.trackers.openai_vision import OpenAIVisionTracker
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import merge_detections
+from ramscout.trackers.utils import centroid, merge_detections
 from ramscout.trackers.yolo import YoloTracker
 
 # Pure OpenCV strategies — no models, no API keys, works on low-end machines.
@@ -155,7 +158,13 @@ def resolve_strategies(
 
 
 class EnsembleTracker:
-    """Run strategies with optional hybrid cascade, then SORT-style MOT."""
+    """Run strategies with optional hybrid cascade, then SORT-style MOT.
+
+    When a :class:`~ramscout.trackers.field_gate.FieldGate` is attached (see
+    :meth:`configure_geometry`), every proposal is checked against the field
+    polygon / footprint / static-background model before association, and the
+    MOT associates in field inches with physical speed gating.
+    """
 
     def __init__(self, strategies: list[Any], *, cascade: bool = False) -> None:
         self.strategies = strategies
@@ -163,16 +172,32 @@ class EnsembleTracker:
         self.flow = next((s for s in strategies if getattr(s, "name", "") == "optical_flow"), None)
         self.hits: dict[str, int] = {getattr(s, "name", "unknown"): 0 for s in strategies}
         self.warnings: list[str] = []
-        self.mot = MotTracker(max_age=20, min_hits=2, max_tracks=8)
+        self.mot = MotTracker(max_age=15, min_hits=3, max_tracks=8)
+        self.field_gate: FieldGate | None = None
         self._frames = 0
         self._cloud_confirm_every = 12  # processed frames between optional cloud calls
 
+    def configure_geometry(self, gate: FieldGate | None, *, dt_s: float, static_window_s: float = 4.0) -> None:
+        """Attach the field gate and switch MOT to BEV (field-inch) association."""
+        self.field_gate = gate
+        self.mot.dt_s = float(max(dt_s, 1e-3))
+        self.mot.field_projector = gate.projector() if gate is not None else None
+        self.mot.require_motion_to_confirm = gate is not None
+        self.mot.static_after_hits = max(10, int(round(static_window_s / self.mot.dt_s)))
+
     def detect(self, cropped, ctx: TrackerContext) -> list[Detection]:
         self._frames += 1
+        gate = self.field_gate
+        if gate is not None:
+            gate.observe(cropped)
+
         if self.cascade:
             merged = self._detect_cascade(cropped, ctx)
         else:
             merged = self._detect_flat(cropped, ctx)
+
+        if gate is not None:
+            merged = gate.filter(merged)
 
         if self.flow is not None:
             if merged:
@@ -181,17 +206,22 @@ class EnsembleTracker:
                 flowed = self.flow.detect(cropped, ctx) or []
             except Exception:  # noqa: BLE001
                 flowed = []
+            if flowed and gate is not None:
+                flowed = gate.filter(flowed, mark=False)
             if flowed:
                 self.hits["optical_flow"] = self.hits.get("optical_flow", 0) + len(flowed)
                 if len(merged) < 5:
                     merged = merge_detections(merged, flowed, min_dist=32.0)
 
-        return self.mot.update(
+        tracks = self.mot.update(
             merged,
             frame_w=ctx.crop_w,
             frame_h=ctx.crop_h,
             frame_bgr=cropped,
         )
+        if gate is not None:
+            tracks = gate.filter_tracks(tracks)
+        return tracks
 
     def _detect_flat(self, cropped, ctx: TrackerContext) -> list[Detection]:
         primary: list[Detection] = []
@@ -217,9 +247,9 @@ class EnsembleTracker:
 
     def _detect_cascade(self, cropped, ctx: TrackerContext) -> list[Detection]:
         """Fast local proposals every frame; sparse cloud/YOLO confirmation."""
-        proposals: list[Detection] = []
         by_name = {getattr(t, "name", ""): t for t in self.strategies}
 
+        local: dict[str, list[Detection]] = {}
         for name in ("motion", "color"):
             tracker = by_name.get(name)
             if tracker is None:
@@ -227,7 +257,8 @@ class EnsembleTracker:
             dets = self._safe_detect(tracker, cropped, ctx)
             if dets:
                 self.hits[name] = self.hits.get(name, 0) + len(dets)
-                proposals = merge_detections(proposals, dets, min_dist=28.0)
+                local[name] = dets
+        proposals = fuse_local_proposals(local.get("motion", []), local.get("color", []))
 
         need_confirm = self._needs_cloud_confirm(proposals, ctx)
         if need_confirm:
@@ -290,6 +321,85 @@ class EnsembleTracker:
                 if w not in self.warnings:
                     self.warnings.append(w)
         return dets
+
+
+def fuse_local_proposals(
+    motion: list[Detection],
+    color: list[Detection],
+    *,
+    min_dist: float = 28.0,
+    min_iou: float = 0.2,
+) -> list[Detection]:
+    """Merge motion and bumper-color proposals, rewarding agreement.
+
+    A motion blob that also contains a bumper-colored blob is very likely a
+    robot: it inherits the alliance label and a confidence boost. Motion-only
+    and color-only boxes are kept (with their own confidence) so recall is not
+    lost, but they no longer outrank agreeing pairs in MOT.
+    """
+    if not motion:
+        return list(color)
+    if not color:
+        return list(motion)
+    fused: list[Detection] = []
+    used_color: set[int] = set()
+    for m in motion:
+        mcx, mcy = centroid(m.bbox)
+        best_j, best_score = -1, 0.0
+        for j, c in enumerate(color):
+            if j in used_color:
+                continue
+            ccx, ccy = centroid(c.bbox)
+            dist = float(np.hypot(mcx - ccx, mcy - ccy))
+            iou = _iou(m.bbox, c.bbox)
+            # A bumper blob sits inside / on the lower part of the robot blob.
+            inside = _contains(m.bbox, (ccx, ccy))
+            score = iou + (0.5 if inside else 0.0) + (0.3 if dist < min_dist else 0.0)
+            if (iou >= min_iou or inside or dist < min_dist) and score > best_score:
+                best_j, best_score = j, score
+        if best_j >= 0:
+            c = color[best_j]
+            used_color.add(best_j)
+            meta = dict(m.meta or {})
+            meta["agree"] = ["motion", "color"]
+            # Only a blob in the lower part of the robot box is a bumper; a
+            # colored mechanism / jersey / LED up top must not set the alliance.
+            _ccx, ccy = centroid(c.bbox)
+            lower = ccy >= m.bbox[1] + 0.4 * (m.bbox[3] - m.bbox[1])
+            fused.append(
+                Detection(
+                    track_id=m.track_id,
+                    bbox=list(m.bbox),
+                    source="motion",
+                    confidence=float(min(0.92, max(m.confidence, c.confidence) + (0.15 if lower else 0.05))),
+                    alliance=c.alliance if lower else m.alliance,
+                    team=m.team or c.team,
+                    meta=meta,
+                )
+            )
+        else:
+            fused.append(m)
+    for j, c in enumerate(color):
+        if j not in used_color:
+            fused.append(c)
+    return merge_detections([], fused, min_dist=min_dist)
+
+
+def _iou(a: list[float], b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def _contains(bbox: list[float], point: tuple[float, float]) -> bool:
+    x, y = point
+    return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
 
 
 def _build_pool(model_path: str | None = None) -> dict[str, Any]:

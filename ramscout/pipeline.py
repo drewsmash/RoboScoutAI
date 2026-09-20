@@ -19,7 +19,13 @@ from ramscout.events import Pose, build_cards, detect_events
 from ramscout.firstevents import resolve_firstevents
 from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
-from ramscout.identity import assign_by_start, keep_top_tracks, majority_alliance, stitch_occlusions
+from ramscout.identity import (
+    assign_by_start,
+    balance_alliances,
+    keep_top_tracks,
+    majority_alliance,
+    stitch_occlusions,
+)
 from ramscout.ingest import (
     download_video,
     fetch_video_info,
@@ -576,6 +582,7 @@ def _run_real(job: Job) -> None:
     samples = stitch_occlusions(result["samples"])
     blue, red = _alliance_teams(video_match)
     samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6) or 6)
+    samples = balance_alliances(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
     warnings = list(job.warnings) + list(result.get("warnings") or [])
     if not samples:
         warnings.append(
@@ -752,7 +759,7 @@ def _reproject_and_scout(job: Job) -> None:
         missing = potato_ids - kept_ids
         if missing:
             pruned.extend(s for s in potato if int(s["track_id"]) in missing)
-        samples = pruned
+        samples = balance_alliances(pruned, n_red=len(red) or 3, n_blue=len(blue) or 3)
 
     for sample in samples:
         tid = str(sample.get("track_id"))

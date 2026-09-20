@@ -16,9 +16,12 @@ class Detection:
     confidence: float = 0.5
     alliance: str = "unknown"
     team: str = ""
+    # Free-form annotations added by the field gate / MOT (field_xy, flow,
+    # moving flag, alliance confidence...). Never required by consumers.
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "track_id": int(self.track_id),
             "bbox": [float(v) for v in self.bbox],
             "source": self.source,
@@ -26,6 +29,9 @@ class Detection:
             "alliance": self.alliance,
             "team": self.team,
         }
+        if self.meta:
+            out["meta"] = dict(self.meta)
+        return out
 
 
 @dataclass
