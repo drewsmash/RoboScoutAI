@@ -17,6 +17,11 @@ log = logging.getLogger(__name__)
 _DEFAULT_WEIGHT = "yolo11n.pt"
 _WEIGHT_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt"
 _FALLBACK_CLASSES = [0, 2, 3, 5, 7, 32, 36]
+# FRC-robot fine-tuned weights: point at a .pt (or .onnx) file whose model has
+# a "robot" class. Downloaded once into the models dir as robot.pt.
+ROBOT_WEIGHTS_ENV = ("ROBOSCOUT_ROBOT_WEIGHTS_URL", "RAMSCOUT_ROBOT_WEIGHTS_URL")
+ROBOT_WEIGHTS_PATH_ENV = ("ROBOSCOUT_ROBOT_WEIGHTS", "RAMSCOUT_ROBOT_WEIGHTS")
+_ROBOT_WEIGHT = "robot.pt"
 
 
 def ultralytics_available() -> bool:
@@ -28,8 +33,61 @@ def ultralytics_available() -> bool:
         return False
 
 
+def robot_weights_url() -> str:
+    import os
+
+    for key in ROBOT_WEIGHTS_ENV:
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def robot_weights_path() -> Path | None:
+    """Explicit FRC-robot weights (env path) or a cached robot.pt in a models dir."""
+    import os
+
+    for key in ROBOT_WEIGHTS_PATH_ENV:
+        val = (os.environ.get(key) or "").strip()
+        if val and Path(val).is_file():
+            return Path(val)
+    for folder in models_dirs():
+        for name in ("robot.pt", "robots.pt", "robot.onnx", "yolo11n-robot.pt"):
+            candidate = folder / name
+            if candidate.is_file() and candidate.stat().st_size > 1000:
+                return candidate
+    return None
+
+
+def ensure_robot_weights() -> Path | None:
+    """Download FRC-robot fine-tuned weights from the configured URL (once)."""
+    existing = robot_weights_path()
+    if existing is not None:
+        return existing
+    url = robot_weights_url()
+    if not url:
+        return None
+    dest = app_dir() / "models" / _ROBOT_WEIGHT
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import urllib.request
+
+        tmp = dest.with_suffix(".part")
+        urllib.request.urlretrieve(url, tmp)
+        if tmp.is_file() and tmp.stat().st_size > 1000:
+            tmp.replace(dest)
+            return dest
+        tmp.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("FRC robot weights download failed (%s)", exc)
+    return None
+
+
 def find_local_model(search_dirs: list[Path] | None = None) -> Path | None:
     dirs = search_dirs or models_dirs()
+    explicit = robot_weights_path()
+    if explicit is not None and search_dirs is None:
+        return explicit
     for folder in dirs:
         if not folder.is_dir():
             continue
@@ -46,6 +104,9 @@ def find_local_model(search_dirs: list[Path] | None = None) -> Path | None:
 def ensure_detector_weights() -> Path | None:
     if not ultralytics_available():
         return None
+    robot = ensure_robot_weights()
+    if robot is not None:
+        return robot
     existing = find_local_model()
     if existing is not None:
         return existing
@@ -105,6 +166,10 @@ class YoloTracker:
         self.class_filter: list[int] | None = None
         self.warnings: list[str] = []
         self._next_fallback_id = 1000
+        # True when the loaded model has a dedicated "robot" class. COCO
+        # models (person / car / ...) are useless as *proposers* for FRC
+        # robots, so the ensemble uses them for verification only.
+        self.robot_tuned = False
 
     def available(self, ctx: TrackerContext | None = None) -> bool:
         return ultralytics_available()
@@ -114,6 +179,7 @@ class YoloTracker:
         self.class_filter = None
         self.warnings = []
         self._next_fallback_id = 1000
+        self.robot_tuned = False
 
     def _ensure_model(self) -> bool:
         if self.model is not None:
@@ -130,11 +196,13 @@ class YoloTracker:
         try:
             self.model, self.family = load_detector(weights)
             self.class_filter = robot_class_ids(self.model)
+            self.robot_tuned = self.class_filter is not None
             if self.class_filter is None:
                 names = self.model.names or {}
                 self.class_filter = [c for c in _FALLBACK_CLASSES if c in names]
                 self.warnings.append(
-                    f"{self.family} has no dedicated 'robot' class — using broadcast-friendly COCO classes."
+                    f"{self.family} has no dedicated 'robot' class — COCO boxes are used to verify local "
+                    "proposals only. Set ROBOSCOUT_ROBOT_WEIGHTS_URL to FRC-tuned weights for a real robot detector."
                 )
             return True
         except Exception as exc:  # noqa: BLE001
