@@ -23,7 +23,9 @@ def test_multicam_detects_stacked_top_pane():
     frame = np.random.randint(50, 210, (h, w, 3), dtype=np.uint8)
     frame[185:215, :, :] = 5
     layout = analyze_frame(frame)
-    assert layout.mode in {"stacked_top", "single"}
+    assert layout.mode in {"stacked_top", "stacked_sides", "single"}
+    assert layout.panes
+    assert layout.overview_pane() is not None
     top, bottom, chosen = apply_layout(
         layout,
         user_crop_top=0.10,
@@ -32,10 +34,10 @@ def test_multicam_detects_stacked_top_pane():
     )
     assert top < bottom
     assert 0.0 <= top < bottom <= 1.0
-    if layout.mode == "stacked_top":
-        assert chosen.mode == "stacked_top"
+    if layout.mode in {"stacked_top", "stacked_sides"}:
+        assert chosen.mode in {"stacked_top", "stacked_sides"}
         assert bottom < 0.7
-
+        assert any(p.role == "overview" for p in chosen.panes)
 
 def test_event_editor_confirm_and_cards():
     events = ensure_event_ids(

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import plausible_robot_size
+from ramscout.trackers.utils import drop_nested_boxes, plausible_robot_size
 
 
 class MotionTracker:
@@ -59,7 +59,9 @@ class MotionTracker:
         if self.knn is not None:
             fg_knn = self.knn.apply(cropped, learningRate=learn)
             _, fg_knn = cv2.threshold(fg_knn, 190, 255, cv2.THRESH_BINARY)
-            fg = cv2.bitwise_or(fg_mog, fg_knn)
+            # KNN marks the whole frame as foreground until it has history;
+            # fusing it in during warm-up would swallow every robot.
+            fg = cv2.bitwise_or(fg_mog, fg_knn) if self.warm_frames >= 8 else fg_mog
         else:
             fg = fg_mog
 
@@ -77,7 +79,10 @@ class MotionTracker:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # RETR_LIST, not RETR_EXTERNAL: when the field perimeter (LED strips,
+        # flickering wall) forms a closed ring in the mask, EXTERNAL returns
+        # only the ring and silently drops every robot inside it.
+        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
         blobs: list[tuple[float, list[float]]] = []
         for contour in contours:
@@ -91,9 +96,14 @@ class MotionTracker:
             aspect = w / max(h, 1)
             if aspect > 3.6 or aspect < 0.28:
                 continue
+            # Ring-like contours (wall segments) enclose mostly empty space.
+            fill = area / float(max(w * h, 1))
+            if fill < 0.22:
+                continue
             blobs.append((area, [float(x), float(y), float(x + w), float(y + h)]))
 
         blobs.sort(key=lambda row: row[0], reverse=True)
+        blobs = drop_nested_boxes(blobs)
         # FRC has at most 6 robots; keep a couple extras for noise before MOT.
         blobs = blobs[:8]
         out: list[Detection] = []

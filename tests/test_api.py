@@ -28,7 +28,7 @@ def test_version_endpoint():
 def test_index_serves_dark_ui():
     res = client.get("/")
     assert res.status_code == 200
-    assert "RamScoutAI" in res.text
+    assert "RoboScoutAI" in res.text
     assert "color-scheme" in res.text
     assert "upload" in res.text.lower()
     assert "update-chip" in res.text
@@ -118,6 +118,66 @@ def test_version_exposes_git_remote_and_cookies():
     assert body.get("git_branch")
     assert "cookies" in body
     assert "found" in body["cookies"]
+
+
+def test_updates_download_success_strips_open_url(monkeypatch):
+    from app import app as fastapi_app
+    from ramscout import updater as upd
+
+    def fake_apply():
+        return {
+            "ok": True,
+            "message": "Updating from git — installing into LocalAppData.",
+            "restarting": True,
+            "open_url": "https://github.com/drewsmash/RoboScoutAI/releases/download/v0.5.0/RoboScoutAI-windows-x64.exe",
+            "update": {"available": True, "latest_version": "0.5.6"},
+        }
+
+    monkeypatch.setattr(upd, "apply_update_now", fake_apply)
+    # app imports apply_update_now by name — patch the app module binding too.
+    import app as app_mod
+
+    monkeypatch.setattr(app_mod, "apply_update_now", fake_apply)
+    res = client.post("/api/updates/download")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["restarting"] is True
+    assert "open_url" not in body
+    assert "git" in body["message"].lower() or "LocalAppData" in body["message"]
+
+
+def test_updates_download_failure_keeps_open_url(monkeypatch):
+    import app as app_mod
+
+    def fake_apply():
+        return {
+            "ok": False,
+            "message": "Git update failed",
+            "restarting": False,
+            "open_url": "https://github.com/drewsmash/RoboScoutAI/releases/latest",
+            "update": {"latest_version": "0.5.6"},
+        }
+
+    monkeypatch.setattr(app_mod, "apply_update_now", fake_apply)
+    res = client.post("/api/updates/download")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["open_url"]
+    assert "0.5.0" not in body["open_url"]
+
+
+def test_ui_update_fallback_helper_in_app_js():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "web" / "app.js"
+    text = source.read_text(encoding="utf-8")
+    assert "function shouldOpenUpdateManualFallback" in text
+    assert "body.ok === false" in text
+    assert "Updating from git" in text
+    # Must not auto-open open_url on every response.
+    assert "if (body.open_url)" not in text or "shouldOpenUpdateManualFallback" in text
 
 
 def test_crop_bottom_must_exceed_top():

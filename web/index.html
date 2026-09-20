@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RamScoutAI</title>
+  <title>RoboScoutAI</title>
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#0e0e10" />
-  <meta name="application-name" content="RamScoutAI" />
-  <meta name="apple-mobile-web-app-title" content="RamScoutAI" />
+  <meta name="application-name" content="RoboScoutAI" />
+  <meta name="apple-mobile-web-app-title" content="RoboScoutAI" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/static/favicon.png" type="image/png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
@@ -23,7 +23,7 @@
     <div class="brand">
       <img class="mark-img" src="/static/icons/icon-64.png" width="36" height="36" alt="" />
       <div>
-        <div class="wordmark">RamScoutAI</div>
+        <div class="wordmark">RoboScoutAI</div>
         <div class="tagline" id="game-tagline">FRC auto-scout from match video</div>
       </div>
     </div>
@@ -31,13 +31,13 @@
       <button type="button" class="chip ghost" id="nav-scoutbook" title="Open pick list &amp; scout book">Pick list</button>
       <button type="button" class="chip ghost" id="version-chip" title="Check for updates">v…</button>
       <button type="button" class="chip update" id="update-chip" hidden>Update available</button>
-      <span class="chip ghost">Team 59</span>
+      <span class="chip ghost">FRC scouting</span>
     </div>
   </header>
 
   <section class="composer" id="composer">
     <h1>Watch the match. Scout every robot.</h1>
-    <p class="lede">Paste a recorded FRC match YouTube link. RamScoutAI reads the scorebug and teams from the video, follows each robot on the field map, and estimates hub, defense, and climb actions. TBA is optional for nicknames.</p>
+    <p class="lede">Paste a recorded FRC match YouTube link. RoboScoutAI reads the scorebug and teams from the video, follows each robot on the field map, and estimates hub, defense, and climb actions. TBA is optional for nicknames.</p>
 
     <form id="start-form" class="composer-card" autocomplete="off">
       <label class="field grow">
@@ -102,6 +102,13 @@
           </label>
         </div>
         <div class="composer-row">
+          <label class="field grow">
+            <span>Vercel AI Gateway key (Jev)</span>
+            <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · AI_GATEWAY_API_KEY · verifies scout events" autocomplete="off" />
+          </label>
+        </div>
+        <p class="tool-meta">With an AI Gateway key, RoboScoutAI calls <code>typesafe-ai/jev</code> to verify hub/climb/defense candidates and help classify multi-view layouts. Get a key at vercel.com/ai-gateway.</p>
+        <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
             <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.10" />
@@ -111,16 +118,16 @@
             <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
           </label>
           <label class="check field">
-            <span>Auto top-camera crop</span>
+            <span>Auto multi-view crop</span>
             <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
           </label>
         </div>
       </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RamScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RoboScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
     <div class="yt-help" id="yt-help" hidden>
       <strong>YouTube download blocked.</strong>
-      <span>Upload the MP4/MKV you already downloaded (recommended), or export cookies with “Get cookies.txt LOCALLY” and place <code>cookies.txt</code> next to the EXE / in <code>%APPDATA%\RamScoutAI\</code> / set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
+      <span>Upload the MP4/MKV you already downloaded (recommended), or export cookies with “Get cookies.txt LOCALLY” and place <code>cookies.txt</code> next to the EXE / in <code>%APPDATA%\RoboScoutAI\</code> / set <code>YTDLP_COOKIES</code>. Live streams are not supported.</span>
     </div>
     <div class="yt-help upload-help" id="upload-help" hidden>
       <strong>Uploaded video could not be analyzed.</strong>
@@ -129,14 +136,33 @@
   </section>
 
   <main class="workspace" id="workspace" hidden>
-    <section class="progress-panel" id="progress-panel">
-      <div class="progress-copy">
-        <div class="progress-status" id="progress-status">Starting…</div>
-        <div class="progress-message" id="progress-message"></div>
+    <section class="progress-panel thinking" id="progress-panel">
+      <div class="think-orbits" aria-hidden="true">
+        <span class="orbit o1"></span>
+        <span class="orbit o2"></span>
+        <span class="orbit o3"></span>
+        <span class="core"></span>
       </div>
-      <div class="progress-track" aria-hidden="true">
-        <div class="progress-fill" id="progress-fill"></div>
+      <div class="progress-main">
+        <div class="progress-copy">
+          <div class="progress-status" id="progress-status">Starting…</div>
+          <div class="progress-message" id="progress-message"></div>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" id="progress-fill"></div>
+          <div class="progress-shimmer"></div>
+        </div>
+        <ol class="think-stages" id="think-stages"></ol>
       </div>
+    </section>
+
+    <section class="views-panel" id="views-panel" hidden>
+      <header class="section-head tight">
+        <h2>Camera views</h2>
+        <p id="views-lede">Sectioned angles — overview for movement, side cams for scoring &amp; climbs.</p>
+      </header>
+      <div class="views-grid" id="views-grid"></div>
+      <div class="bev-chip-row" id="bev-meta" hidden></div>
     </section>
 
     <section class="scoreboard" id="scoreboard" hidden>
@@ -173,10 +199,15 @@
         </header>
         <div class="video-frame">
           <video id="match-video" controls playsinline></video>
+          <canvas id="track-overlay" class="track-overlay" aria-hidden="true"></canvas>
           <div class="video-empty" id="video-empty">
             <p>Sample matches don’t include a download. Watch the field replay instead.</p>
           </div>
           <canvas id="cal-canvas" hidden></canvas>
+          <label class="overlay-toggle" title="Show tracking boxes on the broadcast">
+            <input type="checkbox" id="overlay-toggle" checked />
+            <span>Tracking overlay</span>
+          </label>
         </div>
         <div class="cal-bar" id="cal-bar" hidden>
           <p id="cal-help">Click the four field corners on the frame: top-left, top-right, bottom-right, bottom-left.</p>
@@ -407,7 +438,7 @@
   </main>
 
   <footer class="foot">
-    Built for Ramtech 59 · Not affiliated with FIRST · Scores are read from the match video when possible
+    Built for FRC scouting · Not affiliated with FIRST · Scores are read from the match video when possible
   </footer>
 
   <script src="/static/app.js" type="module"></script>

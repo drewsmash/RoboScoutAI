@@ -25,17 +25,19 @@ def test_should_try_pywebview_skips_frozen_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.delenv("RAMSCOUT_FORCE_WEBVIEW", raising=False)
+    monkeypatch.delenv("ROBOSCOUT_FORCE_WEBVIEW", raising=False)
     assert _should_try_pywebview() is False
 
 
 def test_should_try_pywebview_force_env(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setenv("RAMSCOUT_FORCE_WEBVIEW", "1")
+    monkeypatch.setenv("ROBOSCOUT_FORCE_WEBVIEW", "1")
     assert _should_try_pywebview() is True
 
 
 def test_should_try_pywebview_allows_linux(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delenv("RAMSCOUT_FORCE_WEBVIEW", raising=False)
+    monkeypatch.delenv("ROBOSCOUT_FORCE_WEBVIEW", raising=False)
     assert _should_try_pywebview() is True

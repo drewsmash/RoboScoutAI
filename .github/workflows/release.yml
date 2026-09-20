@@ -7,9 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to build (e.g. v0.4.2). Leave empty to use the pushed tag / create a draft from the current version."
+        description: "Version tag to build (e.g. v0.6.0). Leave empty to use the pushed tag / create a draft from the current version."
         required: false
         default: ""
+      publish_channel:
+        description: "Also push release-artifacts/ (manifest + exes) to the git update channel branch"
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -19,16 +23,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            artifact: RamScoutAI-windows-x64.exe
-          - os: macos-14
-            artifact: RamScoutAI-macos-arm64.zip
-    runs-on: ${{ matrix.os }}
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install -U pip wheel
+          python -m pip install -r requirements-desktop.txt pytest
+
+      - name: Manager + API tests
+        run: python -m pytest -q tests/test_manager_*.py tests/test_api.py tests/test_updater.py
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,36 +60,65 @@ jobs:
           # Slim freeze set — skip ultralytics/torch so CI stays fast and artifacts stay downloadable.
           python -m pip install -r requirements-desktop.txt
 
-      - name: Build with PyInstaller
-        run: python -m PyInstaller --noconfirm --clean packaging/ramscout.spec
-
-      - name: Package Windows exe
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/release | Out-Null
-          Copy-Item dist/RamScoutAI.exe "dist/release/${{ matrix.artifact }}"
-
-      - name: Sign Windows exe (optional)
-        if: runner.os == 'Windows'
+      - name: Build app + manager + Setup + manifest (signs when WINDOWS_CERT_* secrets exist)
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: pwsh packaging/build_windows.ps1 -SkipInstall -Commit "${{ github.sha }}"
+
+      - name: Smoke-test manager exe
+        shell: pwsh
         run: |
-          if (-not $env:WINDOWS_CERT_PFX_BASE64) {
-            Write-Warning "WINDOWS_CERT_PFX_BASE64 not set — shipping unsigned (SmartScreen may warn)."
-            exit 0
+          $root = Join-Path $env:RUNNER_TEMP "rs-smoke"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          # Windowed exes return immediately from `&`; Start-Process -Wait gets the real exit code.
+          function Run-Mgr([string]$exe, [string[]]$argv, [string]$outFile) {
+            $p = Start-Process -FilePath $exe -ArgumentList ($argv + @("--json", "--out", $outFile, "--root", $root)) -Wait -PassThru
+            if (Test-Path $outFile) { Get-Content $outFile } else { Write-Warning "no output file $outFile" }
+            if ($p.ExitCode -ne 0) { throw "$exe $($argv -join ' ') exited $($p.ExitCode)" }
           }
-          $pfx = Join-Path $env:RUNNER_TEMP "ramscout-codesign.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
-          $exe = "dist/release/${{ matrix.artifact }}"
-          & signtool sign /fd SHA256 /f $pfx /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $exe
-          & signtool verify /pa $exe
-          Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          Run-Mgr "dist/release/RoboScoutAI.exe" @("--version") "$root/version.json"
+          Run-Mgr "dist/release/RoboScoutAI-Setup.exe" @("--silent", "--no-launch") "$root/setup.json"
+          if (-not (Test-Path "$root/current.json")) { throw "Setup did not write current.json" }
+          if (-not (Test-Path "$root/app")) { throw "Setup did not create app/" }
+          Run-Mgr (Join-Path $root "RoboScoutAI.exe") @("--list") "$root/list.json"
+          Run-Mgr (Join-Path $root "RoboScoutAI.exe") @("--uninstall", "--silent") "$root/uninstall.json"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/release/RoboScoutAI-Setup.exe
+            dist/release/RoboScoutAI.exe
+            dist/release/RoboScoutAI-app-windows-x64.exe
+            dist/release/manifest.json
+          if-no-files-found: error
+
+  build-macos:
+    needs: test
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          python -m pip install -r requirements-desktop.txt
+
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller --noconfirm --clean packaging/app.spec
+          mv dist/RoboScoutAI-app dist/RoboScoutAI
 
       - name: Sign & notarize macOS binary (optional)
-        if: runner.os == 'macOS'
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -102,16 +147,16 @@ jobs:
             echo "::error::No Developer ID Application identity found in imported certificate."
             exit 1
           fi
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RamScoutAI
-          codesign --verify --verbose=2 dist/RamScoutAI
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" dist/RoboScoutAI
+          codesign --verify --verbose=2 dist/RoboScoutAI
           if [[ -n "${MACOS_API_KEY_P8_BASE64:-}" && -n "${MACOS_API_KEY_ID:-}" && -n "${MACOS_API_ISSUER_ID:-}" ]]; then
             KEY_P8="$RUNNER_TEMP/AuthKey_${MACOS_API_KEY_ID}.p8"
             echo "$MACOS_API_KEY_P8_BASE64" | base64 --decode > "$KEY_P8"
-            ditto -c -k --keepParent dist/RamScoutAI "$RUNNER_TEMP/RamScoutAI-notarize.zip"
-            xcrun notarytool submit "$RUNNER_TEMP/RamScoutAI-notarize.zip" \
+            ditto -c -k --keepParent dist/RoboScoutAI "$RUNNER_TEMP/RoboScoutAI-notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/RoboScoutAI-notarize.zip" \
               --key "$KEY_P8" --key-id "$MACOS_API_KEY_ID" --issuer "$MACOS_API_ISSUER_ID" \
               --wait
-            xcrun stapler staple dist/RamScoutAI || true
+            xcrun stapler staple dist/RoboScoutAI || true
           else
             echo "::warning::Notarization secrets missing — binary is signed but not notarized."
           fi
@@ -120,23 +165,24 @@ jobs:
           true
 
       - name: Package macOS zip
-        if: runner.os == 'MacOS' || runner.os == 'macOS'
         run: |
           mkdir -p dist/release
           cd dist
-          chmod +x RamScoutAI
-          zip -9 "release/${{ matrix.artifact }}" RamScoutAI
+          chmod +x RoboScoutAI
+          zip -9 "release/RoboScoutAI-macos-arm64.zip" RoboScoutAI
 
-      - name: Upload artifact
+      - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/release/${{ matrix.artifact }}
+          name: macos
+          path: dist/release/RoboScoutAI-macos-arm64.zip
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -160,31 +206,117 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Flatten assets
+      - name: Flatten + verify assets
         shell: bash
         run: |
           mkdir -p out
           find release-assets -type f -print -exec cp {} out/ \;
           ls -lah out
-          test -f out/RamScoutAI-windows-x64.exe
-          test -f out/RamScoutAI-macos-arm64.zip
+          test -f out/RoboScoutAI-Setup.exe
+          test -f out/RoboScoutAI.exe
+          test -f out/RoboScoutAI-app-windows-x64.exe
+          test -f out/manifest.json
+          test -f out/RoboScoutAI-macos-arm64.zip
+          python -m roboscout_manager.manifest verify out/manifest.json out/RoboScoutAI-Setup.exe out/RoboScoutAI.exe out/RoboScoutAI-app-windows-x64.exe
+          # Manifest version must match the tag we are publishing.
+          python - "${{ steps.meta.outputs.tag }}" <<'EOF'
+          import json, sys
+          tag = sys.argv[1].lstrip("v")
+          version = json.load(open("out/manifest.json"))["version"]
+          if version != tag:
+              raise SystemExit(f"manifest version {version} != tag {tag}; bump ramscout/__init__.py")
+          print("manifest", version, "OK")
+          EOF
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: RamScoutAI ${{ steps.meta.outputs.tag }}
+          name: RoboScoutAI ${{ steps.meta.outputs.tag }}
           draft: false
+          make_latest: true
           generate_release_notes: true
           files: out/*
           body: |
-            Desktop builds for RamScoutAI.
+            Desktop builds for **RoboScoutAI**.
 
-            - **Windows:** download `RamScoutAI-windows-x64.exe` and run it
-            - **Mac (Apple Silicon):** download `RamScoutAI-macos-arm64.zip`, unzip, then run `./RamScoutAI`
+            - **Windows (recommended):** download `RoboScoutAI-Setup.exe` and run it once. It installs to `%LOCALAPPDATA%\RoboScoutAI` (no admin), adds Start Menu / Desktop shortcuts and an uninstall entry, and keeps itself up to date from the git update channel (GitHub Releases is the fallback).
+            - **Windows (already installed):** click **Update** in the app, or run `RoboScoutAI.exe --update`. Rollback: `RoboScoutAI.exe --rollback`.
+            - **Mac (Apple Silicon):** download `RoboScoutAI-macos-arm64.zip`, unzip, then run `./RoboScoutAI`
+
+            `RoboScoutAI.exe` (manager) and `RoboScoutAI-app-windows-x64.exe` are the pieces Setup installs; `manifest.json` carries their sha256 digests. See `docs/DESKTOP_APP.md`.
 
             If SmartScreen / Gatekeeper warns, see `docs/SIGNING.md`. Signed builds ship when repo signing secrets are configured.
-
-            The in-app updater checks this release for newer versions.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload channel payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-payload
+          path: |
+            out/manifest.json
+            out/RoboScoutAI.exe
+            out/RoboScoutAI-app-windows-x64.exe
+          if-no-files-found: error
+
+  publish-channel:
+    # Commit manifest + exes to release-artifacts/ on the git update channel branch so installed
+    # managers (and legacy 0.5.x in-app updaters) pick the release up via git.
+    needs: publish
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_channel == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download channel payload
+        uses: actions/download-artifact@v4
+        with:
+          name: channel-payload
+          path: channel-payload
+
+      - name: Push release-artifacts to the update channel branch
+        shell: bash
+        env:
+          TAG: ${{ needs.publish.outputs.tag }}
+        run: |
+          set -euo pipefail
+          CHANNEL="$(grep -v '^#' release-artifacts/update-channel.txt | grep -v '^\s*$' | head -n1 | tr -d '[:space:]')"
+          echo "channel branch: $CHANNEL (tag $TAG)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          RELEASE_SHA="$(git rev-parse HEAD)"
+          if git fetch origin "$CHANNEL"; then
+            git checkout -B "$CHANNEL" "origin/$CHANNEL"
+            # Bring the channel branch up to the released code (so ramscout/__init__.py carries the
+            # new version for legacy updaters). Binary conflicts resolve in favour of the release.
+            if ! git merge --no-edit -X theirs "$RELEASE_SHA"; then
+              git checkout --theirs -- . || true
+              git add -A
+              git -c core.editor=true commit --no-edit -m "Merge $TAG into $CHANNEL" || true
+            fi
+          else
+            git checkout -B "$CHANNEL" "$RELEASE_SHA"
+          fi
+          mkdir -p release-artifacts
+          cp channel-payload/manifest.json release-artifacts/manifest.json
+          cp channel-payload/RoboScoutAI.exe release-artifacts/RoboScoutAI.exe
+          cp channel-payload/RoboScoutAI-app-windows-x64.exe release-artifacts/RoboScoutAI-app-windows-x64.exe
+          # Legacy asset name: 0.5.x in-app updaters download this and run it from
+          # %LOCALAPPDATA%\RoboScoutAI\RoboScoutAI.exe — which is exactly the manager, so
+          # shipping the manager here migrates old installs onto the new layout.
+          cp channel-payload/RoboScoutAI.exe release-artifacts/RoboScoutAI-windows-x64.exe
+          echo "$RELEASE_SHA" > release-artifacts/UPDATE.txt
+          git add -f release-artifacts/manifest.json release-artifacts/RoboScoutAI.exe \
+            release-artifacts/RoboScoutAI-app-windows-x64.exe release-artifacts/RoboScoutAI-windows-x64.exe \
+            release-artifacts/UPDATE.txt
+          if git diff --cached --quiet; then
+            echo "channel already up to date"
+          else
+            git commit -m "Publish RoboScoutAI $TAG on update channel ($CHANNEL)"
+          fi
+          git push origin "HEAD:$CHANNEL"

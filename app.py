@@ -1,4 +1,4 @@
-"""RamScoutAI local web server."""
+"""RoboScoutAI local web server."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ramscout import __version__
+from ramscout import __version__, managed
 from ramscout.detect import TRACKER_MODES, list_strategies
 from ramscout.gameconfig import public_game
 from ramscout.ingest import is_youtube_url, resolve_cookies_path
@@ -61,7 +61,10 @@ def _safe_upload_name(filename: str | None, suffix: str) -> str:
 async def lifespan(_app: FastAPI):
     def worker() -> None:
         try:
-            check_for_update()
+            if managed.is_managed():
+                managed.check_for_update()
+            else:
+                check_for_update()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -75,7 +78,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="RamScoutAI", version=__version__, lifespan=lifespan)
+app = FastAPI(title="RoboScoutAI", version=__version__, lifespan=lifespan)
 register_suite_routes(app)
 app.mount("/static", StaticFiles(directory=WEB), name="static")
 
@@ -91,6 +94,7 @@ class StartRequest(BaseModel):
     tracker_mode: str = "hybrid"
     openai_key: str = ""
     google_key: str = ""
+    ai_gateway_key: str = ""
     auto_multicam: bool = True
 
 
@@ -133,7 +137,8 @@ def health() -> dict[str, str]:
 
 @app.get("/api/version")
 def version() -> dict:
-    cached = last_check()
+    is_managed = managed.is_managed()
+    cached = managed.last_check() if is_managed else last_check()
     cookies = resolve_cookies_path()
     return {
         "version": __version__,
@@ -141,7 +146,9 @@ def version() -> dict:
         "platform": platform_key(),
         "repo": github_repo(),
         "git_remote": git_remote(),
-        "git_branch": git_branch(),
+        "git_branch": (managed.update_channel() or git_branch()) if is_managed else git_branch(),
+        "managed": is_managed,
+        "manager": managed.info(),
         "update": cached,
         "cookies": {
             "found": cookies is not None,
@@ -152,19 +159,66 @@ def version() -> dict:
 
 @app.get("/api/updates/check")
 def updates_check() -> dict:
+    if managed.is_managed():
+        return managed.check_for_update()
     return check_for_update().as_dict()
+
+
+@app.get("/api/updates/status")
+def updates_status() -> dict:
+    """Progress of a manager-driven update (side-by-side download/verify/install)."""
+    return managed.status()
+
+
+@app.post("/api/updates/relaunch")
+def updates_relaunch() -> dict:
+    """Ask the manager to restart us on the freshly installed version."""
+    result = managed.request_relaunch()
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "not managed")
+    return result
 
 
 @app.post("/api/updates/download")
 def updates_download() -> dict:
-    """Fetch and apply an update from the configured git remote."""
+    """Fetch and apply an update: via the manager when managed, else the git updater."""
+    if managed.is_managed():
+        return managed.start_update()
     try:
         result = apply_update_now()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, str(exc)) from exc
+        # Last-resort manual fallback only — prefer newest release, never auto-open on success.
+        from ramscout.updater import manual_download_url
+
+        return {
+            "ok": False,
+            "open_url": manual_download_url(),
+            "message": (
+                f"Git update failed ({exc}). "
+                "Open the newest RoboScoutAI-windows-x64.exe from Releases (or the local "
+                "update-cache) and run it — More info → Run anyway if SmartScreen blocks."
+            ),
+            "error": str(exc),
+            "restarting": False,
+        }
+    # Successful git apply must never include open_url (UI would browser-download).
+    if result.get("ok"):
+        result.pop("open_url", None)
+        return result
     update = result.get("update") or {}
-    if not result.get("ok") and update.get("available"):
-        raise HTTPException(400, result.get("message") or "Update failed.")
+    if not result.get("open_url"):
+        # Prefer a versioned/latest Releases link over a bare git browse URL.
+        from ramscout.updater import manual_download_url
+
+        latest = ""
+        if isinstance(update, dict):
+            latest = str(update.get("latest_version") or "")
+        asset = ""
+        if isinstance(update, dict):
+            asset = str(update.get("asset_name") or "")
+            if asset.startswith("git:"):
+                asset = ""
+        result["open_url"] = manual_download_url(version=latest, asset_name=asset)
     return result
 
 
@@ -186,6 +240,7 @@ def trackers() -> dict:
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
             "yolo": "pip install ultralytics (+ optional models/*.pt)",
+            "jev": "AI_GATEWAY_API_KEY (Vercel AI Gateway → typesafe-ai/jev)",
         },
     }
 
@@ -220,6 +275,9 @@ def create_job(body: StartRequest) -> dict:
         google_key=body.google_key.strip()
         or os.environ.get("GOOGLE_API_KEY", "")
         or os.environ.get("GEMINI_API_KEY", ""),
+        ai_gateway_key=body.ai_gateway_key.strip()
+        or os.environ.get("AI_GATEWAY_API_KEY", "")
+        or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
         auto_multicam=bool(body.auto_multicam),
     )
     return job.public()
@@ -237,6 +295,7 @@ async def create_job_upload(
     tracker_mode: str = Form("hybrid"),
     openai_key: str = Form(""),
     google_key: str = Form(""),
+    ai_gateway_key: str = Form(""),
     auto_multicam: bool = Form(True),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
@@ -279,6 +338,9 @@ async def create_job_upload(
             google_key=(google_key or "").strip()
             or os.environ.get("GOOGLE_API_KEY", "")
             or os.environ.get("GEMINI_API_KEY", ""),
+            ai_gateway_key=(ai_gateway_key or "").strip()
+            or os.environ.get("AI_GATEWAY_API_KEY", "")
+            or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
             auto_multicam=bool(auto_multicam),
         )
     except HTTPException:

@@ -9,7 +9,7 @@ YouTube aggressively bot-checks datacenter IPs. This module tries a ladder:
 5. Optional auto-proxy ladder when ``YTDLP_AUTO_PROXY`` is enabled (default on)
 6. Local files / uploads (``file://`` / absolute paths) — always preferred when available
 
-Prefer running RamScoutAI on a residential network, or set cookies / a proxy.
+Prefer running RoboScoutAI on a residential network, or set cookies / a proxy.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ ProgressFn = Callable[[str, float], None]
 _BOT_HINT = (
     "YouTube blocked this download (bot check / sign-in required). "
     "Best fix: upload the MP4/MKV you already downloaded. "
-    "Or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\, "
+    "Or place cookies.txt next to the EXE / in %APPDATA%\\RoboScoutAI\\, "
     "set YTDLP_COOKIES, use YTDLP_BROWSER=chrome|edge|firefox, "
     "or set YTDLP_PROXY to a residential HTTP proxy."
 )
@@ -364,17 +364,22 @@ def resolve_cookies_path() -> Path | None:
         [
             app_dir() / "cookies.txt",
             data_dir().parent / "cookies.txt",
-            Path.home() / "RamScoutAI" / "cookies.txt",
+            Path.home() / "RoboScoutAI" / "cookies.txt",
+            Path.home() / "RamScoutAI" / "cookies.txt",  # silent old-folder fallback
         ]
     )
     appdata = (os.environ.get("APPDATA") or "").strip()
     if appdata:
+        candidates.append(Path(appdata) / "RoboScoutAI" / "cookies.txt")
         candidates.append(Path(appdata) / "RamScoutAI" / "cookies.txt")
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        candidates.append(Path(local) / "RoboScoutAI" / "cookies.txt")
     xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
     if xdg:
-        candidates.append(Path(xdg) / "RamScoutAI" / "cookies.txt")
+        candidates.append(Path(xdg) / "RoboScoutAI" / "cookies.txt")
     else:
-        candidates.append(Path.home() / ".config" / "RamScoutAI" / "cookies.txt")
+        candidates.append(Path.home() / ".config" / "RoboScoutAI" / "cookies.txt")
     seen: set[str] = set()
     for path in candidates:
         key = str(path)
@@ -645,7 +650,7 @@ def _oembed(url: str) -> dict[str, Any] | None:
             "https://www.youtube.com/oembed",
             params={"url": url, "format": "json"},
             timeout=15.0,
-            headers={"User-Agent": "RamScoutAI/0.4"},
+            headers={"User-Agent": "RoboScoutAI/0.5"},
         )
         if res.status_code != 200:
             return None

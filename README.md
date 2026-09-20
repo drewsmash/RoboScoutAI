@@ -1,8 +1,8 @@
-# RamScoutAI
+# RoboScoutAI
 
 Local web app that auto-scouts an FRC **match video** from a YouTube link.
 
-Paste a recorded FRC match VOD (not a live stream). RamScoutAI:
+Paste a recorded FRC match VOD (not a live stream). RoboScoutAI:
 
 1. Reads **teams and scores from the video** — YouTube title/description plus the on-screen scorebug
 2. Downloads the VOD and tracks robots onto that year’s field image
@@ -15,7 +15,7 @@ Action counts are **heuristics**. Confirm anything you put on a pick list.
 
 ## Desktop builds (Windows / macOS)
 
-RamScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
+RoboScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
 
 ```bash
 # from source
@@ -28,33 +28,39 @@ bash packaging/build.sh
 
 Use `--browser` for a normal browser tab, or `--no-browser` for server-only.
 
-GitHub Actions (`.github/workflows/release.yml`) builds:
+GitHub Actions (`.github/workflows/release.yml`) builds on every `v*` tag:
 
-- `RamScoutAI-windows-x64.exe`
-- `RamScoutAI-macos-arm64.zip`
-- `RamScoutAI-macos-x64.zip`
+- **`RoboScoutAI-Setup.exe`** — Windows installer. Download once; installs to `%LOCALAPPDATA%\RoboScoutAI` (no admin), adds Start Menu / Desktop shortcuts and an uninstall entry, and launches the app.
+- `RoboScoutAI.exe` — the thin Windows **manager** (launcher / updater / rollback / uninstaller) that Setup installs.
+- `RoboScoutAI-app-windows-x64.exe` — the app build the manager installs side-by-side under `app\<version>\`.
+- `manifest.json` — version, sha256/size per artifact, `min_manager_version`.
+- `RoboScoutAI-macos-arm64.zip`
 
-### In-app updater (git remote — not GitHub Releases)
+### Windows install, update, rollback (manager)
 
-RamScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
+Windows users install **once** with `RoboScoutAI-Setup.exe`; every later version comes through `RoboScoutAI.exe`:
 
-| Mode | Behavior |
+| Action | How |
 | --- | --- |
-| Source (`.git` present) | `git fetch` → compare `HEAD` to `origin/<branch>` → pull / reset → restart hint |
-| Frozen EXE | Shallow clone/fetch into an update cache → look for tracked binaries under `desktop-downloads/` → replace EXE and relaunch |
+| Update | **Update** chip in the app (progress shown, then "Restart now?") or `RoboScoutAI.exe --update` |
+| Roll back | `RoboScoutAI.exe --rollback` (previous version is kept side-by-side) |
+| Switch channel | `RoboScoutAI.exe --channel <branch-or-tag>` — any future branch or release tag |
+| Repair / uninstall | `RoboScoutAI.exe --repair` / Windows *Installed apps* → Uninstall (`--uninstall`, `--purge` also removes data) |
 
-Config:
+Updates are read from the **git update channel** (`release-artifacts/manifest.json` + exe on the branch in `release-artifacts/update-channel.txt`) with **GitHub Releases as fallback**. Downloads are verified by sha256 and installed into a new `app\<version>\` folder; the running app is never overwritten, so no Access-Denied / locked-exe failures. Full design: `docs/DESKTOP_APP.md`.
+
+### In-app updater for source checkouts (git remote — not GitHub Releases)
+
+Running from a git checkout, RoboScoutAI checks for updates by talking to the **git remote** (`git fetch`) and pulls / resets, then asks for a restart. Frozen Windows builds delegate to the manager above instead.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RamScoutAI.git` | Git remote URL |
-| `RAMSCOUT_GIT_BRANCH` | `main` | Branch to track |
-| `RAMSCOUT_UPDATE_CACHE` | appdata / `.ramscout-update-cache` | Mirror + package cache |
+| `RAMSCOUT_GIT_REMOTE` / `ROBOSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RoboScoutAI.git` | Git remote URL |
+| `RAMSCOUT_GIT_BRANCH` / `ROBOSCOUT_CHANNEL` | `release-artifacts/update-channel.txt` | Branch / tag to track |
+| `ROBOSCOUT_INSTALL_ROOT` | `%LOCALAPPDATA%\RoboScoutAI` | Manager install root (testing) |
 | `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` | — | Optional HTTPS auth for private remotes |
 
-UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available from git*, or *git remote unreachable*.
-
-For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RamScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
+UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available*, or *update channel unreachable*.
 
 Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
 
@@ -65,10 +71,20 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
+**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch + Pillow are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
+
+Optional neural depth (source installs):
+
+```bash
+pip install transformers torch   # Pillow is in requirements.txt
+# Depth-Anything-V2-Small loads from Hugging Face on first use
+```
+
 API keys (optional, also in the UI Advanced panel):
 
 - `OPENAI_API_KEY`
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+- `AI_GATEWAY_API_KEY` — Vercel AI Gateway; enables [Jev](https://vercel.com/ai-gateway/models/jev) (`typesafe-ai/jev`) to verify hub/climb/defense candidates and help classify multi-view layouts. A 403 usually means a bad/missing key or missing evaluation access — scout heuristics still run. Optional strict routing (often causes 403): `AI_GATEWAY_ONLY=typesafe-ai`, `AI_GATEWAY_ZERO_DATA_RETENTION=1`
 
 For stronger local neural detection from source:
 
@@ -100,24 +116,24 @@ After analyzing matches, use **Pick list** in the app to:
 
 Optional env vars:
 
-- `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RamScoutAI`)
-- `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
-- `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
+- `ROBOSCOUT_GITHUB_REPO` / `RAMSCOUT_GITHUB_REPO=owner/repo` — override the update source (default `drewsmash/RoboScoutAI`)
+- `ROBOSCOUT_GITHUB_TOKEN` / `RAMSCOUT_GITHUB_TOKEN` / `GITHUB_TOKEN` — required for in-app updates when the GitHub repo is **private**
+- `ROBOSCOUT_DATA` / `RAMSCOUT_DATA=/path` — writable data directory for frozen builds
 
 Because this repository is private, open the release while signed into GitHub to download, or set `RAMSCOUT_GITHUB_TOKEN` for in-app updates:
 
-https://github.com/drewsmash/RamScoutAI/releases/tag/v0.4.3
+https://github.com/drewsmash/RoboScoutAI/releases/latest
 
 
 Click **Try a sample match** to explore the UI without a download.
 
-For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RamScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
+For better tracking, drop a **robot-trained** Ultralytics `.pt` in the project folder or `models/` (for example `robot.pt`). When Ultralytics is installed and no local weights are present, RoboScoutAI can auto-download YOLO nano. When Ultralytics is missing (desktop builds), OpenCV motion / background-subtraction tracking still fills the path overlay so scout cards are not empty. Default COCO weights may follow people/vehicles — the UI warns when that happens.
 
-A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RamScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
+A full YouTube run needs network access. A TBA auth key (`TBA_AUTH_KEY` or the form field) is optional: when present, RoboScoutAI resolves the match from the title or YouTube video id, then merges nicknames, `score_breakdown`, and Zebra tracks. Event key / match key fields override auto-resolve. Without TBA, teams and scores still come from the VOD overlay.
 
 ### YouTube download (bot checks)
 
-Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RamScoutAI tries a resilient ladder:
+Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not a bot” wall. RoboScoutAI tries a resilient ladder:
 
 1. **yt-dlp** with multiple player clients (`android`/`ios`, `tv`, `web_embedded`, …) and a **format ladder** (progressive `18` → muxed 720p → `worst`)  
 2. Your **`YTDLP_PROXY`** / `HTTPS_PROXY` residential proxy (recommended for servers)  
@@ -128,7 +144,7 @@ Datacenter / cloud IPs often get YouTube’s “sign in to confirm you’re not 
 Also supported:
 
 - `YTDLP_COOKIES=/path/to/cookies.txt` — Netscape cookies from a signed-in browser  
-- Desktop auto-discovery (no env required): `cookies.txt` next to the EXE, `%APPDATA%\RamScoutAI\cookies.txt`, or `~/RamScoutAI/cookies.txt`  
+- Desktop auto-discovery (no env required): `cookies.txt` next to the EXE, `%APPDATA%\RoboScoutAI\cookies.txt`, or `~/RoboScoutAI/cookies.txt`  
 - Export with a browser extension such as **Get cookies.txt LOCALLY**, then drop the file in one of those locations  
 - `YTDLP_BROWSER=chrome` (or `edge` / `firefox`) — cookies-from-browser on a signed-in machine  
 - `YTDLP_FORMAT=…` — override the format selector  
@@ -139,6 +155,15 @@ Also supported:
 ### Tracking modes
 
 Default is **hybrid cascade**: OpenCV motion/color proposals every frame → SORT multi-object tracking (Kalman + IoU + alliance/color) → sparse Gemini / YOLO / OpenAI confirmation only when local proposals look weak. OpenAI stays sparse (interval + frame stride + max calls) to avoid 429s. See [`docs/POTATO.md`](docs/POTATO.md).
+
+**Field-aware tracking (all modes, no model needed).** Every proposal is checked against the field before it can become a track:
+
+- **Field gate** (`ramscout/trackers/field_gate.py`): the depth-corrected foot of each box is projected through the BEV homography; boxes outside the field polygon, wall-shaped boxes on the perimeter band, boxes with an implausible footprint for an FRC robot (~28–36 in), scorebug overlays and multi-edge boxes are rejected. A long-window motion-energy model plus dense optical flow flags static blobs (walls, LED strips, field elements) so they can never spawn a track; local tracks must physically move before they are confirmed.
+- **BEV association**: SORT also runs a constant-velocity Kalman in *field inches* and refuses associations that would need more than ~20 ft/s, which stops ID swaps when robots cross.
+- **Robust alliance color** (`ramscout/trackers/alliance.py`): bumper color is read from the lower band of the box only; the broadcast's own red/blue are learned per match in CIE Lab chroma from confirmed moving robots (self-supervised 2-means), so a warm or cool white balance moves both centroids together instead of breaking fixed HSV thresholds. Per-track votes use a sliding window with hysteresis, a starting-side prior helps early, a confirmed flip splits the track (ID-swap signature), and a final assignment forces exactly 3 red + 3 blue.
+- Motion proposals use `RETR_LIST` so a closed LED-wall ring in the foreground mask no longer swallows every robot inside it; motion + bumper-color agreement is rewarded, and only the *lowest* colored band on a robot counts as a bumper.
+
+Job warnings report the gate tally (`Field gate: … rejected (outside_field=…, perimeter_wall=…)`) and whether alliance colors were calibrated to the broadcast. `track_video(..., field_gate=False)` restores the old pixel-only behaviour.
 
 ## Next year’s game
 
@@ -171,6 +196,8 @@ pytest -q
 ## Limits
 
 - Wide, mostly fixed cameras work best
+- Multi-angle VODs: top overview + side cams improve scoring/climb confidence; single cams still work via BEV tilt cues
 - Scorebug OCR needs a readable graphic; title/description is the backup
 - Climb detection is “stayed on the Tower in endgame”, not rung level
 - Hub candidates are low-speed dwells next to the Hub, not counted fuel
+- Depth Anything V2 is optional; without it, classical depth still adjusts the BEV trapezoid

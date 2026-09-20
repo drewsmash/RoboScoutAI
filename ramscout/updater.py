@@ -18,11 +18,12 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 from ramscout import __version__
+from ramscout.brand import APP_NAME, BINARY_NAME, DEFAULT_GITHUB_REPO
 from ramscout.paths import app_dir, data_dir, is_frozen
 
 log = logging.getLogger(__name__)
 
-DEFAULT_GIT_REMOTE = "https://github.com/drewsmash/RamScoutAI.git"
+DEFAULT_GIT_REMOTE = f"https://github.com/{DEFAULT_GITHUB_REPO}.git"
 DEFAULT_GIT_BRANCH = "main"
 _STATE_LOCK = threading.Lock()
 _LAST_CHECK: dict[str, Any] | None = None
@@ -65,19 +66,17 @@ def git_branch() -> str:
 # Paths inside the repo that may hold desktop binaries (tracked via git for the updater).
 # Prefer release-artifacts/ — desktop-downloads/ is gitignored for local staging only.
 _ARTIFACT_REL_PATHS = (
-    "release-artifacts/RamScoutAI-windows-x64.exe",
-    "release-artifacts/RamScoutAI-windows-x64-signed.exe",
-    "release-artifacts/RamScoutAI-macos-arm64.zip",
-    "release-artifacts/RamScoutAI-macos-x64.zip",
-    "release-artifacts/RamScoutAI-linux-x86_64.tar.gz",
-    "desktop-downloads/RamScoutAI-windows-x64.exe",
-    "desktop-downloads/RamScoutAI-windows-x64-signed.exe",
-    "desktop-downloads/RamScoutAI-macos-arm64.zip",
-    "desktop-downloads/RamScoutAI-macos-x64.zip",
-    "desktop-downloads/RamScoutAI-macos-arm64.7z",
-    "desktop-downloads/RamScoutAI-linux-x86_64.tar.gz",
-    "dist/release/RamScoutAI-windows-x64.exe",
-    "dist/release/RamScoutAI-macos-arm64.zip",
+    "release-artifacts/RoboScoutAI-windows-x64.exe",
+    "release-artifacts/RoboScoutAI-windows-x64-signed.exe",
+    "release-artifacts/RoboScoutAI-macos-arm64.zip",
+    "release-artifacts/RoboScoutAI-macos-x64.zip",
+    "release-artifacts/RoboScoutAI-linux-x86_64.tar.gz",
+    "desktop-downloads/RoboScoutAI-windows-x64.exe",
+    "desktop-downloads/RoboScoutAI-macos-arm64.zip",
+    "desktop-downloads/RoboScoutAI-macos-x64.zip",
+    "desktop-downloads/RoboScoutAI-linux-x86_64.tar.gz",
+    "dist/release/RoboScoutAI-windows-x64.exe",
+    "dist/release/RoboScoutAI-macos-arm64.zip",
 )
 
 
@@ -129,19 +128,25 @@ def github_repo() -> str:
     if path.count("/") >= 1:
         parts = path.split("/")
         return f"{parts[-2]}/{parts[-1]}"
-    return path or "drewsmash/RamScoutAI"
+    return path or "drewsmash/RoboScoutAI"
 
 
 def update_cache_dir() -> Path:
-    override = (os.environ.get("RAMSCOUT_UPDATE_CACHE") or "").strip()
+    override = (
+        (os.environ.get("ROBOSCOUT_UPDATE_CACHE") or "").strip()
+        or (os.environ.get("RAMSCOUT_UPDATE_CACHE") or "").strip()
+    )
     if override:
         path = Path(override).expanduser()
     elif is_frozen():
-        path = Path(os.environ.get("APPDATA") or data_dir().parent) / "RamScoutAI" / "update-cache"
-        if not (os.environ.get("APPDATA") or "").strip():
-            path = data_dir().parent / "update-cache"
+        # Always use a per-user writable folder — never Program Files.
+        local = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if local:
+            path = Path(local) / APP_NAME / "update-cache"
+        else:
+            path = Path.home() / APP_NAME / "update-cache"
     else:
-        path = app_dir() / ".ramscout-update-cache"
+        path = app_dir() / ".roboscout-update-cache"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -157,26 +162,46 @@ def platform_key() -> str:
 
 
 def preferred_asset_names() -> list[str]:
+    """Ordered RoboScoutAI desktop artifact names for this platform."""
     key = platform_key()
+    brands = (BINARY_NAME,)
     if key == "windows":
-        return [
-            "RamScoutAI-windows-x64.exe",
-            "RamScoutAI-windows-x64-signed.exe",
-            "RamScoutAI-windows.exe",
-            "RamScoutAI.exe",
-        ]
-    if key.startswith("macos"):
-        names = [
-            f"RamScoutAI-{key}.zip",
-            "RamScoutAI-macos-arm64.zip",
-            "RamScoutAI-macos.zip",
-            "RamScoutAI-macos-universal.zip",
-            "RamScoutAI-macos-arm64.7z",
-        ]
-        if key == "macos-x64":
-            names.append("RamScoutAI-macos-x64.zip")
+        names: list[str] = []
+        for brand in brands:
+            names.extend(
+                [
+                    f"{brand}-windows-x64.exe",
+                    f"{brand}-windows-x64-signed.exe",
+                    f"{brand}-windows.exe",
+                    f"{brand}.exe",
+                ]
+            )
         return names
-    return [f"RamScoutAI-{key}.tar.gz", "RamScoutAI-linux.tar.gz", "RamScoutAI-linux-x86_64.tar.gz"]
+    if key.startswith("macos"):
+        names = []
+        for brand in brands:
+            names.extend(
+                [
+                    f"{brand}-{key}.zip",
+                    f"{brand}-macos-arm64.zip",
+                    f"{brand}-macos.zip",
+                    f"{brand}-macos-universal.zip",
+                    f"{brand}-macos-arm64.7z",
+                ]
+            )
+            if key == "macos-x64":
+                names.append(f"{brand}-macos-x64.zip")
+        return names
+    names = []
+    for brand in brands:
+        names.extend(
+            [
+                f"{brand}-{key}.tar.gz",
+                f"{brand}-linux.tar.gz",
+                f"{brand}-linux-x86_64.tar.gz",
+            ]
+        )
+    return names
 
 
 def normalize_version(tag: str) -> str:
@@ -209,10 +234,11 @@ def classify_update(
     local_sha: str,
     remote_sha: str,
 ) -> str:
-    """Return up_to_date | available | ahead (local newer than remote channel)."""
-    if local_sha and remote_sha and local_sha == remote_sha:
-        return "up_to_date"
+    """Return up_to_date | available | ahead (local newer than remote channel).
 
+    Semver wins over SHA. A pinned SHA must never hide a newer remote version
+    (that was the 'closed then up to date' failure mode after a botched apply).
+    """
     remote_ver = normalize_version(remote_version or "")
     current_ver = normalize_version(current_version or "")
     if remote_ver and re.match(r"^\d", remote_ver) and current_ver and re.match(r"^\d", current_ver):
@@ -223,6 +249,9 @@ def classify_update(
         # Same semver: only offer when we know the installed SHA and it differs (hotfix).
         if local_sha and remote_sha and local_sha != remote_sha:
             return "available"
+        return "up_to_date"
+
+    if local_sha and remote_sha and local_sha == remote_sha:
         return "up_to_date"
 
     # No usable semver — require a known local SHA drift (never empty→anything).
@@ -258,14 +287,38 @@ def check_for_update(current: str | None = None, timeout: float = 60.0) -> Updat
         release_url=_browse_url(git_remote()),
     )
     if not shutil.which("git"):
-        info.error = "git is not installed, so RamScoutAI cannot check for updates from the remote."
+        info.error = f"git is not installed, so {APP_NAME} cannot check for updates from the remote."
         info.message = "git remote unreachable"
         return _store(info)
 
     root = source_git_root()
     if root is not None:
         return _store(_check_source(info, root, timeout=timeout))
+    if managed_install_present():
+        # A RoboScoutAI.exe manager owns this install: never replace binaries in-place.
+        info.mode = "frozen"
+        info.message = "managed install"
+        info.error = (
+            f"This {APP_NAME} build is installed by {BINARY_NAME}.exe (manager). "
+            f"Start {APP_NAME} from the Start Menu and use its Update button, or run "
+            f"%LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe --update."
+        )
+        return _store(info)
     return _store(_check_frozen(info, timeout=timeout))
+
+
+def managed_install_present() -> bool:
+    """True when a manager-style install (current.json + app/) exists for this user."""
+    try:
+        from roboscout_manager.state import default_install_root
+
+        root = default_install_root()
+    except Exception:  # noqa: BLE001
+        root = _windows_user_install_dir()
+    try:
+        return (root / "current.json").is_file() and (root / "app").is_dir()
+    except OSError:
+        return False
 
 
 def last_check() -> dict[str, Any] | None:
@@ -299,7 +352,7 @@ def apply_downloaded_update(package: Path) -> str:
     package = Path(package)
     root = source_git_root()
     if root is not None and package.resolve() == root.resolve():
-        return "Source tree updated from git. Restart RamScoutAI to load the new code."
+        return f"Source tree updated from git. Restart {APP_NAME} to load the new code."
 
     if not is_frozen():
         raise RuntimeError("Auto-apply of a binary package only works from the desktop build.")
@@ -308,8 +361,9 @@ def apply_downloaded_update(package: Path) -> str:
 
     system = platform.system().lower()
     if system.startswith("win"):
-        message = _apply_windows(package)
-    elif system == "darwin":
+        # Windows bat writes the SHA only after a successful copy.
+        return _apply_windows(package)
+    if system == "darwin":
         message = _apply_macos(package)
     else:
         raise RuntimeError("Auto-apply of binaries is only supported on Windows and macOS.")
@@ -320,21 +374,148 @@ def apply_downloaded_update(package: Path) -> str:
     return message
 
 
+def manual_download_url(*, version: str = "", asset_name: str = "") -> str:
+    """Direct GitHub Releases URL for when auto-apply fails (e.g. Access Denied).
+
+    Prefer a concrete newest tag when known; otherwise ``/releases/latest`` so we
+    never hand the UI a stale pin like an old current_version.
+    """
+    repo = github_repo()
+    tag = normalize_version(version)
+    name = asset_name or preferred_asset_names()[0]
+    if tag and tag[0].isdigit():
+        return f"https://github.com/{repo}/releases/download/v{tag}/{name}"
+    return f"https://github.com/{repo}/releases/latest"
+
+
+def _latest_manual_download_url(info: UpdateInfo) -> str:
+    """Emergency Releases URL using the newest known channel version only."""
+    asset = info.asset_name if info.asset_name and not str(info.asset_name).startswith("git:") else ""
+    latest = normalize_version(info.latest_version or "")
+    if latest and latest[0].isdigit():
+        return manual_download_url(version=latest, asset_name=asset)
+    return manual_download_url(asset_name=asset)
+
+
+def _file_uri(path: Path) -> str:
+    return path.resolve().as_uri()
+
+
+def _reveal_path(path: Path) -> bool:
+    """Best-effort open Explorer/Finder on a local package (manual fallback)."""
+    try:
+        if not path.is_file() and not path.is_dir():
+            return False
+        system = platform.system().lower()
+        if system.startswith("win"):
+            subprocess.Popen(
+                ["explorer.exe", "/select,", str(path.resolve())],
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        if system == "darwin":
+            subprocess.Popen(
+                ["open", "-R", str(path.resolve())],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+    except OSError as exc:
+        log.warning("Could not reveal update package: %s", exc)
+    return False
+
+
+def manual_fallback_open_url(
+    info: UpdateInfo,
+    *,
+    package: Path | None = None,
+) -> str | None:
+    """Last-resort URL when git apply fails — prefer a local package over Releases."""
+    pending = _read_pending_update()
+    candidates: list[Path] = []
+    if package is not None:
+        candidates.append(Path(package))
+    if pending and pending.get("package"):
+        candidates.append(Path(str(pending["package"])))
+    # Already-fetched channel package in update-cache.
+    try:
+        cache_pkgs = update_cache_dir() / "packages"
+        if cache_pkgs.is_dir():
+            for name in preferred_asset_names():
+                hit = cache_pkgs / name
+                if hit.is_file():
+                    candidates.append(hit)
+                    break
+    except OSError:
+        pass
+
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                _reveal_path(cand)
+                return _file_uri(cand)
+        except OSError:
+            continue
+
+    # Never prefer browse/git URLs that look like Releases pins for old builds.
+    return _latest_manual_download_url(info)
+
+
+def should_open_manual_fallback(response: dict[str, Any]) -> bool:
+    """UI contract: open a URL only when apply failed and a fallback is present."""
+    return response.get("ok") is False and bool(response.get("open_url"))
+
+
 def apply_update_now() -> dict[str, Any]:
     """Check, fetch via git, and apply. Used by /api/updates/download."""
     info = check_for_update()
     if info.error and not info.available:
-        return {"ok": False, "message": info.error, "update": info.as_dict()}
-    if not info.available:
-        return {
-            "ok": True,
-            "message": info.message or f"RamScoutAI {info.current_version} is up to date.",
+        fallback = manual_fallback_open_url(info)
+        result: dict[str, Any] = {
+            "ok": False,
+            "message": info.error,
             "update": info.as_dict(),
             "restarting": False,
         }
-    package = download_update(info)
-    message = apply_downloaded_update(package)
-    restarting = is_frozen() and package.is_file()
+        if fallback:
+            result["open_url"] = fallback
+        return result
+    if not info.available:
+        return {
+            "ok": True,
+            "message": info.message or f"{APP_NAME} {info.current_version} is up to date.",
+            "update": info.as_dict(),
+            "restarting": False,
+        }
+    package: Path | None = None
+    try:
+        package = download_update(info)
+        message = apply_downloaded_update(package)
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+        fallback = manual_fallback_open_url(info, package=package)
+        fail: dict[str, Any] = {
+            "ok": False,
+            "message": (
+                f"Git update failed ({detail}). "
+                f"If a package was downloaded, run it from the update-cache or "
+                f"%LOCALAPPDATA%\\{APP_NAME}\\. Otherwise download the newest "
+                f"{BINARY_NAME}-windows-x64.exe (More info → Run anyway if SmartScreen blocks)."
+            ),
+            "error": detail,
+            "update": info.as_dict(),
+            "restarting": False,
+        }
+        if fallback:
+            fail["open_url"] = fallback
+        return fail
+    restarting = bool(is_frozen() and package is not None and package.is_file())
+    # Success: never attach open_url — UI must not browser-download an old Release.
     return {
         "ok": True,
         "message": message,
@@ -524,10 +705,29 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
                 f"Installed {info.current_version} is newer than {branch} "
                 f"({info.latest_version or info.remote_sha[:7]})."
             )
-        # Pin installed SHA so empty→remote never flaps as an "update".
+        # Only pin SHA when versions already match (or no semver). Never pin when
+        # a newer remote version exists — that hid failed Windows applies.
+        pending = _read_pending_update()
+        if pending and pending.get("sha") and pending.get("sha") == info.remote_sha:
+            # Last apply never finished — keep offering / expose manual download.
+            info.available = True
+            info.can_apply = True
+            info.message = "previous update did not finish installing"
+            info.error = (
+                "A previous update closed the app but did not relaunch. "
+                "Click Update again, or run the exe from "
+                f"%LOCALAPPDATA%\\{APP_NAME}\\ (unsigned builds need More info → Run anyway)."
+            )
+            # Emergency-only newest Releases link (UI must not auto-open on check).
+            info.release_url = _latest_manual_download_url(info)
+            return info
         if info.remote_sha and (
             not info.local_sha
-            or (status == "up_to_date" and info.local_sha != info.remote_sha and not is_newer(info.latest_version, info.current_version))
+            or (
+                status == "up_to_date"
+                and info.local_sha != info.remote_sha
+                and not is_newer(info.latest_version, info.current_version)
+            )
         ):
             _write_installed_sha(info.remote_sha)
             info.local_sha = info.remote_sha
@@ -544,6 +744,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
             f"{platform_key()} desktop binary under release-artifacts/, "
             "so nothing to apply automatically."
         )
+        # Emergency-only; keep browse URL otherwise — never auto-open on check.
+        info.release_url = _latest_manual_download_url(info)
         return info
 
     info.available = True
@@ -551,6 +753,8 @@ def _check_frozen(info: UpdateInfo, *, timeout: float) -> UpdateInfo:
     info.can_apply = True
     info.asset_name = Path(asset_rel).name
     info.asset_url = f"git:{asset_rel}"
+    # Keep release_url as the git browse URL (set at check start). Releases
+    # download links are emergency-only via apply_update_now failure paths.
     return info
 
 
@@ -722,7 +926,46 @@ def _apply_source_pull(root: Path, branch: str) -> None:
 
 
 def _installed_sha_path() -> Path:
+    """Prefer always-writable LocalAppData — Program Files often denies writes."""
+    system = platform.system().lower()
+    if system.startswith("win"):
+        return _windows_user_install_dir() / "update-git-sha.txt"
+    if system == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "update-git-sha.txt"
     return app_dir() / "update-git-sha.txt"
+
+
+def _pending_update_path() -> Path:
+    return update_cache_dir() / "pending-update.json"
+
+
+def _write_pending_update(*, sha: str, package: Path, target: Path) -> None:
+    payload = {
+        "sha": (sha or "").strip(),
+        "package": str(package),
+        "target": str(target),
+    }
+    path = _pending_update_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _clear_pending_update() -> None:
+    try:
+        _pending_update_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _read_pending_update() -> dict[str, Any] | None:
+    path = _pending_update_path()
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def _read_installed_sha() -> str:
@@ -732,62 +975,238 @@ def _read_installed_sha() -> str:
             return path.read_text(encoding="utf-8").strip()
     except OSError:
         pass
+    # Legacy: older builds wrote next to the EXE.
+    legacy = app_dir() / "update-git-sha.txt"
+    try:
+        if legacy.is_file() and legacy.resolve() != path.resolve():
+            return legacy.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
     return ""
 
 
 def _write_installed_sha(sha: str) -> None:
     try:
-        _installed_sha_path().write_text(sha.strip() + "\n", encoding="utf-8")
+        path = _installed_sha_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sha.strip() + "\n", encoding="utf-8")
+        _clear_pending_update()
     except OSError as exc:
         log.warning("Could not persist installed git sha: %s", exc)
 
 
-def _apply_windows(package: Path) -> str:
-    exe = Path(sys.executable).resolve()
-    staging = exe.with_suffix(exe.suffix + ".new")
-    shutil.copy2(package, staging)
-    script = Path(tempfile.gettempdir()) / "ramscout_update.bat"
-    script.write_text(
-        "\r\n".join(
-            [
-                "@echo off",
-                "timeout /t 2 /nobreak >nul",
-                f'move /Y "{staging}" "{exe}"',
-                f'start "" "{exe}"',
-                f'del "%~f0"',
-                "",
-            ]
+def _windows_update_bat_lines(
+    *,
+    pid: int,
+    src: str,
+    dst: str,
+    portable: str,
+    sha_path: str,
+    log_path: str,
+    sha: str,
+    install_dir: str,
+) -> list[str]:
+    """Build the Windows update .bat body (unit-tested for safety invariants).
+
+    Hardening notes vs older broken bats:
+    - Never ``move`` the package onto a locked running EXE (that produced
+      ``Access is denied. / 0 file(s) moved.``).
+    - Wait for PID exit via PowerShell ``Wait-Process`` (tasklist/findstr was flaky).
+    - If the install target is still locked, copy to ``.new`` then replace; on
+      failure open Explorer to the download and do **not** pin the SHA.
+    - Self-delete only as the final line via ``(goto) 2>nul & del`` so cmd does
+      not emit ``The batch file cannot be found.`` after a mid-run ``del``.
+    """
+    return [
+        "@echo off",
+        "setlocal EnableExtensions",
+        f"set PID={pid}",
+        f'set "SRC={src}"',
+        f'set "DST={dst}"',
+        f'set "DSTNEW={dst}.new"',
+        f'set "PORTABLE={portable}"',
+        f'set "SHAFILE={sha_path}"',
+        f'set "LOG={log_path}"',
+        f'set "SHA={sha}"',
+        f'set "INSTALLDIR={install_dir}"',
+        'echo [%DATE% %TIME%] update start pid=%PID% > "%LOG%"',
+        'echo SRC=%SRC%>> "%LOG%"',
+        'echo DST=%DST%>> "%LOG%"',
+        'echo PORTABLE=%PORTABLE%>> "%LOG%"',
+        'echo waiting for pid %PID% >> "%LOG%"',
+        # Reliable wait: Wait-Process; ignore if already gone. Extra ping settle for AV locks.
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Wait-Process -Id ([int]$env:PID) -Timeout 180 -ErrorAction Stop } catch { }" >> "%LOG%" 2>&1',
+        "ping -n 3 127.0.0.1 >nul",
+        'echo [%DATE% %TIME%] process exited >> "%LOG%"',
+        'if not exist "%INSTALLDIR%" mkdir "%INSTALLDIR%"',
+        # Prefer Copy-Item -Force (handles read-only attrs better than cmd copy).
+        "set COPY_OK=0",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Copy-Item -LiteralPath $env:SRC -Destination $env:DST -Force '
+            "-ErrorAction Stop; Write-Output 'COPY_OK'; exit 0 } catch { "
+            'Write-Output $_.Exception.Message; exit 1 }" >> "%LOG%" 2>&1'
         ),
-        encoding="utf-8",
+        'if not errorlevel 1 set COPY_OK=1',
+        'if "%COPY_OK%"=="0" (',
+        '  echo direct copy failed, trying .new replace >> "%LOG%"',
+        '  copy /Y "%SRC%" "%DSTNEW%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo COPY_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  if exist "%DST%" del /F /Q "%DST%" >> "%LOG%" 2>&1',
+        '  if exist "%DST%" (',
+        '    echo TARGET_LOCKED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  copy /Y "%DSTNEW%" "%DST%" >> "%LOG%" 2>&1',
+        "  if errorlevel 1 (",
+        '    echo REPLACE_FAILED >> "%LOG%"',
+        '    start "" explorer.exe /select,"%SRC%"',
+        "    exit /b 1",
+        "  )",
+        '  del /F /Q "%DSTNEW%" >nul 2>nul',
+        "  set COPY_OK=1",
+        ")",
+        (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            '"try { Unblock-File -LiteralPath $env:DST -ErrorAction SilentlyContinue } '
+            'catch {}" >> "%LOG%" 2>&1'
+        ),
+        # Best-effort refresh of original location (Program Files often denies — ignore).
+        'if /I not "%PORTABLE%"=="%DST%" (',
+        '  copy /Y "%SRC%" "%PORTABLE%" >> "%LOG%" 2>&1',
+        ")",
+        # Pin SHA only after a successful install copy.
+        'if defined SHA if not "%SHA%"=="" (',
+        '  >"%SHAFILE%" echo %SHA%',
+        '  echo wrote sha %SHA% >> "%LOG%"',
+        ")",
+        'echo launching "%DST%" >> "%LOG%"',
+        'start "" /D "%INSTALLDIR%" "%DST%"',
+        "if errorlevel 1 (",
+        '  echo START_FAILED >> "%LOG%"',
+        '  start "" explorer.exe /select,"%DST%"',
+        "  exit /b 1",
+        ")",
+        'echo OK >> "%LOG%"',
+        "endlocal",
+        # Last line only: exit parse context then delete self (avoids "batch file cannot be found").
+        '(goto) 2>nul & del "%~f0"',
+        "",
+    ]
+
+
+def _apply_windows(package: Path) -> str:
+    r"""Install into %LOCALAPPDATA%\RoboScoutAI, wait for PID exit, then relaunch.
+
+    Does NOT mark the SHA installed yet — the bat writes that after a successful
+    copy so a failed relaunch cannot falsely report "up to date".
+    """
+    exe = Path(sys.executable).resolve()
+    pid = os.getpid()
+    install_dir = _windows_user_install_dir()
+    install_dir.mkdir(parents=True, exist_ok=True)
+    target = install_dir / f"{BINARY_NAME}.exe"
+    portable_target = _windows_install_target(exe)
+    sha = (last_check() or {}).get("remote_sha") or ""
+    sha_file = _installed_sha_path()
+    log_file = install_dir / "update.log"
+    _write_pending_update(sha=sha, package=package, target=target)
+
+    script = Path(tempfile.gettempdir()) / "roboscout_update.bat"
+    src = str(package.resolve())
+    dst = str(target.resolve())
+    portable = str(portable_target.resolve())
+    sha_path = str(sha_file.resolve())
+    log_path = str(log_file.resolve())
+    lines = _windows_update_bat_lines(
+        pid=pid,
+        src=src,
+        dst=dst,
+        portable=portable,
+        sha_path=sha_path,
+        log_path=log_path,
+        sha=sha,
+        install_dir=str(install_dir),
     )
-    subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
-    return "Update staged from git. RamScoutAI will restart momentarily."
+    script.write_text("\r\n".join(lines), encoding="utf-8")
+    # CREATE_NO_WINDOW keeps the console from flashing; Explorer opens only on failure.
+    creation = _windows_detach_flags() | 0x08000000  # CREATE_NO_WINDOW
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script)],
+        close_fds=True,
+        creationflags=creation,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    threading.Timer(1.25, lambda: os._exit(0)).start()
+    return (
+        f"Updating from git — installing into %LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe. "
+        "The app will close and relaunch from that LocalAppData install. "
+        "Builds are currently unsigned — if Windows SmartScreen appears, click More info → Run anyway. "
+        f"If nothing opens, run that exe from File Explorer (log: %LOCALAPPDATA%\\{APP_NAME}\\update.log)."
+    )
+
+
+def _windows_detach_flags() -> int:
+    # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS — keep bat alive after we exit.
+    return 0x00000200 | 0x00000008
+
+
+def _windows_user_install_dir() -> Path:
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    return local / APP_NAME
+
+
+def _windows_install_target(exe: Path) -> Path:
+    """Install / refresh target as RoboScoutAI.exe next to the running binary."""
+    if exe.suffix.lower() == ".exe":
+        return exe.with_name(f"{BINARY_NAME}.exe")
+    return exe
 
 
 def _apply_macos(package: Path) -> str:
-    exe = Path(sys.executable).resolve()
-    extract_dir = Path(tempfile.mkdtemp(prefix="ramscout-update-"))
-    if package.suffix.lower() == ".zip":
-        shutil.unpack_archive(package, extract_dir)
+    extract_dir = Path(tempfile.mkdtemp(prefix="roboscout-update-"))
+    suffix = package.suffix.lower()
+    if suffix in {".zip", ".7z"}:
+        if suffix == ".7z":
+            seven = shutil.which("7z") or shutil.which("7zz")
+            if seven:
+                subprocess.run([seven, "x", str(package), f"-o{extract_dir}", "-y"], check=True)
+            else:
+                raise RuntimeError(
+                    "macOS update is a .7z archive but 7z is not installed. "
+                    "Download the .zip from the release page, or install p7zip."
+                )
+        else:
+            shutil.unpack_archive(package, extract_dir)
     else:
         shutil.copy2(package, extract_dir / package.name)
 
     replacement = _find_macos_binary(extract_dir)
     if replacement is None:
-        raise RuntimeError("Could not find RamScoutAI binary inside the macOS update package.")
+        raise RuntimeError(f"Could not find {APP_NAME} binary inside the macOS update package.")
 
-    staging = exe.with_name(exe.name + ".new")
-    shutil.copy2(replacement, staging)
-    os.chmod(staging, 0o755)
-    script = Path(tempfile.gettempdir()) / "ramscout_update.sh"
+    install_dir = Path.home() / "Library" / "Application Support" / APP_NAME
+    install_dir.mkdir(parents=True, exist_ok=True)
+    target = install_dir / BINARY_NAME
+    shutil.copy2(replacement, target)
+    os.chmod(target, 0o755)
+
+    pid = os.getpid()
+    script = Path(tempfile.gettempdir()) / "roboscout_update.sh"
     script.write_text(
         "\n".join(
             [
                 "#!/bin/bash",
-                "sleep 2",
-                f'mv -f "{staging}" "{exe}"',
-                f'chmod +x "{exe}"',
-                f'"{exe}" >/dev/null 2>&1 &',
+                f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done",
+                f'chmod +x "{target}"',
+                f'"{target}" >/dev/null 2>&1 &',
                 f'rm -f "{script}"',
                 "",
             ]
@@ -796,15 +1215,17 @@ def _apply_macos(package: Path) -> str:
     )
     os.chmod(script, 0o755)
     subprocess.Popen(["/bin/bash", str(script)], start_new_session=True)
-    return "Update staged from git. RamScoutAI will restart momentarily."
+    threading.Timer(0.75, lambda: os._exit(0)).start()
+    return f"Update downloaded. {APP_NAME} will restart from {target}."
 
 
 def _find_macos_binary(root: Path) -> Path | None:
-    candidates = sorted(root.rglob("RamScoutAI"))
-    for path in candidates:
-        if path.is_file() and os.access(path, os.X_OK):
-            return path
+    for name in (BINARY_NAME,):
+        candidates = sorted(root.rglob(name))
+        for path in candidates:
+            if path.is_file() and os.access(path, os.X_OK):
+                return path
     for path in root.rglob("*"):
-        if path.is_file() and path.suffix == "" and "RamScout" in path.name:
+        if path.is_file() and path.suffix == "" and "RoboScout" in path.name:
             return path
     return None

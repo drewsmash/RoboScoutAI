@@ -1,4 +1,4 @@
-# Signing RamScoutAI desktop builds
+# Signing RoboScoutAI desktop builds
 
 Unsigned Windows `.exe` and macOS apps are often flagged by SmartScreen / Gatekeeper
 ("unrecognized developer" or false-positive malware warnings). Code signing fixes that.
@@ -18,15 +18,15 @@ is still useful for teams that distribute internally and install the cert once.
 
 ### Windows
 
-1. Right-click `RamScoutAI-windows-x64.exe` → **Properties** → **Unblock** (if present) → OK  
+1. Right-click `RoboScoutAI-windows-x64.exe` → **Properties** → **Unblock** (if present) → OK  
 2. Or click **More info** → **Run anyway** on the SmartScreen prompt
 
 ### macOS
 
 ```bash
-xattr -dr com.apple.quarantine ./RamScoutAI
-chmod +x ./RamScoutAI
-./RamScoutAI
+xattr -dr com.apple.quarantine ./RoboScoutAI
+chmod +x ./RoboScoutAI
+./RoboScoutAI
 ```
 
 ## Local self-sign (Windows, free)
@@ -34,7 +34,7 @@ chmod +x ./RamScoutAI
 Requires `osslsigncode` and `openssl`:
 
 ```bash
-./packaging/sign.sh --self-sign dist/release/RamScoutAI-windows-x64.exe
+./packaging/sign.sh --self-sign dist/release/RoboScoutAI-windows-x64.exe
 ```
 
 This writes `packaging/certs/` (gitignored). Share the `.crt` with teammates who want to
@@ -65,14 +65,14 @@ These names match `.github/workflows/release.yml`.
 ```bash
 export WINDOWS_CERT_PFX=/path/to/cert.pfx
 export WINDOWS_CERT_PASSWORD='…'
-./packaging/sign.sh RamScoutAI-windows-x64.exe
+./packaging/sign.sh RoboScoutAI-windows-x64.exe
 ```
 
 Or with `signtool` on Windows:
 
 ```powershell
-signtool sign /fd SHA256 /f cert.pfx /p "PASSWORD" /tr http://timestamp.digicert.com /td SHA256 RamScoutAI-windows-x64.exe
-signtool verify /pa RamScoutAI-windows-x64.exe
+signtool sign /fd SHA256 /f cert.pfx /p "PASSWORD" /tr http://timestamp.digicert.com /td SHA256 RoboScoutAI-windows-x64.exe
+signtool verify /pa RoboScoutAI-windows-x64.exe
 ```
 
 ### macOS (codesign + notarytool) — must run on a Mac
@@ -80,19 +80,19 @@ signtool verify /pa RamScoutAI-windows-x64.exe
 ```bash
 codesign --force --deep --options runtime \
   --sign "Developer ID Application: Your Name (TEAMID)" \
-  ./RamScoutAI
+  ./RoboScoutAI
 
-ditto -c -k --keepParent RamScoutAI RamScoutAI.zip
-xcrun notarytool submit RamScoutAI.zip \
+ditto -c -k --keepParent RoboScoutAI RoboScoutAI.zip
+xcrun notarytool submit RoboScoutAI.zip \
   --key AuthKey.p8 --key-id KEYID --issuer ISSUER \
   --wait
-xcrun stapler staple RamScoutAI
+xcrun stapler staple RoboScoutAI
 ```
 
 Ad-hoc sign (no Apple account, still Gatekeeper-blocked for downloaded apps):
 
 ```bash
-codesign --force --deep -s - ./RamScoutAI
+codesign --force --deep -s - ./RoboScoutAI
 ```
 
 ## Certificate vendors

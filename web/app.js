@@ -73,14 +73,33 @@ function loadAsset(key, src, onload) {
   img.src = src;
 }
 
+function storageGet(key, fallback = null) {
+  const modern = `roboscout.${key}`;
+  const legacy = `ramscout.${key}`;
+  const value = localStorage.getItem(modern);
+  if (value != null) return value;
+  const old = localStorage.getItem(legacy);
+  if (old != null) {
+    localStorage.setItem(modern, old);
+    return old;
+  }
+  return fallback;
+}
+
+function storageSet(key, value) {
+  localStorage.setItem(`roboscout.${key}`, value);
+}
+
 function loadTbaKey() {
-  const saved = localStorage.getItem("ramscout.tbaKey") || "";
+  const saved = storageGet("tbaKey", "") || "";
   $("tba-key").value = saved;
-  const openai = localStorage.getItem("ramscout.openaiKey") || "";
-  const google = localStorage.getItem("ramscout.googleKey") || "";
-  const mode = localStorage.getItem("ramscout.trackerMode") || (google ? "gemini" : "hybrid");
+  const openai = storageGet("openaiKey", "") || "";
+  const google = storageGet("googleKey", "") || "";
+  const gateway = storageGet("aiGatewayKey", "") || "";
+  const mode = storageGet("trackerMode", "") || (google ? "gemini" : "hybrid");
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
+  if ($("ai-gateway-key")) $("ai-gateway-key").value = gateway;
   if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
     $("tracker-mode").value = mode;
   }
@@ -95,10 +114,11 @@ $("google-key")?.addEventListener("change", () => {
 });
 
 function saveScoutKeys() {
-  localStorage.setItem("ramscout.tbaKey", $("tba-key").value.trim());
-  if ($("openai-key")) localStorage.setItem("ramscout.openaiKey", $("openai-key").value.trim());
-  if ($("google-key")) localStorage.setItem("ramscout.googleKey", $("google-key").value.trim());
-  if ($("tracker-mode")) localStorage.setItem("ramscout.trackerMode", $("tracker-mode").value);
+  storageSet("tbaKey", $("tba-key").value.trim());
+  if ($("openai-key")) storageSet("openaiKey", $("openai-key").value.trim());
+  if ($("google-key")) storageSet("googleKey", $("google-key").value.trim());
+  if ($("ai-gateway-key")) storageSet("aiGatewayKey", $("ai-gateway-key").value.trim());
+  if ($("tracker-mode")) storageSet("trackerMode", $("tracker-mode").value);
 }
 
 function trackerPayload() {
@@ -107,6 +127,7 @@ function trackerPayload() {
     auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
+    ai_gateway_key: $("ai-gateway-key")?.value.trim() || "",
   };
 }
 
@@ -222,6 +243,7 @@ async function createJob(payload) {
     form.append("tracker_mode", payload.tracker_mode || "hybrid");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
+    form.append("ai_gateway_key", payload.ai_gateway_key || "");
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
@@ -264,8 +286,8 @@ async function refreshJob() {
 }
 
 function renderJob(job) {
-  window.__ramscoutJobId = job.id;
-  window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
+  window.__roboscoutJobId = job.id;
+  window.dispatchEvent(new CustomEvent("roboscout:job", { detail: job }));
   const ytHelp = $("yt-help");
   const uploadHelp = $("upload-help");
   const errText = `${job.error || ""} ${job.message || ""} ${(job.warnings || []).join(" ")}`;
@@ -304,6 +326,9 @@ function renderJob(job) {
   $("progress-message").textContent = job.error || job.message || "";
   $("progress-fill").style.width = `${Math.max(4, job.progress || 0)}%`;
   $("progress-panel").hidden = job.status === "ready";
+  $("progress-panel")?.classList.toggle("thinking", job.status !== "ready" && job.status !== "error");
+  renderThinkStages(job);
+  renderViews(job);
 
   const match = job.match;
   const info = job.video_info;
@@ -330,6 +355,8 @@ function renderJob(job) {
       const trackBits = [];
       if (job.tracker_mode) trackBits.push(`Track: ${job.tracker_mode}`);
       if (job.camera?.mode) trackBits.push(`Cam: ${job.camera.mode}`);
+      if (job.bev?.depth_source) trackBits.push(`Depth: ${job.bev.depth_source}`);
+      if (job.bev?.pitch_deg != null) trackBits.push(`Pitch≈${Math.round(job.bev.pitch_deg)}°`);
       const hits = job.source_hits || {};
       const hitNames = Object.keys(hits).filter((k) => hits[k] > 0);
       if (hitNames.length) trackBits.push(hitNames.join("+"));
@@ -393,6 +420,7 @@ function renderJob(job) {
   renderTimeline(job);
   renderWarnings(job);
   drawField();
+  drawTrackOverlay();
   if (job.status === "ready") {
     updateScoutbookMeta();
     refreshPicklist();
@@ -540,11 +568,204 @@ function labelStatus(status) {
     queued: "Queued",
     resolving: "Resolving match",
     downloading: "Downloading video",
+    views: "Sectioning camera views",
     tracking: "Tracking robots",
+    side_views: "Side cameras · scoring & climbs",
     scouting: "Auto-scouting",
     ready: "Ready",
     error: "Error",
   })[status] || status;
+}
+
+const STAGE_ORDER = ["resolving", "downloading", "views", "tracking", "side_views", "scouting", "ready"];
+const STAGE_LABELS = {
+  resolving: "Resolve",
+  downloading: "Download",
+  views: "Views",
+  tracking: "Track + BEV",
+  side_views: "Side cams",
+  scouting: "Scout",
+  ready: "Done",
+};
+
+function renderThinkStages(job) {
+  const el = $("think-stages");
+  if (!el) return;
+  const current = job.status || "queued";
+  const seen = new Set((job.thinking_stages || []).map((s) => s.status));
+  seen.add(current);
+  const curIdx = STAGE_ORDER.indexOf(current);
+  el.innerHTML = STAGE_ORDER.map((key) => {
+    const idx = STAGE_ORDER.indexOf(key);
+    const done = (curIdx >= 0 && idx < curIdx) || current === "ready";
+    const active = key === current && current !== "ready" && current !== "error";
+    const cls = active ? "active" : done && seen.has(key) ? "done" : "";
+    return `<li class="${cls}">${STAGE_LABELS[key] || key}</li>`;
+  }).join("");
+}
+
+function renderViews(job) {
+  const panel = $("views-panel");
+  const grid = $("views-grid");
+  const bevMeta = $("bev-meta");
+  const lede = $("views-lede");
+  if (!panel || !grid) return;
+  const panes = job.views?.panes || job.camera?.panes || [];
+  const hasBev = job.bev && (job.bev.depth_source || job.bev.pitch_deg != null);
+  if (!panes.length && !hasBev) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  if (lede) {
+    const mode = job.views?.mode || job.camera?.mode || "single";
+    lede.textContent =
+      mode === "stacked_sides"
+        ? "Top wide-angle for movement · bottom-left blue scoring/climb · bottom-right red scoring/climb."
+        : mode === "stacked_top"
+          ? "Top wide-angle for the top-down map · lower pane for scoring & climb cues."
+          : "Single overview camera — BEV adjusts for camera angle on the field map.";
+  }
+  const roleTitle = {
+    overview: "Overview",
+    blue_side: "Blue side",
+    red_side: "Red side",
+    sideline: "Sideline",
+  };
+  grid.innerHTML = panes
+    .map((pane) => {
+      const role = pane.role || "overview";
+      const crop =
+        `${Math.round((pane.crop_top || 0) * 100)}–${Math.round((pane.crop_bottom || 1) * 100)}%` +
+        (pane.crop_left != null || pane.crop_right != null
+          ? ` · x ${Math.round((pane.crop_left || 0) * 100)}–${Math.round((pane.crop_right ?? 1) * 100)}%`
+          : "");
+      return `<article class="view-card ${role}">
+        <div class="view-role">${roleTitle[role] || role}</div>
+        <div class="view-purpose">${pane.purpose || ""}</div>
+        <div class="view-crop">${crop}</div>
+      </article>`;
+    })
+    .join("");
+  if (bevMeta) {
+    if (hasBev) {
+      bevMeta.hidden = false;
+      const bits = [];
+      if (job.bev.depth_source) bits.push(`Depth: ${job.bev.depth_source}`);
+      if (job.bev.pitch_deg != null) bits.push(`Camera pitch ≈ ${Math.round(job.bev.pitch_deg)}°`);
+      if (job.bev.tilt_strength != null) bits.push(`Tilt ${Number(job.bev.tilt_strength).toFixed(2)}`);
+      if (job.side_cues?.length) bits.push(`${job.side_cues.length} side cues`);
+      bevMeta.innerHTML = bits.map((b) => `<span class="chip ghost">${b}</span>`).join("");
+    } else {
+      bevMeta.hidden = true;
+      bevMeta.innerHTML = "";
+    }
+  }
+}
+
+function samplesNearTime(samples, t, window = 0.35) {
+  const hits = [];
+  for (const sample of samples || []) {
+    if (Math.abs(Number(sample.t) - t) <= window) hits.push(sample);
+  }
+  return hits;
+}
+
+function drawTrackOverlay() {
+  const canvas = $("track-overlay");
+  const video = $("match-video");
+  const toggle = $("overlay-toggle");
+  if (!canvas || !video) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const w = Math.max(1, Math.round(video.clientWidth || 0));
+  const h = Math.max(1, Math.round(video.clientHeight || 0));
+  if (w < 2 || h < 2) return;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  ctx.clearRect(0, 0, w, h);
+  if (toggle && !toggle.checked) return;
+  const job = state.job;
+  if (!job || !job.samples?.length) return;
+  const t = Number.isFinite(video.currentTime) && video.currentTime > 0.05 ? video.currentTime : state.t;
+  const fw = Number(job.frame_size?.[0] || video.videoWidth || w);
+  const fh = Number(job.frame_size?.[1] || video.videoHeight || h);
+  const sx = w / fw;
+  const sy = h / fh;
+
+  for (const pane of job.views?.panes || []) {
+    const x0 = (pane.crop_left || 0) * w;
+    const x1 = (pane.crop_right ?? 1) * w;
+    const y0 = (pane.crop_top || 0) * h;
+    const y1 = (pane.crop_bottom || 1) * h;
+    ctx.strokeStyle =
+      pane.role === "blue_side" ? "rgba(138,180,248,0.35)"
+      : pane.role === "red_side" ? "rgba(242,139,130,0.35)"
+      : "rgba(168,199,250,0.25)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.strokeRect(x0 + 1, y0 + 1, Math.max(0, x1 - x0 - 2), Math.max(0, y1 - y0 - 2));
+    ctx.setLineDash([]);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = "600 11px Outfit, Roboto, sans-serif";
+    ctx.fillText(String(pane.role || "view"), x0 + 8, y0 + 16);
+  }
+
+  const near = samplesNearTime(job.samples, t, 0.4);
+  const byTrack = new Map();
+  for (const sample of near) byTrack.set(sample.track_id, sample);
+  for (const sample of byTrack.values()) {
+    const alliance = sample.alliance === "red" ? "red" : "blue";
+    const color = alliance === "red" ? "#f28b82" : "#8ab4f8";
+    const box = sample.bbox || [];
+    if (box.length >= 4) {
+      const [x1, y1, x2, y2] = box;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+      ctx.fillStyle = color;
+      ctx.font = "700 13px Outfit, Roboto, sans-serif";
+      ctx.fillText(String(sample.team || sample.track_id), x1 * sx + 4, Math.max(14, y1 * sy - 6));
+    } else if (sample.px != null && sample.py != null) {
+      const px = sample.px * sx;
+      const py = sample.py * sy;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = "700 12px Outfit, Roboto, sans-serif";
+      ctx.fillText(String(sample.team || sample.track_id), px + 10, py - 4);
+    }
+  }
+
+  for (const cue of job.side_cues || []) {
+    if (Math.abs(Number(cue.t) - t) > 0.6) continue;
+    const color = cue.alliance === "red" ? "rgba(242,139,130,0.85)" : "rgba(138,180,248,0.85)";
+    ctx.fillStyle = color;
+    ctx.font = "650 12px Outfit, Roboto, sans-serif";
+    const label = cue.kind === "climb_activity" ? "CLIMB" : cue.kind === "hub_activity" ? "SCORE" : "SIDE";
+    ctx.fillText(label, 12, h - 14);
+  }
+}
+
+function bindTrackOverlay() {
+  const video = $("match-video");
+  const toggle = $("overlay-toggle");
+  if (!video) return;
+  const tickOverlay = () => {
+    drawTrackOverlay();
+    if (!video.paused) requestAnimationFrame(tickOverlay);
+  };
+  video.addEventListener("play", () => requestAnimationFrame(tickOverlay));
+  video.addEventListener("seeked", drawTrackOverlay);
+  video.addEventListener("loadedmetadata", drawTrackOverlay);
+  video.addEventListener("timeupdate", drawTrackOverlay);
+  toggle?.addEventListener("change", drawTrackOverlay);
+  $("time-slider")?.addEventListener("input", () => {
+    if (video.paused) drawTrackOverlay();
+  });
 }
 
 function tick(now) {
@@ -556,6 +777,7 @@ function tick(now) {
   $("time-slider").value = String(state.t);
   $("time-label").textContent = `${state.t.toFixed(1)}s`;
   drawField();
+  drawTrackOverlay();
   if (state.t < end) requestAnimationFrame(tick);
   else {
     state.playing = false;
@@ -846,14 +1068,24 @@ fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGa
 
 /* ---- Scout book / pick list (localStorage) ---- */
 
-const BOOK_KEY = "ramscout.scoutBook";
-const NOTES_KEY = "ramscout.teamNotes";
-const WATCH_KEY = "ramscout.watchlist";
-const EXCLUDE_KEY = "ramscout.pickedExclude";
+const BOOK_KEY = "roboscout.scoutBook";
+const NOTES_KEY = "roboscout.teamNotes";
+const WATCH_KEY = "roboscout.watchlist";
+const EXCLUDE_KEY = "roboscout.pickedExclude";
+const LEGACY_KEYS = {
+  [BOOK_KEY]: "ramscout.scoutBook",
+  [NOTES_KEY]: "ramscout.teamNotes",
+  [WATCH_KEY]: "ramscout.watchlist",
+  [EXCLUDE_KEY]: "ramscout.pickedExclude",
+};
 
 function loadJson(key, fallback) {
   try {
-    const raw = localStorage.getItem(key);
+    let raw = localStorage.getItem(key);
+    if (raw == null && LEGACY_KEYS[key]) {
+      raw = localStorage.getItem(LEGACY_KEYS[key]);
+      if (raw != null) localStorage.setItem(key, raw);
+    }
     return raw ? JSON.parse(raw) : fallback;
   } catch (_err) {
     return fallback;
@@ -1089,7 +1321,7 @@ function exportPicklist() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "ramscout-picklist.csv";
+  a.download = "roboscout-picklist.csv";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1130,6 +1362,79 @@ function initScoutTools() {
   refreshPicklist();
 }
 
+/** Only open a URL when git apply failed and the API attached a manual fallback. */
+function shouldOpenUpdateManualFallback(body) {
+  return Boolean(body) && body.ok === false && Boolean(body.open_url);
+}
+
+/** Label for the update chip while the manager downloads/installs side-by-side. */
+function managedUpdateLabel(status) {
+  if (!status) return "Updating…";
+  const pct = Number.isFinite(status.progress) ? `${status.progress}%` : "";
+  switch (status.state) {
+    case "checking":
+      return "Checking…";
+    case "downloading":
+      return `Downloading ${pct}`.trim();
+    case "verifying":
+      return "Verifying…";
+    case "installing":
+      return "Installing…";
+    case "manager-update":
+      return `Updating manager ${pct}`.trim();
+    case "done":
+      return status.version ? `Restart to ${status.version}` : "Restart to finish";
+    case "error":
+      return "Update failed";
+    default:
+      return "Updating…";
+  }
+}
+
+/** Poll /api/updates/status until the manager reports done or error. */
+async function waitForManagedUpdate(onProgress, { intervalMs = 1000, timeoutMs = 30 * 60 * 1000 } = {}) {
+  const started = Date.now();
+  let lastState = "";
+  while (Date.now() - started < timeoutMs) {
+    let status = null;
+    try {
+      const res = await fetch("/api/updates/status", { cache: "no-store" });
+      status = await res.json();
+    } catch (_err) {
+      status = null;
+    }
+    if (status) {
+      if (status.state !== lastState || status.state === "downloading") onProgress(status);
+      lastState = status.state || "";
+      if (status.state === "done" || status.state === "error") return status;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return { state: "error", error: "Timed out waiting for the update to finish." };
+}
+
+/** After a managed relaunch, wait for the new app process and reload the page. */
+async function waitForRelaunchThenReload(updateChip) {
+  updateChip.textContent = "Restarting…";
+  const started = Date.now();
+  // Give the old process time to exit before we start treating a healthy reply as the new one.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  while (Date.now() - started < 3 * 60 * 1000) {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (res.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (_err) {
+      // still restarting
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  updateChip.textContent = "Restart RoboScoutAI";
+  updateChip.disabled = false;
+}
+
 async function initUpdater() {
   const versionChip = $("version-chip");
   const updateChip = $("update-chip");
@@ -1144,15 +1449,17 @@ async function initUpdater() {
       const update = data.update || data;
       const available = Boolean(update?.available);
       const canApply = Boolean(update?.can_apply) || Boolean(update?.mode === "source" && available);
-      // Only show the chip when something can actually be applied (never for downgrades / missing binaries).
-      updateChip.hidden = !(available && canApply);
-      if (available && canApply) {
+      if (updateChip.dataset.pendingRestart === "1" || updateChip.disabled) {
+        // A managed update is in flight or installed; leave the chip alone.
+      } else if (available && canApply) {
+        updateChip.hidden = false;
         const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
         updateChip.textContent = `Update ${label}`;
         updateChip.title = update.message || "Update available from git";
         updateChip.dataset.releaseUrl = update.release_url || update.remote || "";
         updateChip.dataset.canApply = "1";
       } else {
+        updateChip.hidden = true;
         updateChip.dataset.canApply = "0";
       }
       const cookiesEl = $("cookies-status");
@@ -1163,7 +1470,7 @@ async function initUpdater() {
         } else {
           cookiesEl.hidden = false;
           cookiesEl.textContent =
-            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RamScoutAI\\ / set YTDLP_COOKIES.";
+            "No cookies.txt yet. If YouTube blocks downloads: upload an MP4/MKV, or place cookies.txt next to the EXE / in %APPDATA%\\RoboScoutAI\\ / set YTDLP_COOKIES.";
         }
       }
     } catch (_err) {
@@ -1206,7 +1513,7 @@ async function initUpdater() {
         const body = update.body ? `\n${update.body}` : "";
         alert(
           update.message === "up to date" || !update.message
-            ? `RamScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
+            ? `RoboScoutAI ${update.current_version || versionChip.textContent} is up to date.${body}`
             : `${update.message}${body}`
         );
       }
@@ -1214,32 +1521,93 @@ async function initUpdater() {
       alert("Could not check the git remote for updates.");
     }
   });
+  async function relaunchManaged() {
+    updateChip.disabled = true;
+    updateChip.dataset.pendingRestart = "0";
+    await fetch("/api/updates/relaunch", { method: "POST" }).catch(() => {});
+    await waitForRelaunchThenReload(updateChip);
+  }
+
   updateChip.addEventListener("click", async () => {
+    const releaseUrl = updateChip.dataset.releaseUrl || "";
+    if (updateChip.dataset.pendingRestart === "1") {
+      await relaunchManaged();
+      return;
+    }
     if (updateChip.dataset.canApply === "1") {
       updateChip.textContent = "Updating from git…";
       updateChip.disabled = true;
       try {
         const res = await fetch("/api/updates/download", { method: "POST" });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          alert(body.detail || body.message || "Update failed.");
+        // Never open a URL on success/restarting — that was downloading an old Release exe.
+        if (shouldOpenUpdateManualFallback(body)) {
+          window.open(body.open_url, "_blank", "noopener");
+        }
+        if (!res.ok || body.ok === false) {
+          alert(
+            body.message ||
+              body.detail ||
+              "Git update failed. If a fallback link opened, install the newest exe manually."
+          );
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
           return;
         }
-        alert(body.message || "Update applied from git.");
+        if (body.managed) {
+          // Manager downloads side-by-side; we only show progress and then ask to restart.
+          updateChip.textContent = managedUpdateLabel({ state: "checking" });
+          const status = await waitForManagedUpdate((s) => {
+            updateChip.textContent = managedUpdateLabel(s);
+            updateChip.title = s.message || "";
+          });
+          if (status.state === "error") {
+            alert(
+              `Update failed: ${status.error || status.message || "unknown error"}\n\n` +
+                "Check %LOCALAPPDATA%\\RoboScoutAI\\update.log, or run RoboScoutAI.exe --repair."
+            );
+            updateChip.disabled = false;
+            updateChip.textContent = "Update available";
+            return;
+          }
+          updateChip.disabled = false;
+          updateChip.textContent = managedUpdateLabel(status);
+          const restartNow = window.confirm(
+            `RoboScoutAI ${status.version || ""} is installed side-by-side.\n\nRestart now to switch to it? (The previous version is kept for rollback.)`
+          );
+          if (!restartNow) {
+            updateChip.dataset.pendingRestart = "1";
+            updateChip.title = "Click to restart into the new version";
+            return;
+          }
+          await relaunchManaged();
+          return;
+        }
+        alert(
+          (body.message ||
+            "Updating from git — installing into %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe.") +
+            "\n\nBuilds are unsigned for now — if SmartScreen appears: More info → Run anyway." +
+            "\nAfter update, run from %LOCALAPPDATA%\\RoboScoutAI\\RoboScoutAI.exe"
+        );
         if (!body.restarting) {
           updateChip.disabled = false;
           updateChip.hidden = true;
           await refresh(true);
         }
       } catch (_err) {
-        alert("Update from git failed.");
+        // Network/parse failure only — last-resort manual fallback.
+        if (releaseUrl && /releases\//i.test(releaseUrl)) {
+          window.open(releaseUrl, "_blank", "noopener");
+        }
+        alert(
+          "Git update request failed. Install the newest RoboScoutAI-windows-x64.exe manually if needed."
+        );
         updateChip.disabled = false;
+        updateChip.textContent = "Update available";
       }
       return;
     }
-    alert("No applyable desktop update is available right now.");
+    alert("No applyable desktop update is available right now. Updates install from git into LocalAppData.");
   });
 
   refresh(false);
@@ -1248,7 +1616,9 @@ async function initUpdater() {
 
 initUpdater();
 initScoutTools();
+bindTrackOverlay();
 drawField();
+drawTrackOverlay();
 
 async function maybeRunBrowserPotato(job) {
   if (!shouldRunBrowserPotato(job)) return;

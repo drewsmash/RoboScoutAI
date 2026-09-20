@@ -12,7 +12,7 @@ from ramscout.titles import TitleHints, normalize_event_name
 log = logging.getLogger(__name__)
 
 TBA_BASE = "https://www.thebluealliance.com/api/v3"
-USER_AGENT = "RamScoutAI/0.2 (team 59; match auto-scout)"
+USER_AGENT = "RoboScoutAI/0.2 (team 59; match auto-scout)"
 
 
 class TBAError(RuntimeError):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desktop entrypoint: start the local RamScoutAI server and open an app window."""
+"""Desktop entrypoint: start the local RoboScoutAI server and open an app window."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from ramscout import __version__
 from ramscout.paths import jobs_dir, web_dir
 from ramscout.updater import apply_update_now, check_for_update
 
-log = logging.getLogger("ramscout.desktop")
+log = logging.getLogger("roboscout.desktop")
 
 
 def _free_port(preferred: int) -> int:
@@ -53,7 +53,7 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.info("Update check: %s", info.error)
         return
     if not info.available:
-        log.info("RamScoutAI %s is up to date (%s).", info.current_version, info.message or "git")
+        log.info("RoboScoutAI %s is up to date (%s).", info.current_version, info.message or "git")
         return
     log.info(
         "Update available from git: %s → %s (%s @ %s)",
@@ -75,6 +75,17 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.warning("Could not auto-apply git update: %s", exc)
 
 
+def _export_manager_env(args: argparse.Namespace) -> None:
+    """Expose manager coordinates to ramscout.managed via the environment."""
+    os.environ["ROBOSCOUT_MANAGED"] = "1"
+    if args.manager_token:
+        os.environ["ROBOSCOUT_MANAGER_TOKEN"] = args.manager_token
+    if args.manager_root:
+        os.environ["ROBOSCOUT_MANAGER_ROOT"] = args.manager_root
+    if args.manager_exe:
+        os.environ["ROBOSCOUT_MANAGER_EXE"] = args.manager_exe
+
+
 def _stop_server(server: object) -> None:
     should_exit = getattr(server, "should_exit", None)
     if should_exit is not None:
@@ -91,7 +102,7 @@ def _stop_server(server: object) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="RamScoutAI desktop launcher")
+    parser = argparse.ArgumentParser(description="RoboScoutAI desktop launcher")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     parser.add_argument(
@@ -110,7 +121,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Fetch and apply a newer build from the git remote on launch",
     )
     parser.add_argument("--skip-update-check", action="store_true")
+    managed_group = parser.add_argument_group("manager integration (set by RoboScoutAI.exe)")
+    managed_group.add_argument("--managed", action="store_true", help="Launched by the RoboScoutAI manager")
+    managed_group.add_argument("--manager-token", default="", help="IPC token issued by the manager")
+    managed_group.add_argument("--manager-root", default="", help="Manager install root (%%LOCALAPPDATA%%\\RoboScoutAI)")
+    managed_group.add_argument("--manager-exe", default="", help="Path to RoboScoutAI.exe")
     args = parser.parse_args(argv)
+
+    if args.managed:
+        _export_manager_env(args)
+        # The manager owns update checks/installs; never self-update in-place.
+        args.skip_update_check = True
 
     _configure_logging()
     jobs_dir()  # ensure writable data path exists
@@ -128,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     from app import app
 
     url = f"http://{args.host}:{port}/"
-    log.info("RamScoutAI %s starting on %s", __version__, url)
+    log.info("RoboScoutAI %s starting on %s", __version__, url)
     config = uvicorn.Config(app, host=args.host, port=port, log_level="info", reload=False)
     server = uvicorn.Server(config)
 
@@ -142,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     # App / chrome-app windows block until closed; serve in a background thread.
     # Browser / none keep the server in the foreground until Ctrl+C.
     if ui_mode == "app":
-        server_thread = threading.Thread(target=server.run, daemon=True, name="ramscout-uvicorn")
+        server_thread = threading.Thread(target=server.run, daemon=True, name="roboscout-uvicorn")
         server_thread.start()
         try:
             strategy = run_app_ui(url, mode="app")

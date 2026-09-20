@@ -7,26 +7,24 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from ramscout.field import FIELD_LENGTH
+from ramscout.field import ALLIANCE_DEPTH, FIELD_LENGTH, FIELD_WIDTH
 
 
-def bumper_alliance(crop_bgr: np.ndarray) -> str:
-    """Classify a robot crop as red / blue / unknown from bumper hue."""
-    import cv2
+def bumper_alliance(crop_bgr: np.ndarray, *, band_frac: float = 0.42) -> str:
+    """Classify a robot crop as red / blue / unknown from bumper hue.
+
+    Samples only the lower band of the crop (where bumpers are) and requires
+    a clear saturated-hue majority; jerseys / carpet tape above the bumper
+    line no longer vote.
+    """
+    from ramscout.trackers.alliance import bumper_band, chroma_features, hsv_alliance
 
     if crop_bgr is None or crop_bgr.size == 0:
         return "unknown"
-    hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
-    red_lo = cv2.inRange(hsv, (0, 80, 60), (12, 255, 255))
-    red_hi = cv2.inRange(hsv, (165, 80, 60), (180, 255, 255))
-    blue = cv2.inRange(hsv, (95, 70, 50), (135, 255, 255))
-    red_count = int(np.count_nonzero(red_lo | red_hi))
-    blue_count = int(np.count_nonzero(blue))
-    if red_count > blue_count * 1.25 and red_count > 40:
-        return "red"
-    if blue_count > red_count * 1.25 and blue_count > 40:
-        return "blue"
-    return "unknown"
+    h, w = crop_bgr.shape[:2]
+    band = bumper_band(crop_bgr, [0, 0, w, h], frac=band_frac)
+    label, _conf = hsv_alliance(chroma_features(band if band is not None else crop_bgr))
+    return label
 
 
 def ocr_digits(crop_bgr: np.ndarray) -> str:
@@ -110,8 +108,40 @@ def assign_by_start(
     return mapping
 
 
+def track_quality(group: list[dict[str, Any]]) -> float:
+    """Score a track: long-lived, actually moving, and inside the field.
+
+    Static blobs (walls, field elements) and perimeter clutter score low even
+    when they persist for the whole match; a real robot path scores high.
+    """
+    if not group:
+        return 0.0
+    rows = sorted(group, key=lambda s: float(s.get("t") or 0.0))
+    times = [float(s.get("t") or 0.0) for s in rows]
+    span = max(times) - min(times) if len(times) > 1 else 0.0
+    xs = [float(s.get("x") or 0.0) for s in rows]
+    ys = [float(s.get("y") or 0.0) for s in rows]
+    path = 0.0
+    for i in range(1, len(rows)):
+        path += float(np.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]))
+    extent = 0.0
+    if len(rows) > 1:
+        extent = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys)))
+    # Fraction of samples comfortably inside the field (not on the perimeter).
+    margin = 12.0
+    inside = sum(
+        1 for x, y in zip(xs, ys) if margin <= x <= FIELD_LENGTH - margin and margin <= y <= FIELD_WIDTH - margin
+    )
+    in_field = inside / max(len(rows), 1)
+    # Movement factor: 0.35 for a never-moving blob → 1.0 once it has covered
+    # a few robot-lengths of field.
+    move = 0.35 + 0.65 * min(1.0, (0.5 * path + extent) / 240.0)
+    return float(len(rows) * (0.5 + 0.5 * in_field) * move + 0.5 * span)
+
+
 def keep_top_tracks(samples: list[dict[str, Any]], max_tracks: int = 6) -> list[dict[str, Any]]:
-    """Keep the longest-lived tracks so fragmented motion IDs do not flood scouting."""
+    """Keep the best tracks (long-lived, moving, in-field) so fragments and
+    static clutter do not flood scouting."""
     if not samples or max_tracks <= 0:
         return samples
     by_id: dict[int, list[dict[str, Any]]] = {}
@@ -120,14 +150,87 @@ def keep_top_tracks(samples: list[dict[str, Any]], max_tracks: int = 6) -> list[
     if len(by_id) <= max_tracks:
         return samples
 
-    def score(group: list[dict[str, Any]]) -> tuple[int, float]:
-        times = [float(s.get("t") or 0.0) for s in group]
-        span = (max(times) - min(times)) if times else 0.0
-        return (len(group), span)
-
-    ranked = sorted(by_id.items(), key=lambda item: score(item[1]), reverse=True)
+    ranked = sorted(by_id.items(), key=lambda item: (track_quality(item[1]), len(item[1])), reverse=True)
     keep = {tid for tid, _ in ranked[:max_tracks]}
     return [s for s in samples if int(s["track_id"]) in keep]
+
+
+def balance_alliances(
+    samples: list[dict[str, Any]],
+    *,
+    n_red: int = 3,
+    n_blue: int = 3,
+    early_s: float = 30.0,
+    min_tracks: int = 2,
+) -> list[dict[str, Any]]:
+    """Force exactly n_red / n_blue alliance labels across the strongest tracks.
+
+    Per-track color evidence (weighted alliance votes) is combined with the
+    starting-side prior and solved as a minimum-cost assignment onto 3 red +
+    3 blue slots. Tracks beyond the slot count keep their own majority label.
+    Returns new sample dicts; ``alliance_conf`` is attached per sample.
+    """
+    from ramscout.trackers.alliance import assign_alliance_slots, side_prior
+
+    if not samples:
+        return samples
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for sample in samples:
+        by_id.setdefault(int(sample["track_id"]), []).append(sample)
+    if len(by_id) < min_tracks:
+        return samples
+
+    ranked = sorted(by_id.items(), key=lambda item: track_quality(item[1]), reverse=True)
+    slots = n_red + n_blue
+    assignable = ranked[:slots]
+
+    p_color: list[float] = []
+    p_prior: list[float] = []
+    for _tid, group in assignable:
+        red_w = blue_w = 0.0
+        for s in group:
+            label = s.get("alliance")
+            if label not in {"red", "blue"}:
+                continue
+            w = float(s.get("alliance_conf") or 0.6)
+            if label == "red":
+                red_w += w
+            else:
+                blue_w += w
+        total = red_w + blue_w
+        p_color.append(red_w / total if total > 0 else 0.5)
+        first = min(group, key=lambda s: float(s.get("t") or 0.0))
+        label, weight = side_prior(
+            float(first.get("x") or 0.0),
+            float(first.get("t") or 0.0),
+            field_length=FIELD_LENGTH,
+            alliance_depth=ALLIANCE_DEPTH,
+            early_s=early_s,
+        )
+        if label == "red":
+            p_prior.append(0.5 + 0.5 * weight)
+        elif label == "blue":
+            p_prior.append(0.5 - 0.5 * weight)
+        else:
+            p_prior.append(0.5)
+
+    labels = assign_alliance_slots(p_color, n_red=n_red, n_blue=n_blue, prior_red=p_prior, prior_weight=0.3)
+    forced: dict[int, tuple[str, float]] = {}
+    for (tid, _group), label, pc, pp in zip(assignable, labels, p_color, p_prior):
+        p = 0.7 * pc + 0.3 * pp
+        conf = p if label == "red" else 1.0 - p
+        forced[tid] = (label, float(np.clip(conf, 0.0, 1.0)))
+
+    out: list[dict[str, Any]] = []
+    for sample in samples:
+        row = dict(sample)
+        tid = int(row["track_id"])
+        if tid in forced:
+            row["alliance"], row["alliance_conf"] = forced[tid]
+        elif row.get("alliance") not in {"red", "blue"}:
+            row["alliance"] = majority_alliance(by_id[tid])
+        out.append(row)
+    return out
 
 
 def majority_alliance(samples: list[dict[str, Any]]) -> str:

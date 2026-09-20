@@ -1,7 +1,7 @@
 {
-  "name": "RamScoutAI",
-  "short_name": "RamScout",
-  "description": "FRC match auto-scout from recorded video — Team 59 Ramtech",
+  "name": "RoboScoutAI",
+  "short_name": "RoboScout",
+  "description": "FRC match auto-scout from recorded video",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0e0e10",

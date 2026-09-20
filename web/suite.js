@@ -4,9 +4,13 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function bookCards() {
+def bookCards() {
   try {
-    const raw = localStorage.getItem("ramscout.scoutBook");
+    let raw = localStorage.getItem("roboscout.scoutBook");
+    if (raw == null) {
+      raw = localStorage.getItem("ramscout.scoutBook");
+      if (raw != null) localStorage.setItem("roboscout.scoutBook", raw);
+    }
     const book = raw ? JSON.parse(raw) : { cards: [] };
     return book.cards || [];
   } catch {
@@ -42,7 +46,7 @@ async function api(path, opts = {}) {
 }
 
 function currentJobId() {
-  return window.__ramscoutJobId || null;
+  return window.__roboscoutJobId || null;
 }
 
 async function refreshHistory() {
@@ -60,8 +64,8 @@ async function refreshHistory() {
   list.querySelectorAll("button[data-id]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const job = await api(`/api/history/${btn.dataset.id}`);
-      window.__ramscoutJobId = job.id;
-      window.dispatchEvent(new CustomEvent("ramscout:job", { detail: job }));
+      window.__roboscoutJobId = job.id;
+      window.dispatchEvent(new CustomEvent("roboscout:job", { detail: job }));
       $("workspace")?.removeAttribute("hidden");
     });
   });
@@ -201,10 +205,10 @@ async function refreshPit() {
 }
 
 async function pushBook() {
-  const raw = localStorage.getItem("ramscout.scoutBook");
+  const raw = localStorage.getItem("roboscout.scoutBook");
   const book = raw ? JSON.parse(raw) : { matches: [], cards: [] };
-  const notes = JSON.parse(localStorage.getItem("ramscout.teamNotes") || "{}");
-  const watchlist = JSON.parse(localStorage.getItem("ramscout.watchlist") || "[]");
+  const notes = JSON.parse(localStorage.getItem("roboscout.teamNotes") || "{}");
+  const watchlist = JSON.parse(localStorage.getItem("roboscout.watchlist") || "[]");
   const data = await api("/api/scoutbook/merge", {
     method: "POST",
     body: JSON.stringify({ ...book, notes, watchlist }),
@@ -215,11 +219,11 @@ async function pushBook() {
 async function pullBook() {
   const data = await api("/api/scoutbook");
   localStorage.setItem(
-    "ramscout.scoutBook",
+    "roboscout.scoutBook",
     JSON.stringify({ matches: data.matches || [], cards: data.cards || [] }),
   );
-  if (data.notes) localStorage.setItem("ramscout.teamNotes", JSON.stringify(data.notes));
-  if (data.watchlist) localStorage.setItem("ramscout.watchlist", JSON.stringify(data.watchlist));
+  if (data.notes) localStorage.setItem("roboscout.teamNotes", JSON.stringify(data.notes));
+  if (data.watchlist) localStorage.setItem("roboscout.watchlist", JSON.stringify(data.watchlist));
   $("book-out").textContent = `Pulled ${(data.cards || []).length} cards from server`;
 }
 
@@ -231,7 +235,7 @@ async function exportSheets() {
   const blob = new Blob([csv], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "ramscout-sheets.csv";
+  a.download = "roboscout-sheets.csv";
   a.click();
 }
 
@@ -257,7 +261,7 @@ function bindSuite() {
   $("refresh-history")?.addEventListener("click", () => refreshHistory().catch(alert));
   $("suite-batch")?.addEventListener("click", async () => {
     try {
-      const tba = localStorage.getItem("ramscout.tbaKey") || "";
+      const tba = (localStorage.getItem("roboscout.tbaKey") || localStorage.getItem("ramscout.tbaKey") || "");
       const data = await api("/api/event/batch", {
         method: "POST",
         body: JSON.stringify({
@@ -274,7 +278,7 @@ function bindSuite() {
   });
   $("suite-schedule")?.addEventListener("click", async () => {
     try {
-      const tba = localStorage.getItem("ramscout.tbaKey") || "";
+      const tba = (localStorage.getItem("roboscout.tbaKey") || localStorage.getItem("ramscout.tbaKey") || "");
       const data = await api("/api/event/schedule", {
         method: "POST",
         body: JSON.stringify({
@@ -298,7 +302,7 @@ function bindSuite() {
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "ramscout-draft.csv";
+    a.download = "roboscout-draft.csv";
     a.click();
   });
   $("heatmap-btn")?.addEventListener("click", () => buildHeatmap().catch(alert));
@@ -316,8 +320,8 @@ function bindSuite() {
   $("live-stop")?.addEventListener("click", async () => {
     $("live-out").textContent = JSON.stringify(await api("/api/live/stop", { method: "POST", body: "{}" }), null, 2);
   });
-  window.addEventListener("ramscout:job", (ev) => {
-    window.__ramscoutJobId = ev.detail?.id;
+  window.addEventListener("roboscout:job", (ev) => {
+    window.__roboscoutJobId = ev.detail?.id;
     refreshEditEvents().catch(() => {});
   });
   loadGames().catch(() => {});
