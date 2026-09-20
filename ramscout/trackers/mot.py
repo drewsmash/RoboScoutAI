@@ -250,6 +250,11 @@ class MotTracker:
     # defend, load or climb). Walls fail the footprint test (long strips).
     parked_confirm_hits: int = 12
     parked_max_footprint_in: float = 48.0
+    # A "parked robot" that never moves for this long is a field element
+    # (switch / scale plate, lit wall panel): prune it and block respawns
+    # there for the rest of the match.
+    parked_max_static_s: float = 25.0
+    parked_dead_zone_s: float = 150.0
     # Coasting tracks stay alive for max_age steps but are only *emitted* for
     # a few: beyond that the predicted position is speculation.
     max_coast_emit: int = 3
@@ -271,12 +276,19 @@ class MotTracker:
     dead_zone_s: float = 20.0
     dead_zone_radius_in: float = 18.0
     _step: int = 0
+    # Positions where parked-confirmed tracks that *never moved* keep dying
+    # and respawning (switch / scale plates, lit panels). After
+    # ``static_memory_hits`` recurrences the spot becomes a long dead zone.
+    static_memory: dict[tuple[int, int], int] = field(default_factory=dict)
+    static_memory_hits: int = 3
+    static_memory_cell_in: float = 16.0
 
     def reset(self) -> None:
         self.tracks = {}
         self.next_id = 1000
         self.stage_hits = {"high": 0, "low": 0, "recovered": 0}
         self.dead_zones = []
+        self.static_memory = {}
         self._step = 0
 
     def _in_dead_zone(self, xy: tuple[float, float] | None) -> bool:
@@ -285,10 +297,21 @@ class MotTracker:
         r2 = self.dead_zone_radius_in**2
         return any((xy[0] - zx) ** 2 + (xy[1] - zy) ** 2 <= r2 for zx, zy, _exp in self.dead_zones)
 
-    def _add_dead_zone(self, track: _Track) -> None:
+    def _remember_if_static(self, track: _Track) -> None:
+        if track.field is None or not track.parked_confirmed:
+            return
+        if track.max_disp_px >= 1.5 * self.static_min_disp_px or track.field.max_disp_in >= 1.5 * self.static_min_disp_in:
+            return
+        cell = (int(track.field.mean[0] // self.static_memory_cell_in), int(track.field.mean[1] // self.static_memory_cell_in))
+        n = self.static_memory.get(cell, 0) + 1
+        self.static_memory[cell] = n
+        if n >= self.static_memory_hits:
+            self._add_dead_zone(track, seconds=self.parked_dead_zone_s)
+
+    def _add_dead_zone(self, track: _Track, *, seconds: float | None = None) -> None:
         if track.field is None:
             return
-        expires = self._step + int(round(self.dead_zone_s / max(self.dt_s, 1e-3)))
+        expires = self._step + int(round((seconds or self.dead_zone_s) / max(self.dt_s, 1e-3)))
         self.dead_zones.append((float(track.field.mean[0]), float(track.field.mean[1]), expires))
 
     # ------------------------------------------------------------------ helpers
@@ -381,6 +404,7 @@ class MotTracker:
             tid = track_ids[ti]
             track = self.tracks[tid]
             if track.kalman.time_since_update > self.max_age:
+                self._remember_if_static(track)
                 self.tracks.pop(tid, None)
 
         for di in unmatched_dets:
@@ -509,6 +533,13 @@ class MotTracker:
             if track.strong_hits > 0:
                 continue
             if track.parked_confirmed and self._parked_robot(track) and track.kalman.time_since_update == 0:
+                never_moved = (
+                    track.max_disp_px < 1.5 * self.static_min_disp_px
+                    and (track.field is None or track.field.max_disp_in < 1.5 * self.static_min_disp_in)
+                )
+                if never_moved and track.kalman.hits * self.dt_s >= self.parked_max_static_s:
+                    self._add_dead_zone(track, seconds=self.parked_dead_zone_s)
+                    self.tracks.pop(tid, None)
                 continue
             if track.kalman.hits < self.static_after_hits:
                 continue
