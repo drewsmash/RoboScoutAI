@@ -21,6 +21,7 @@ from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import (
     assign_by_start,
+    assemble_lanes,
     balance_alliances,
     keep_top_tracks,
     majority_alliance,
@@ -605,6 +606,9 @@ def _run_real(job: Job) -> None:
     save_jpeg(result["first_frame"], frame_path)
     samples = stitch_occlusions(result["samples"])
     blue, red = _alliance_teams(video_match)
+    # Six robots → six lanes: every time-disjoint tracklet joins a lane of its
+    # alliance instead of being thrown away by the 6-track cap.
+    samples = assemble_lanes(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
     samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6) or 6)
     samples = balance_alliances(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
     warnings = list(job.warnings) + list(result.get("warnings") or [])

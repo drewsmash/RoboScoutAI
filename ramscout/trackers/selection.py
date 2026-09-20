@@ -147,9 +147,18 @@ def score_samples(samples: list[dict[str, Any]], *, window_s: float, dt_s: float
     ge5 = float(np.mean(counts >= 5))
 
     robots = float(np.clip(1.0 - abs(mean_visible - 6.0) / 6.0, 0.0, 1.0)) * 0.6 + 0.4 * ge5
-    balance = 1.0 - min(abs(red - 3) + abs(blue - 3), 6) / 6.0
-    if n_tracks > 8:
-        balance *= 0.7
+    # 3v3 balance per time bin (how many red / blue robots are visible at
+    # once), not per track: fragmented IDs would otherwise zero it out.
+    per_bin: dict[float, dict[str, set[int]]] = defaultdict(lambda: {"red": set(), "blue": set()})
+    for s in samples:
+        if s.get("alliance") in {"red", "blue"}:
+            key = round(float(s["t"]) / max(dt_s, 1e-3)) * dt_s
+            per_bin[key][s["alliance"]].add(int(s["track_id"]))
+    if per_bin:
+        dev = [min(abs(len(v["red"]) - 3) + abs(len(v["blue"]) - 3), 6) for v in per_bin.values()]
+        balance = 1.0 - float(np.mean(dev)) / 6.0
+    else:
+        balance = 0.0
     persist = float(np.clip(np.mean(lengths) / window_s, 0.0, 1.0)) if lengths else 0.0
     in_field_r = in_field / max(len(samples), 1)
     p95 = float(np.percentile(speeds, 95)) if speeds else 0.0
