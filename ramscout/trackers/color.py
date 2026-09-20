@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import plausible_robot_size
+from ramscout.trackers.utils import drop_nested_boxes, plausible_robot_size
 
 
 class ColorTracker:
@@ -34,7 +34,11 @@ class ColorTracker:
 
         blobs: list[tuple[str, float, list[float]]] = []
         for alliance, mask in (("red", red), ("blue", blue)):
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # RETR_LIST: an alliance-colored LED strip along the whole wall is a
+            # closed ring in this mask and RETR_EXTERNAL would hide every
+            # bumper of that color inside it.
+            contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            sized: list[tuple[float, list[float]]] = []
             for contour in contours:
                 x, y, w, h = cv2.boundingRect(contour)
                 if not plausible_robot_size(float(w), float(h), ctx.crop_w, ctx.crop_h):
@@ -44,7 +48,12 @@ class ColorTracker:
                 area = float(cv2.contourArea(contour))
                 if area < 35:
                     continue
-                blobs.append((alliance, area, [float(x), float(y), float(x + w), float(y + h)]))
+                if area / float(max(w * h, 1)) < 0.25:
+                    continue  # hollow / ring-like, not a bumper
+                sized.append((area, [float(x), float(y), float(x + w), float(y + h)]))
+            sized.sort(key=lambda row: row[0], reverse=True)
+            for area, bbox in drop_nested_boxes(sized):
+                blobs.append((alliance, area, bbox))
 
         blobs.sort(key=lambda row: row[1], reverse=True)
         blobs = lowest_band_rule(blobs)

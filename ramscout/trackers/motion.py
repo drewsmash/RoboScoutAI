@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import plausible_robot_size
+from ramscout.trackers.utils import drop_nested_boxes, plausible_robot_size
 
 
 class MotionTracker:
@@ -103,7 +103,7 @@ class MotionTracker:
             blobs.append((area, [float(x), float(y), float(x + w), float(y + h)]))
 
         blobs.sort(key=lambda row: row[0], reverse=True)
-        blobs = _drop_nested(blobs)
+        blobs = drop_nested_boxes(blobs)
         # FRC has at most 6 robots; keep a couple extras for noise before MOT.
         blobs = blobs[:8]
         out: list[Detection] = []
@@ -118,21 +118,3 @@ class MotionTracker:
                 )
             )
         return out
-
-
-def _drop_nested(blobs: list[tuple[float, list[float]]], containment: float = 0.8) -> list[tuple[float, list[float]]]:
-    """Drop boxes mostly contained in a larger kept box (inner contours of one blob)."""
-    kept: list[tuple[float, list[float]]] = []
-    for area, bbox in blobs:
-        x1, y1, x2, y2 = bbox
-        own = max((x2 - x1) * (y2 - y1), 1.0)
-        nested = False
-        for _a, kb in kept:
-            ix = max(0.0, min(x2, kb[2]) - max(x1, kb[0]))
-            iy = max(0.0, min(y2, kb[3]) - max(y1, kb[1]))
-            if (ix * iy) / own >= containment:
-                nested = True
-                break
-        if not nested:
-            kept.append((area, bbox))
-    return kept

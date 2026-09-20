@@ -191,6 +191,22 @@ def test_motion_tracker_finds_robots_inside_perimeter_ring():
     assert all((d.bbox[2] - d.bbox[0]) < 200 for d in dets)
 
 
+def test_color_tracker_finds_bumper_inside_led_wall_ring():
+    import cv2
+
+    from ramscout.trackers.color import ColorTracker
+
+    ctx = TrackerContext(frame_w=640, frame_h=360, crop_w=640, crop_h=300)
+    frame = np.full((300, 640, 3), (45, 90, 45), np.uint8)
+    # Blue LED strip along the whole perimeter + one blue bumper inside.
+    cv2.rectangle(frame, (6, 6), (634, 294), (230, 80, 20), 6)
+    cv2.rectangle(frame, (300, 160), (348, 178), (230, 80, 20), -1)
+    dets = ColorTracker().detect(frame, ctx)
+    blue = [d for d in dets if d.alliance == "blue"]
+    assert any(abs((d.bbox[0] + d.bbox[2]) / 2 - 324) < 12 for d in blue), [d.bbox for d in dets]
+    assert all((d.bbox[2] - d.bbox[0]) < 200 for d in dets)
+
+
 def test_lowest_band_rule_drops_decoy_above_bumper():
     bumper = ("blue", 400.0, [100.0, 160.0, 150.0, 175.0])
     decoy = ("red", 300.0, [105.0, 110.0, 145.0, 122.0])

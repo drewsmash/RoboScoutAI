@@ -150,6 +150,15 @@ Also supported:
 
 Default is **hybrid cascade**: OpenCV motion/color proposals every frame → SORT multi-object tracking (Kalman + IoU + alliance/color) → sparse Gemini / YOLO / OpenAI confirmation only when local proposals look weak. OpenAI stays sparse (interval + frame stride + max calls) to avoid 429s. See [`docs/POTATO.md`](docs/POTATO.md).
 
+**Field-aware tracking (all modes, no model needed).** Every proposal is checked against the field before it can become a track:
+
+- **Field gate** (`ramscout/trackers/field_gate.py`): the depth-corrected foot of each box is projected through the BEV homography; boxes outside the field polygon, wall-shaped boxes on the perimeter band, boxes with an implausible footprint for an FRC robot (~28–36 in), scorebug overlays and multi-edge boxes are rejected. A long-window motion-energy model plus dense optical flow flags static blobs (walls, LED strips, field elements) so they can never spawn a track; local tracks must physically move before they are confirmed.
+- **BEV association**: SORT also runs a constant-velocity Kalman in *field inches* and refuses associations that would need more than ~20 ft/s, which stops ID swaps when robots cross.
+- **Robust alliance color** (`ramscout/trackers/alliance.py`): bumper color is read from the lower band of the box only; the broadcast's own red/blue are learned per match in CIE Lab chroma from confirmed moving robots (self-supervised 2-means), so a warm or cool white balance moves both centroids together instead of breaking fixed HSV thresholds. Per-track votes use a sliding window with hysteresis, a starting-side prior helps early, a confirmed flip splits the track (ID-swap signature), and a final assignment forces exactly 3 red + 3 blue.
+- Motion proposals use `RETR_LIST` so a closed LED-wall ring in the foreground mask no longer swallows every robot inside it; motion + bumper-color agreement is rewarded, and only the *lowest* colored band on a robot counts as a bumper.
+
+Job warnings report the gate tally (`Field gate: … rejected (outside_field=…, perimeter_wall=…)`) and whether alliance colors were calibrated to the broadcast. `track_video(..., field_gate=False)` restores the old pixel-only behaviour.
+
 ## Next year’s game
 
 Game art and timing live in year files, not in the UI:
