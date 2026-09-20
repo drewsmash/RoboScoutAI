@@ -123,6 +123,7 @@ class FieldGate:
     ) -> None:
         self.H = np.asarray(homography, dtype=np.float64)
         self.crop_y0 = float(crop_y0)
+        self.crop_x0 = 0.0  # set when the overview pane does not start at x=0
         self.crop_w = int(max(crop_w, 1))
         self.crop_h = int(max(crop_h, 1))
         self.frame_h = int(max(frame_h, 1))
@@ -166,7 +167,7 @@ class FieldGate:
             except Exception:  # noqa: BLE001
                 pass
         x1, _y1, x2, y2 = [float(v) for v in bbox]
-        return (x1 + x2) * 0.5, y2 + self.crop_y0
+        return (x1 + x2) * 0.5 + self.crop_x0, y2 + self.crop_y0
 
     def project(self, fx: float, fy: float) -> tuple[float, float]:
         """Full-frame pixel → field inches through the homography."""
@@ -183,8 +184,8 @@ class FieldGate:
         """Projected (width, height) of the box in inches at its foot row."""
         x1, y1, x2, y2 = [float(v) for v in bbox]
         _fx, fy = self.foot(bbox)
-        lx, ly = self.project(x1, fy)
-        rx, ry = self.project(x2, fy)
+        lx, ly = self.project(x1 + self.crop_x0, fy)
+        rx, ry = self.project(x2 + self.crop_x0, fy)
         width_in = float(np.hypot(rx - lx, ry - ly))
         bw = max(x2 - x1, 1.0)
         bh = max(y2 - y1, 1.0)
@@ -452,8 +453,9 @@ class FieldGate:
                 self.stats.reject(verdict.reason or "unknown")
                 continue
             self.stats.accepted += 1
-            det.confidence = float(np.clip(det.confidence - verdict.penalty, 0.05, 1.0))
             meta = dict(det.meta or {})
+            meta.setdefault("raw_confidence", float(det.confidence))
+            det.confidence = float(np.clip(det.confidence - verdict.penalty, 0.05, 1.0))
             meta["field_xy"] = verdict.info.get("field_xy")
             meta["foot"] = verdict.info.get("foot")
             meta["perimeter"] = bool(verdict.info.get("perimeter", False))

@@ -1,10 +1,19 @@
-"""SORT-inspired multi-object tracker for FRC robot boxes.
+"""SORT / ByteTrack / OC-SORT style multi-object tracker for FRC robot boxes.
 
 Associates per-frame detections (any source) into stable track IDs using:
 - constant-velocity Kalman prediction in pixel space
 - **constant-velocity Kalman in field inches (BEV)** when a projector is set,
   with hard gating by physical speed (FRC robots top out near 20 ft/s)
 - IoU + centroid distance + alliance / color cues + optical-flow direction
+- **ByteTrack two-stage association**: high-confidence proposals are matched
+  first; the tracks left over are then matched against *low*-confidence
+  proposals (partial occlusions, half-lit robots) which are never allowed to
+  start a new track on their own
+- **OC-SORT observation-centric re-update**: when a track is recovered after
+  coasting, the Kalman state is rebuilt from the *observations* (virtual
+  trajectory between the last and the new box) instead of the drifted
+  prediction, and the observation-centric momentum term penalises proposals
+  whose direction from the last observation disagrees with the track's
 - short-gap rebirth so occlusions do not mint endless new IDs
 - per-source confirmation (local proposals need more hits than YOLO / cloud)
 - static-track pruning (blobs that never move are walls / field elements)
@@ -104,14 +113,25 @@ class _KalmanBox:
         steps = float(max(self.time_since_update, 1))
         last = self.last_z if self.last_z is not None else z
         dz = (z - last) / steps
+        if steps > 1.0:
+            # OC-SORT observation-centric re-update: the track coasted on a
+            # prediction that drifted; trust the observed displacement over
+            # the gap rather than the (dampened) predicted velocity.
+            self.mean[4] = 0.2 * prev_v[0] + 0.8 * dz[0]
+            self.mean[5] = 0.2 * prev_v[1] + 0.8 * dz[1]
+        else:
+            self.mean[4] = 0.6 * prev_v[0] + 0.4 * dz[0]
+            self.mean[5] = 0.6 * prev_v[1] + 0.4 * dz[1]
         self.mean[0], self.mean[1], self.mean[2], self.mean[3] = cx, cy, w, h
-        self.mean[4] = 0.6 * prev_v[0] + 0.4 * dz[0]
-        self.mean[5] = 0.6 * prev_v[1] + 0.4 * dz[1]
         self.mean[6] = 0.5 * prev_v[2] + 0.5 * dz[2]
         self.mean[7] = 0.5 * prev_v[3] + 0.5 * dz[3]
         self.last_z = z
         self.hits += 1
         self.time_since_update = 0
+
+    def observed_velocity(self) -> tuple[float, float]:
+        """Velocity implied by the last two *observations* (OC-SORT momentum)."""
+        return float(self.mean[4]), float(self.mean[5])
 
     def bbox(self) -> list[float]:
         cx, cy, w, h = self.mean[:4]
@@ -213,10 +233,22 @@ class MotTracker:
     # Coasting tracks stay alive for max_age steps but are only *emitted* for
     # a few: beyond that the predicted position is speculation.
     max_coast_emit: int = 3
+    # ByteTrack: proposals below ``high_conf`` only extend *recently seen*
+    # tracks (second association stage) and never spawn new ones.
+    bytetrack: bool = True
+    high_conf: float = 0.40
+    low_conf: float = 0.10
+    second_stage_max_gap: int = 3
+    second_stage_cost: float = 1.0
+    # OC-SORT observation-centric momentum weight.
+    ocm_weight: float = 0.3
+    # Association bookkeeping for diagnostics / tests.
+    stage_hits: dict[str, int] = field(default_factory=lambda: {"high": 0, "low": 0, "recovered": 0})
 
     def reset(self) -> None:
         self.tracks = {}
         self.next_id = 1000
+        self.stage_hits = {"high": 0, "low": 0, "recovered": 0}
 
     # ------------------------------------------------------------------ helpers
     def _field_xy(self, det: Detection) -> tuple[float, float] | None:
@@ -259,14 +291,17 @@ class MotTracker:
             return []
 
         det_field = [self._field_xy(d) for d in detections]
-        cost = self._cost_matrix(track_ids, detections, det_field, frame_w, frame_h, frame_bgr)
-        matches, unmatched_tracks, unmatched_dets = self._associate(cost, track_ids, detections)
+        matches, unmatched_tracks, unmatched_dets = self._two_stage_associate(
+            track_ids, detections, det_field, frame_w, frame_h, frame_bgr
+        )
 
         for ti, di in matches:
             tid = track_ids[ti]
             det = detections[di]
             track = self.tracks[tid]
             elapsed_steps = max(track.kalman.time_since_update, 1)
+            if elapsed_steps > 1:
+                self.stage_hits["recovered"] += 1
             track.kalman.update(det.bbox)
             track.confidence = max(track.confidence * 0.7, float(det.confidence))
             track.source = det.source or track.source
@@ -304,6 +339,10 @@ class MotTracker:
                 and det.source not in STRONG_SOURCES
             ):
                 # Static structures never get to start a track.
+                continue
+            if self.bytetrack and _proposal_score(det) < self.high_conf:
+                # ByteTrack rule: low-score proposals may extend a track but
+                # never start one (they are mostly fragments and flicker).
                 continue
             if len(self.tracks) >= self.max_tracks:
                 # Drop oldest unmatched tentative track to make room.
@@ -469,6 +508,18 @@ class MotTracker:
                     # (rather than overrides) IoU and alliance cues.
                     c += 0.4 * min(fd / self.field_scale_in, 1.5)
 
+                # OC-SORT observation-centric momentum: the direction from the
+                # track's *last observation* to this proposal should agree
+                # with the direction the track was observed moving.
+                last_z = track.kalman.last_z
+                if last_z is not None and self.ocm_weight > 0 and np.hypot(tvx, tvy) > 1.5:
+                    ox, oy = dcx - float(last_z[0]), dcy - float(last_z[1])
+                    on = float(np.hypot(ox, oy))
+                    if on > 3.0:
+                        cosang = (ox * tvx + oy * tvy) / (on * np.hypot(tvx, tvy) + 1e-6)
+                        # 0 when aligned, up to ocm_weight when reversed.
+                        c += self.ocm_weight * float(np.clip((1.0 - cosang) * 0.5, 0.0, 1.0))
+
                 # Flow-direction consistency: a proposal drifting against the
                 # track's velocity is a different object passing by.
                 flow = det.meta.get("flow") if det.meta else None
@@ -481,11 +532,62 @@ class MotTracker:
                 cost[i, j] = c
         return cost
 
+    def _two_stage_associate(
+        self,
+        track_ids: list[int],
+        detections: list[Detection],
+        det_field: list[tuple[float, float] | None],
+        frame_w: int,
+        frame_h: int,
+        frame_bgr: np.ndarray | None,
+    ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+        """ByteTrack association: high-score boxes first, then leftovers."""
+        if not self.bytetrack:
+            cost = self._cost_matrix(track_ids, detections, det_field, frame_w, frame_h, frame_bgr)
+            return self._associate(cost, track_ids, detections)
+
+        def score(d: Detection) -> float:
+            return _proposal_score(d)
+
+        high = [j for j, d in enumerate(detections) if score(d) >= self.high_conf]
+        low = [j for j, d in enumerate(detections) if self.low_conf <= score(d) < self.high_conf]
+        dropped = [j for j, d in enumerate(detections) if score(d) < self.low_conf]
+
+        # Stage 1: every live track vs high-confidence proposals.
+        cost_hi = self._cost_matrix(track_ids, [detections[j] for j in high], [det_field[j] for j in high], frame_w, frame_h, frame_bgr)
+        m1, ut1, ud1 = self._associate(cost_hi, track_ids, [detections[j] for j in high])
+        matches = [(ti, high[dj]) for ti, dj in m1]
+        self.stage_hits["high"] += len(m1)
+        unmatched_dets = [high[dj] for dj in ud1]
+
+        # Stage 2: tracks that were seen very recently vs low-confidence
+        # proposals. Older (long-coasting) tracks are excluded: a weak blob
+        # near a stale prediction is more likely a different object.
+        stage2_tracks = [
+            ti for ti in ut1 if self.tracks[track_ids[ti]].kalman.time_since_update <= self.second_stage_max_gap
+        ]
+        remaining_tracks = [ti for ti in ut1 if ti not in stage2_tracks]
+        if stage2_tracks and low:
+            ids2 = [track_ids[ti] for ti in stage2_tracks]
+            cost_lo = self._cost_matrix(ids2, [detections[j] for j in low], [det_field[j] for j in low], frame_w, frame_h, frame_bgr)
+            m2, ut2, _ud2 = self._associate(cost_lo, ids2, [detections[j] for j in low], max_cost=self.second_stage_cost)
+            for ti2, dj in m2:
+                matches.append((stage2_tracks[ti2], low[dj]))
+            self.stage_hits["low"] += len(m2)
+            remaining_tracks += [stage2_tracks[ti2] for ti2 in ut2]
+        else:
+            remaining_tracks += stage2_tracks
+        # Unmatched low / dropped proposals are discarded (never spawn).
+        _ = dropped
+        return matches, sorted(remaining_tracks), unmatched_dets
+
     def _associate(
         self,
         cost: np.ndarray,
         track_ids: list[int],
         detections: list[Detection],
+        *,
+        max_cost: float = 1.35,
     ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
         from ramscout.identity import linear_assignment
 
@@ -498,7 +600,7 @@ class MotTracker:
         for ti, di in pairs:
             if ti >= cost.shape[0] or di >= cost.shape[1]:
                 continue
-            if cost[ti, di] > 1.35:
+            if cost[ti, di] > max_cost:
                 continue
             matches.append((ti, di))
             used_t.add(ti)
@@ -516,6 +618,21 @@ class MotTracker:
         )
         if not weakest.confirmed or weakest.kalman.time_since_update > 4:
             self.tracks.pop(weakest.track_id, None)
+
+
+def _proposal_score(det: Detection) -> float:
+    """Detector score used for ByteTrack tiering.
+
+    Strong (YOLO / cloud) boxes are always high tier. Local proposals use the
+    detector's own confidence *before* field-gate penalties (stored by the
+    gate as ``meta["raw_confidence"]``) so a robot parked against its
+    alliance wall is not demoted to the low tier by the perimeter penalty.
+    """
+    if det.source in STRONG_SOURCES:
+        return 1.0
+    if det.meta and det.meta.get("raw_confidence") is not None:
+        return float(det.meta["raw_confidence"])
+    return float(det.confidence)
 
 
 def _patch_hist(frame_bgr: np.ndarray, bbox: list[float]) -> np.ndarray | None:
