@@ -28,33 +28,39 @@ bash packaging/build.sh
 
 Use `--browser` for a normal browser tab, or `--no-browser` for server-only.
 
-GitHub Actions (`.github/workflows/release.yml`) builds:
+GitHub Actions (`.github/workflows/release.yml`) builds on every `v*` tag:
 
-- `RoboScoutAI-windows-x64.exe`
+- **`RoboScoutAI-Setup.exe`** — Windows installer. Download once; installs to `%LOCALAPPDATA%\RoboScoutAI` (no admin), adds Start Menu / Desktop shortcuts and an uninstall entry, and launches the app.
+- `RoboScoutAI.exe` — the thin Windows **manager** (launcher / updater / rollback / uninstaller) that Setup installs.
+- `RoboScoutAI-app-windows-x64.exe` — the app build the manager installs side-by-side under `app\<version>\`.
+- `manifest.json` — version, sha256/size per artifact, `min_manager_version`.
 - `RoboScoutAI-macos-arm64.zip`
-- `RoboScoutAI-macos-x64.zip`
 
-### In-app updater (git remote — not GitHub Releases)
+### Windows install, update, rollback (manager)
 
-RoboScoutAI checks for updates by talking to a **git remote** (`git fetch` / shallow clone). It does **not** call `releases/latest`.
+Windows users install **once** with `RoboScoutAI-Setup.exe`; every later version comes through `RoboScoutAI.exe`:
 
-| Mode | Behavior |
+| Action | How |
 | --- | --- |
-| Source (`.git` present) | `git fetch` → compare `HEAD` to `origin/<branch>` → pull / reset → restart hint |
-| Frozen EXE | Shallow clone/fetch into an update cache → look for tracked binaries under `desktop-downloads/` → replace EXE and relaunch |
+| Update | **Update** chip in the app (progress shown, then "Restart now?") or `RoboScoutAI.exe --update` |
+| Roll back | `RoboScoutAI.exe --rollback` (previous version is kept side-by-side) |
+| Switch channel | `RoboScoutAI.exe --channel <branch-or-tag>` — any future branch or release tag |
+| Repair / uninstall | `RoboScoutAI.exe --repair` / Windows *Installed apps* → Uninstall (`--uninstall`, `--purge` also removes data) |
 
-Config:
+Updates are read from the **git update channel** (`release-artifacts/manifest.json` + exe on the branch in `release-artifacts/update-channel.txt`) with **GitHub Releases as fallback**. Downloads are verified by sha256 and installed into a new `app\<version>\` folder; the running app is never overwritten, so no Access-Denied / locked-exe failures. Full design: `docs/DESKTOP_APP.md`.
+
+### In-app updater for source checkouts (git remote — not GitHub Releases)
+
+Running from a git checkout, RoboScoutAI checks for updates by talking to the **git remote** (`git fetch`) and pulls / resets, then asks for a restart. Frozen Windows builds delegate to the manager above instead.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RAMSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RoboScoutAI.git` | Git remote URL |
-| `RAMSCOUT_GIT_BRANCH` | `main` | Branch to track |
-| `RAMSCOUT_UPDATE_CACHE` | appdata / `.ramscout-update-cache` | Mirror + package cache |
+| `RAMSCOUT_GIT_REMOTE` / `ROBOSCOUT_GIT_REMOTE` | `https://github.com/drewsmash/RoboScoutAI.git` | Git remote URL |
+| `RAMSCOUT_GIT_BRANCH` / `ROBOSCOUT_CHANNEL` | `release-artifacts/update-channel.txt` | Branch / tag to track |
+| `ROBOSCOUT_INSTALL_ROOT` | `%LOCALAPPDATA%\RoboScoutAI` | Manager install root (testing) |
 | `RAMSCOUT_GITHUB_TOKEN` / `GH_TOKEN` | — | Optional HTTPS auth for private remotes |
 
-UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available from git*, or *git remote unreachable*.
-
-For frozen auto-apply, commit desktop binaries under `desktop-downloads/` (e.g. `RoboScoutAI-windows-x64.exe`) on the tracked branch — or rebuild from source.
+UI: **Check for updates** / **Update** chip. Messages: *up to date*, *update available*, or *update channel unreachable*.
 
 Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode, scorebug OCR, YouTube ingest, field playback, and **multi-strategy OpenCV tracking** still work — robot paths are approximate without YOLO/cloud. Tracking modes:
 
@@ -116,7 +122,7 @@ Optional env vars:
 
 Because this repository is private, open the release while signed into GitHub to download, or set `RAMSCOUT_GITHUB_TOKEN` for in-app updates:
 
-https://github.com/drewsmash/RoboScoutAI/releases/tag/v0.4.3
+https://github.com/drewsmash/RoboScoutAI/releases/latest
 
 
 Click **Try a sample match** to explore the UI without a download.
