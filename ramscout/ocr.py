@@ -146,10 +146,24 @@ def enhance_bumper(crop_bgr: np.ndarray, *, target_h: int = 64) -> np.ndarray | 
     return inv
 
 
+_CONFUSABLE = str.maketrans({"O": "0", "o": "0", "Q": "0", "D": "0", "I": "1", "l": "1", "|": "1", "Z": "2", "z": "2", "S": "5", "s": "5", "B": "8", "G": "6", "g": "9", "T": "7"})
+_ALNUM = re.compile(r"[0-9A-Za-z|]{3,6}")
+
+
+def normalize_digits(raw: str) -> str:
+    """Map OCR confusables (O→0, S→5, B→8 …) inside mostly-numeric tokens."""
+    out = raw or ""
+    for tok in _ALNUM.findall(out):
+        n_digits = sum(ch.isdigit() for ch in tok)
+        if n_digits >= 2 and n_digits >= len(tok) - 2:
+            out = out.replace(tok, tok.translate(_CONFUSABLE))
+    return out
+
+
 def match_team(raw: str, teams: Iterable[str]) -> tuple[str | None, float]:
     """Best team match for an OCR string with a 0..1 confidence."""
     allowed = [str(t) for t in teams]
-    tokens = _DIGITS.findall(raw or "")
+    tokens = _DIGITS.findall(normalize_digits(raw))
     if not tokens or not allowed:
         return None, 0.0
     best: tuple[str | None, float] = (None, 0.0)

@@ -264,11 +264,32 @@ class MotTracker:
     ocm_weight: float = 0.3
     # Association bookkeeping for diagnostics / tests.
     stage_hits: dict[str, int] = field(default_factory=lambda: {"high": 0, "low": 0, "recovered": 0})
+    # Field positions where a static / in-place track was just pruned: no new
+    # track may *spawn* there for ``dead_zone_s`` (existing tracks may still
+    # drive through). Stops walls and scale plates from respawning forever.
+    dead_zones: list[tuple[float, float, int]] = field(default_factory=list)
+    dead_zone_s: float = 20.0
+    dead_zone_radius_in: float = 18.0
+    _step: int = 0
 
     def reset(self) -> None:
         self.tracks = {}
         self.next_id = 1000
         self.stage_hits = {"high": 0, "low": 0, "recovered": 0}
+        self.dead_zones = []
+        self._step = 0
+
+    def _in_dead_zone(self, xy: tuple[float, float] | None) -> bool:
+        if xy is None or not self.dead_zones:
+            return False
+        r2 = self.dead_zone_radius_in**2
+        return any((xy[0] - zx) ** 2 + (xy[1] - zy) ** 2 <= r2 for zx, zy, _exp in self.dead_zones)
+
+    def _add_dead_zone(self, track: _Track) -> None:
+        if track.field is None:
+            return
+        expires = self._step + int(round(self.dead_zone_s / max(self.dt_s, 1e-3)))
+        self.dead_zones.append((float(track.field.mean[0]), float(track.field.mean[1]), expires))
 
     # ------------------------------------------------------------------ helpers
     def _field_xy(self, det: Detection) -> tuple[float, float] | None:
@@ -300,6 +321,9 @@ class MotTracker:
         frame_h: int,
         frame_bgr: np.ndarray | None = None,
     ) -> list[Detection]:
+        self._step += 1
+        if self.dead_zones:
+            self.dead_zones = [z for z in self.dead_zones if z[2] > self._step]
         # Predict all live tracks forward one step.
         for track in self.tracks.values():
             track.kalman.predict()
@@ -373,6 +397,8 @@ class MotTracker:
             if self.bytetrack and _proposal_score(det) < self.high_conf:
                 # ByteTrack rule: low-score proposals may extend a track but
                 # never start one (they are mostly fragments and flicker).
+                continue
+            if det.source not in STRONG_SOURCES and self._in_dead_zone(det_field[di]):
                 continue
             if len(self.tracks) >= self.max_pool:
                 # Drop oldest unmatched tentative track to make room.
@@ -494,6 +520,7 @@ class MotTracker:
             static_px = disp_px < self.static_min_disp_px
             static_in = disp_in is not None and disp_in < self.static_min_disp_in
             if static_px and (disp_in is None or static_in):
+                self._add_dead_zone(track)
                 self.tracks.pop(tid, None)
                 continue
             # In-place movers: hits pile up while the excursion stays tiny
@@ -504,6 +531,7 @@ class MotTracker:
                 and track.field.max_disp_in < 2.0 * self.static_min_disp_in
                 and track.field.path_in > 6.0 * track.field.max_disp_in + 1.0
             ):
+                self._add_dead_zone(track)
                 self.tracks.pop(tid, None)
 
     def _nms(self, dets: list[Detection]) -> list[Detection]:
