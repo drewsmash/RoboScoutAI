@@ -84,8 +84,10 @@ class _KalmanBox:
     def predict(self) -> None:
         self.mean[0] += self.mean[4]
         self.mean[1] += self.mean[5]
-        self.mean[2] = max(1.0, self.mean[2] + self.mean[6])
-        self.mean[3] = max(1.0, self.mean[3] + self.mean[7])
+        # Size is *not* extrapolated: box-size velocity is mostly blob noise
+        # and integrating it makes coasting boxes balloon or collapse.
+        self.mean[2] = max(1.0, self.mean[2])
+        self.mean[3] = max(1.0, self.mean[3])
         # Dampen velocity slightly so coasting does not runaway.
         self.mean[4:8] *= 0.92
         self.age += 1
@@ -208,6 +210,9 @@ class MotTracker:
     require_motion_to_confirm: bool = False
     confirm_min_disp_px: float = 6.0
     confirm_min_disp_in: float = 8.0
+    # Coasting tracks stay alive for max_age steps but are only *emitted* for
+    # a few: beyond that the predicted position is speculation.
+    max_coast_emit: int = 3
 
     def reset(self) -> None:
         self.tracks = {}
@@ -338,6 +343,8 @@ class MotTracker:
                     continue
                 if track.kalman.time_since_update > 0:
                     continue
+            if track.kalman.time_since_update > self.max_coast_emit:
+                continue
             bbox = _clamp_bbox(track.kalman.bbox(), frame_w, frame_h)
             meta: dict = {
                 "hits": int(track.kalman.hits),

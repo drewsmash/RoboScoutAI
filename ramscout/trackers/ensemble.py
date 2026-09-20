@@ -213,12 +213,15 @@ class EnsembleTracker:
                 if len(merged) < 5:
                     merged = merge_detections(merged, flowed, min_dist=32.0)
 
-        return self.mot.update(
+        tracks = self.mot.update(
             merged,
             frame_w=ctx.crop_w,
             frame_h=ctx.crop_h,
             frame_bgr=cropped,
         )
+        if gate is not None:
+            tracks = gate.filter_tracks(tracks)
+        return tracks
 
     def _detect_flat(self, cropped, ctx: TrackerContext) -> list[Detection]:
         primary: list[Detection] = []

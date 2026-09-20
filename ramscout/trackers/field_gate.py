@@ -334,7 +334,9 @@ class FieldGate:
         self._occupancy = (1.0 - self._alpha) * self._occupancy + self._alpha * mask
 
     # ----------------------------------------------------------------- verdicts
-    def evaluate(self, det: Detection) -> GateVerdict:
+    def evaluate(self, det: Detection, *, geometry_only: bool = False) -> GateVerdict:
+        """Judge one proposal. ``geometry_only`` skips the motion analysis
+        (used for the final check on MOT output boxes)."""
         bbox = [float(v) for v in det.bbox]
         info: dict[str, Any] = {}
         penalty = 0.0
@@ -404,6 +406,9 @@ class FieldGate:
             if aspect > 2.4 or bw > 0.30 * self.crop_w:
                 return GateVerdict(False, "perimeter_wall", penalty, info)
 
+        if geometry_only:
+            return GateVerdict(True, None, penalty, info)
+
         # Static / flow analysis. These do not hard-reject (a robot parked at
         # the loading station is still a robot): they flag the proposal so MOT
         # refuses to *spawn* a track from it and never confirms a track that
@@ -460,6 +465,22 @@ class FieldGate:
             kept.append(det)
         if mark:
             self._mark_occupancy([d.bbox for d in kept])
+        return kept
+
+    def filter_tracks(self, tracks: list[Detection]) -> list[Detection]:
+        """Final geometric sanity check on MOT output (coasting boxes can drift
+        off the field or degenerate in size)."""
+        kept: list[Detection] = []
+        for det in tracks:
+            verdict = self.evaluate(det, geometry_only=True)
+            if not verdict.keep:
+                self.stats.reject(f"track_{verdict.reason or 'unknown'}")
+                continue
+            meta = dict(det.meta or {})
+            meta.setdefault("field_xy", verdict.info.get("field_xy"))
+            meta["perimeter"] = bool(verdict.info.get("perimeter", False))
+            det.meta = meta
+            kept.append(det)
         return kept
 
     def projector(self) -> Callable[[Sequence[float]], tuple[float, float]]:
