@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "product": "RoboScoutAI",
+  "version": "0.6.0",
+  "channel": "cursor/upload-cookies-github-updater-e0ef",
+  "commit": "72860a3ebe77af71ccc4cfac257bd46358107d3f",
+  "created_at": "2026-09-20T05:24:09+00:00",
+  "min_manager_version": "0.6.0",
+  "notes": "",
+  "artifacts": {
+    "RoboScoutAI-app-windows-x64.exe": {
+      "sha256": "a2d9ddbd4997e7785066e1c508f07278472fd483b29f4fc8486a0a38ca7ca60b",
+      "size": 91688740,
+      "kind": "app",
+      "platform": "windows-x64"
+    },
+    "RoboScoutAI.exe": {
+      "sha256": "ab2633215af97129994013371ffbc11209d4039a3cc743f6af009fc7182f49e0",
+      "size": 12035474,
+      "kind": "manager",
+      "platform": "windows-x64"
+    },
+    "RoboScoutAI-Setup.exe": {
+      "sha256": "8f05d0e837aa8798a323fb4a11b0862d29df77c64a1d91857f4a733948d77ed0",
+      "size": 114913328,
+      "kind": "setup",
+      "platform": "windows-x64"
+    }
+  }
+}
