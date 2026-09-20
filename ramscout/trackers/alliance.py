@@ -25,10 +25,15 @@ RED = "red"
 BLUE = "blue"
 UNKNOWN = "unknown"
 
-# Hue bands (OpenCV 0–180) wide enough to survive white-balance drift but still
-# excluding yellow / green game pieces and carpet.
+# Hue bands (OpenCV 0–180) for the global-threshold fallback votes: wide enough
+# to survive mild white-balance drift but still excluding yellow / green game
+# pieces and carpet.
 _RED_HUES = ((0, 22), (150, 180))
 _BLUE_HUES = ((85, 140),)
+# Wider "could be a bumper" window used only to pick calibration candidates;
+# strongly cast footage (magenta-leaning blue, orange-leaning red) still lands
+# here even when the narrow fallback bands miss it.
+_BUMPERISH_HUES = ((0, 26), (80, 180))
 
 
 def bumper_band(frame_bgr: np.ndarray, bbox: Sequence[float], frac: float = 0.42) -> np.ndarray | None:
@@ -56,6 +61,7 @@ class ChromaFeature:
     red_votes: int
     blue_votes: int
     n_pixels: int
+    n_bumperish: int = 0
 
     def as_point(self) -> np.ndarray:
         return np.array([self.a, self.b], dtype=np.float64)
@@ -81,17 +87,21 @@ def chroma_features(roi_bgr: np.ndarray, *, min_sat: int = 70, min_val: int = 50
     red_votes = int(np.count_nonzero(red_mask & sat_mask))
     blue_votes = int(np.count_nonzero(blue_mask & sat_mask))
     if n_sat < 6:
-        return ChromaFeature(0.0, 0.0, 0.0, red_votes, blue_votes, n_sat)
+        return ChromaFeature(0.0, 0.0, 0.0, red_votes, blue_votes, n_sat, 0)
 
     # Only red-ish / blue-ish saturated pixels feed the chroma estimate so a
     # yellow game piece riding on the robot does not drag the centroid.
-    bumperish = sat_mask & (red_mask | blue_mask)
-    if np.count_nonzero(bumperish) < 6:
+    wide = np.zeros_like(sat_mask)
+    for lo, hi in _BUMPERISH_HUES:
+        wide |= (hue >= lo) & (hue <= hi)
+    bumperish = sat_mask & wide
+    n_bumperish = int(np.count_nonzero(bumperish))
+    if n_bumperish < 6:
         bumperish = sat_mask
     lab = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     a = float(np.mean(lab[..., 1][bumperish])) - 128.0
     b = float(np.mean(lab[..., 2][bumperish])) - 128.0
-    return ChromaFeature(a, b, n_sat / max(n_total, 1), red_votes, blue_votes, n_sat)
+    return ChromaFeature(a, b, n_sat / max(n_total, 1), red_votes, blue_votes, n_sat, n_bumperish)
 
 
 def hsv_alliance(feature: ChromaFeature | None, *, min_pixels: int = 12) -> tuple[str, float]:
@@ -152,7 +162,7 @@ class AllianceCalibrator:
         """Add a bumper-band feature from a confirmed moving robot."""
         if feature is None or feature.n_pixels < 12:
             return False
-        if feature.red_votes + feature.blue_votes < 8:
+        if feature.n_bumperish < 8:
             return False
         if len(self._points) >= self.max_samples:
             self._points.pop(0)

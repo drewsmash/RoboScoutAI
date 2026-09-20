@@ -146,6 +146,8 @@ class FieldGate:
         self._small_w = max(8, int(round(self.crop_w / self._scale)))
         self._small_h = max(4, int(round(self.crop_h / self._scale)))
         self._prev_small: np.ndarray | None = None
+        self._diff: np.ndarray | None = None
+        self._diff_thresh: float = 6.0 / 255.0
         self._energy: np.ndarray | None = None
         self._occupancy: np.ndarray | None = None
         self._flow: np.ndarray | None = None
@@ -232,6 +234,8 @@ class FieldGate:
             return
 
         diff = np.abs(small - self._prev_small)
+        self._diff = diff
+        self._diff_thresh = max(6.0 / 255.0, 3.0 * float(np.median(diff)))
         self._energy = (1.0 - self._alpha) * self._energy + self._alpha * diff
         if self.use_flow:
             try:
@@ -246,7 +250,10 @@ class FieldGate:
         self._frames += 1
         flat = self._energy.reshape(-1)
         if flat.size:
-            k = max(1, int(flat.size * 0.05))
+            # Six robots cover well under 1 % of a low-res field crop, so the
+            # "is anything moving" statistic looks at the very top tail only.
+            k = max(8, int(flat.size * 0.005))
+            k = min(k, flat.size)
             top = np.partition(flat, flat.size - k)[flat.size - k :]
             self.active_energy = float(np.mean(top))
             # Most pixels are static carpet: the median is the sensor / codec
@@ -257,7 +264,10 @@ class FieldGate:
 
     @property
     def frame_active(self) -> bool:
-        return self._frames >= 3 and self.active_energy > (2.0 / 255.0)
+        """Something in the crop has been moving recently (vs. the noise floor)."""
+        if self._frames < 3:
+            return False
+        return self.active_energy > max(4.0 * self.noise_floor, 0.4 / 255.0)
 
     def _small_slice(self, bbox: Sequence[float]) -> tuple[slice, slice] | None:
         x1, y1, x2, y2 = [float(v) for v in bbox]
@@ -286,19 +296,31 @@ class FieldGate:
         return float(np.mean(self._occupancy[sl]))
 
     def box_flow(self, bbox: Sequence[float]) -> tuple[float, float, float]:
-        """(median dx, median dy, moving_fraction) in full-res pixels per step."""
-        if self._flow is None:
+        """(median dx, median dy, moving_fraction) in full-res pixels per step.
+
+        A pixel counts as moving only when it both changed between frames and
+        carries flow: Farneback alone hallucinates motion on flat, noisy
+        texture (carpet, glass), which is exactly where walls live.
+        """
+        if self._diff is None:
             return 0.0, 0.0, float("nan")
         sl = self._small_slice(bbox)
         if sl is None:
             return 0.0, 0.0, float("nan")
-        patch = self._flow[sl]
-        if patch.size == 0:
+        changed = self._diff[sl] > self._diff_thresh
+        if changed.size == 0:
             return 0.0, 0.0, float("nan")
+        if self._flow is None:
+            return 0.0, 0.0, float(np.mean(changed))
+        patch = self._flow[sl]
         mag = np.hypot(patch[..., 0], patch[..., 1])
-        moving = float(np.mean(mag > 0.35))
-        dx = float(np.median(patch[..., 0])) * self._scale
-        dy = float(np.median(patch[..., 1])) * self._scale
+        moving_mask = changed & (mag > 0.35)
+        moving = float(np.mean(moving_mask))
+        if np.count_nonzero(moving_mask) >= 3:
+            dx = float(np.median(patch[..., 0][moving_mask])) * self._scale
+            dy = float(np.median(patch[..., 1][moving_mask])) * self._scale
+        else:
+            dx = dy = 0.0
         return dx, dy, moving
 
     def _mark_occupancy(self, boxes: Iterable[Sequence[float]]) -> None:
@@ -325,6 +347,15 @@ class FieldGate:
         info["field_xy"] = (x_in, y_in)
         if not (np.isfinite(x_in) and np.isfinite(y_in)):
             return GateVerdict(False, "projection", 0.0, info)
+
+        # Boxes living almost entirely inside the scorebug band are overlay
+        # graphics; partial overlap (far robots under the bug) is only penalized.
+        bug = self.scorebug_overlap(bbox)
+        info["scorebug_overlap"] = bug
+        if bug > 0.85:
+            return GateVerdict(False, "scorebug", 0.0, info)
+        if bug > 0.1:
+            penalty += 0.25 * bug
 
         if not point_in_field(
             x_in,
@@ -353,15 +384,6 @@ class FieldGate:
         bw = max(bbox[2] - bbox[0], 1.0)
         bh = max(bbox[3] - bbox[1], 1.0)
         aspect = bw / bh
-
-        bug = self.scorebug_overlap(bbox)
-        info["scorebug_overlap"] = bug
-        # Boxes living almost entirely inside the scorebug band are overlay
-        # graphics; partial overlap (far robots under the bug) is only penalized.
-        if bug > 0.85:
-            return GateVerdict(False, "scorebug", 0.0, info)
-        if bug > 0.1:
-            penalty += 0.25 * bug
 
         edges = self.edges_touched(bbox)
         info["edges"] = edges

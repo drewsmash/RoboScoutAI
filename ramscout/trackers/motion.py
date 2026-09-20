@@ -59,7 +59,9 @@ class MotionTracker:
         if self.knn is not None:
             fg_knn = self.knn.apply(cropped, learningRate=learn)
             _, fg_knn = cv2.threshold(fg_knn, 190, 255, cv2.THRESH_BINARY)
-            fg = cv2.bitwise_or(fg_mog, fg_knn)
+            # KNN marks the whole frame as foreground until it has history;
+            # fusing it in during warm-up would swallow every robot.
+            fg = cv2.bitwise_or(fg_mog, fg_knn) if self.warm_frames >= 8 else fg_mog
         else:
             fg = fg_mog
 
