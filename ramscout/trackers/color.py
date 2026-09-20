@@ -47,6 +47,7 @@ class ColorTracker:
                 blobs.append((alliance, area, [float(x), float(y), float(x + w), float(y + h)]))
 
         blobs.sort(key=lambda row: row[1], reverse=True)
+        blobs = lowest_band_rule(blobs)
         blobs = blobs[:8]
         out: list[Detection] = []
         for i, (alliance, area, bbox) in enumerate(blobs):
@@ -61,3 +62,38 @@ class ColorTracker:
                 )
             )
         return out
+
+
+def lowest_band_rule(
+    blobs: list[tuple[str, float, list[float]]],
+    *,
+    x_overlap: float = 0.5,
+    reach: float = 1.6,
+) -> list[tuple[str, float, list[float]]]:
+    """Keep only the lowest colored band in a vertical stack.
+
+    Bumpers sit at the bottom of a robot; a red/blue mechanism, jersey, or
+    LED strip above them (within ``reach`` × width) is a decoy, not a second
+    robot. Blobs without a lower neighbour are untouched.
+    """
+    kept: list[tuple[str, float, list[float]]] = []
+    for alliance, area, bbox in blobs:
+        x1, y1, x2, y2 = bbox
+        w = max(x2 - x1, 1.0)
+        shadowed = False
+        for _oa, _oarea, ob in blobs:
+            if ob is bbox:
+                continue
+            ox1, oy1, ox2, oy2 = ob
+            if oy2 <= y2:
+                continue  # not lower than us
+            ow = max(ox2 - ox1, 1.0)
+            overlap = max(0.0, min(x2, ox2) - max(x1, ox1)) / min(w, ow)
+            if overlap < x_overlap:
+                continue
+            if (oy1 - y2) <= reach * max(w, ow):
+                shadowed = True
+                break
+        if not shadowed:
+            kept.append((alliance, area, bbox))
+    return kept
