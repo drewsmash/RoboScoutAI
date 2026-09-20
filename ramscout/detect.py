@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ramscout.field import ALLIANCE_DEPTH, FIELD_LENGTH
+from ramscout.field import ALLIANCE_DEPTH, FIELD_LENGTH, FIELD_WIDTH
 from ramscout.geometry import crop_bounds, default_source_points, homography_from_corners, project_points
 from ramscout.identity import balance_alliances, constrain_to_teams, ocr_digits
 from ramscout.trackers.alliance import (
@@ -84,6 +84,7 @@ class _PaneSession:
     depth: np.ndarray | None = None
     bev_info: dict[str, Any] | None = None
     depth_source: str | None = None
+    field_mask: np.ndarray | None = None
     seen_tracks: set[int] = field(default_factory=set)
     emitted_label: dict[int, str] = field(default_factory=dict)
     tid_alias: dict[int, int] = field(default_factory=dict)
@@ -429,6 +430,7 @@ def _track_video_impl(
             depth=depth_map,
             bev_info=bev_info,
             depth_source=(bev_info or {}).get("depth_source") or (depth_cal.source if depth_cal else None),
+            field_mask=field_mask_for_crop(H, x0, y0, x1 - x0, y1 - y0) if field_gate else None,
         )
         session._holder = holder  # type: ignore[attr-defined]
         return session
@@ -528,6 +530,7 @@ def _track_video_impl(
             google_key=google_key,
             openai_model=openai_model or "gpt-4o-mini",
             google_model=google_model or "gemini-3.5-flash",
+            extras={"field_mask": s.field_mask} if s.field_mask is not None else {},
         )
         detections = s.ensemble.detect(cropped, ctx)
 
@@ -716,6 +719,54 @@ def _track_video_impl(
         "processed_frames": processed,
         "window": [round(t_start, 3), round(min(t_end, frame_index / fps), 3)],
     }
+
+
+def field_mask_for_crop(
+    homography: np.ndarray,
+    x0: int,
+    y0: int,
+    crop_w: int,
+    crop_h: int,
+    *,
+    margin_in: float = 14.0,
+    robot_height_in: float = 40.0,
+) -> np.ndarray | None:
+    """uint8 mask (255 inside) of where robots can *appear* in the crop.
+
+    The carpet rectangle (plus ``margin_in``) is back-projected through the
+    homography; the far edge is then lifted by a robot height so a robot at
+    the far wall — whose body sits *above* its foot point in the image — is
+    not clipped. Everything else (crowd, referees, driver stations, scorebug)
+    can never become a motion / colour proposal.
+    """
+    import cv2
+
+    try:
+        Hinv = np.linalg.inv(np.asarray(homography, dtype=np.float64))
+    except np.linalg.LinAlgError:
+        return None
+    L, W, m = FIELD_LENGTH, FIELD_WIDTH, margin_in
+    corners_in = np.array([[-m, -m], [L + m, -m], [L + m, W + m], [-m, W + m]], dtype=np.float64)
+    pts = cv2.perspectiveTransform(corners_in.reshape(-1, 1, 2), Hinv).reshape(-1, 2)
+    if not np.all(np.isfinite(pts)):
+        return None
+    pts[:, 0] -= x0
+    pts[:, 1] -= y0
+    # Lift the far edge: pixels per inch at the far wall from the far edge's
+    # projected width, then robot_height_in above it.
+    far = pts[:2]
+    far_w_px = float(np.hypot(*(far[1] - far[0])))
+    px_per_in = far_w_px / max(L + 2 * m, 1.0)
+    lift = min(robot_height_in * px_per_in, 0.35 * crop_h)
+    order = np.argsort(pts[:, 1])
+    for i in order[:2]:
+        pts[i, 1] -= lift
+    mask = np.zeros((max(crop_h, 1), max(crop_w, 1)), dtype=np.uint8)
+    poly = np.clip(pts, [-10 * crop_w, -10 * crop_h], [10 * crop_w, 10 * crop_h]).astype(np.int32)
+    cv2.fillConvexPoly(mask, poly, 255)
+    if np.count_nonzero(mask) < 0.05 * mask.size:
+        return None
+    return mask
 
 
 def _sample_segment_frames(

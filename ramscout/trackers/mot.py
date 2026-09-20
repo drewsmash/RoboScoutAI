@@ -147,6 +147,7 @@ class _FieldKalman:
     path_in: float = 0.0
     origin: np.ndarray | None = None
     last_z: np.ndarray | None = None
+    max_disp_in: float = 0.0
 
     @classmethod
     def from_xy(cls, x: float, y: float, dt: float) -> "_FieldKalman":
@@ -168,6 +169,8 @@ class _FieldKalman:
         self.mean[2] = 0.6 * prev_v[0] + 0.4 * (x - last[0]) / el
         self.mean[3] = 0.6 * prev_v[1] + 0.4 * (y - last[1]) / el
         self.last_z = np.array([x, y], dtype=np.float64)
+        if self.origin is not None:
+            self.max_disp_in = max(self.max_disp_in, float(np.hypot(x - self.origin[0], y - self.origin[1])))
 
     @property
     def speed_in_s(self) -> float:
@@ -194,12 +197,21 @@ class _Track:
     path_px: float = 0.0
     strong_hits: int = 0
     speed_rejects: int = 0
+    max_disp_px: float = 0.0
+    # Last gate measurements (parked-robot rule).
+    footprint_in: float | None = None
+    perimeter: bool = False
+    color_hits: int = 0
+    parked_confirmed: bool = False
 
     def displacement_px(self) -> float:
         if self.origin_px is None:
             return 0.0
         cx, cy = self.kalman.mean[0], self.kalman.mean[1]
         return float(np.hypot(cx - self.origin_px[0], cy - self.origin_px[1]))
+
+    def note_position(self) -> None:
+        self.max_disp_px = max(self.max_disp_px, self.displacement_px())
 
 
 @dataclass
@@ -209,7 +221,10 @@ class MotTracker:
     max_age: int = 15
     min_hits: int = 3
     iou_threshold: float = 0.18
-    max_tracks: int = 8
+    max_tracks: int = 8  # emitted per frame
+    # Internal pool: tentative tracks need room to mature while walls / cubes
+    # / plates also spawn candidates, otherwise real robots get evicted.
+    max_pool: int = 14
     next_id: int = 1000
     tracks: dict[int, _Track] = field(default_factory=dict)
     # BEV association (optional): bbox → field inches, seconds per update.
@@ -230,6 +245,11 @@ class MotTracker:
     require_motion_to_confirm: bool = False
     confirm_min_disp_px: float = 6.0
     confirm_min_disp_in: float = 8.0
+    # Parked-robot rule: a *bumper-derived* box that keeps being seen with a
+    # robot-sized footprint may confirm without ever moving (robots park to
+    # defend, load or climb). Walls fail the footprint test (long strips).
+    parked_confirm_hits: int = 12
+    parked_max_footprint_in: float = 48.0
     # Coasting tracks stay alive for max_age steps but are only *emitted* for
     # a few: beyond that the predicted position is speculation.
     max_coast_emit: int = 3
@@ -307,6 +327,13 @@ class MotTracker:
             track.source = det.source or track.source
             if det.source in STRONG_SOURCES:
                 track.strong_hits += 1
+            if det.meta:
+                fp = det.meta.get("footprint_in")
+                if fp is not None:
+                    track.footprint_in = float(fp)
+                track.perimeter = bool(det.meta.get("perimeter", False))
+                if det.source == "color" or "color" in (det.meta.get("agree") or []):
+                    track.color_hits += 1
             if det.alliance in {"red", "blue"}:
                 track.alliance = det.alliance
             if det.team:
@@ -322,6 +349,7 @@ class MotTracker:
             cx, cy = centroid(det.bbox)
             if track.origin_px is None:
                 track.origin_px = (cx, cy)
+            track.note_position()
             if self._can_confirm(track):
                 track.confirmed = True
 
@@ -337,17 +365,19 @@ class MotTracker:
                 det.meta
                 and det.meta.get("static")
                 and det.source not in STRONG_SOURCES
+                and not (det.source == "color" and self._robot_sized(det))
             ):
-                # Static structures never get to start a track.
+                # Static structures never get to start a track. Robot-sized
+                # bumper boxes may (tentatively) — see the parked-robot rule.
                 continue
             if self.bytetrack and _proposal_score(det) < self.high_conf:
                 # ByteTrack rule: low-score proposals may extend a track but
                 # never start one (they are mostly fragments and flicker).
                 continue
-            if len(self.tracks) >= self.max_tracks:
+            if len(self.tracks) >= self.max_pool:
                 # Drop oldest unmatched tentative track to make room.
                 self._evict_weakest()
-            if len(self.tracks) >= self.max_tracks:
+            if len(self.tracks) >= self.max_pool:
                 break
             hist = _patch_hist(frame_bgr, det.bbox) if frame_bgr is not None else None
             tid = self.next_id
@@ -419,7 +449,28 @@ class MotTracker:
             return True
         if track.displacement_px() >= self.confirm_min_disp_px:
             return True
-        return track.field is not None and track.field.displacement_in() >= self.confirm_min_disp_in
+        if track.field is not None and track.field.displacement_in() >= self.confirm_min_disp_in:
+            return True
+        if self._parked_robot(track):
+            track.parked_confirmed = True
+            return True
+        return False
+
+    def _robot_sized(self, det: Detection) -> bool:
+        fp = det.meta.get("footprint_in") if det.meta else None
+        if fp is None:
+            return False
+        limit = self.parked_max_footprint_in * (0.85 if det.meta.get("perimeter") else 1.25)
+        return float(fp) <= limit
+
+    def _parked_robot(self, track: _Track) -> bool:
+        """Bumper seen for a while, robot-sized footprint, no motion required."""
+        if track.color_hits < self.parked_confirm_hits:
+            return False
+        if track.footprint_in is None:
+            return False
+        limit = self.parked_max_footprint_in * (0.85 if track.perimeter else 1.25)
+        return track.footprint_in <= limit
 
     def _is_moving(self, track: _Track) -> bool:
         if track.field is not None and track.field.displacement_in() >= self.static_min_disp_in:
@@ -431,15 +482,28 @@ class MotTracker:
         for tid, track in list(self.tracks.items()):
             if track.strong_hits > 0:
                 continue
+            if track.parked_confirmed and self._parked_robot(track) and track.kalman.time_since_update == 0:
+                continue
             if track.kalman.hits < self.static_after_hits:
                 continue
-            disp_px = track.displacement_px()
-            disp_in = track.field.displacement_in() if track.field is not None else None
-            path_in = track.field.path_in if track.field is not None else 0.0
+            # Max excursion from the birth point: a robot that drove away and
+            # came back has a large one; a scale / switch plate wiggling in
+            # place (lots of path, no excursion) does not.
+            disp_px = max(track.displacement_px(), track.max_disp_px)
+            disp_in = track.field.max_disp_in if track.field is not None else None
             static_px = disp_px < self.static_min_disp_px
             static_in = disp_in is not None and disp_in < self.static_min_disp_in
-            wandered = path_in >= 4.0 * self.static_min_disp_in
-            if static_px and (disp_in is None or static_in) and not wandered:
+            if static_px and (disp_in is None or static_in):
+                self.tracks.pop(tid, None)
+                continue
+            # In-place movers: hits pile up while the excursion stays tiny
+            # relative to how much the box has jittered around.
+            if (
+                track.field is not None
+                and track.kalman.hits >= 2 * self.static_after_hits
+                and track.field.max_disp_in < 2.0 * self.static_min_disp_in
+                and track.field.path_in > 6.0 * track.field.max_disp_in + 1.0
+            ):
                 self.tracks.pop(tid, None)
 
     def _nms(self, dets: list[Detection]) -> list[Detection]:

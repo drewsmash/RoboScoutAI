@@ -33,7 +33,7 @@ STRONG_SOURCES = {"yolo", "openai", "gemini"}
 
 # FRC robots with bumpers are roughly 28–36 in on a side; allow perspective and
 # blob-merge slop on top of that.
-DEFAULT_MIN_FOOTPRINT_IN = 10.0
+DEFAULT_MIN_FOOTPRINT_IN = 16.0
 DEFAULT_MAX_FOOTPRINT_IN = 96.0
 DEFAULT_MAX_HEIGHT_IN = 150.0
 
@@ -459,6 +459,8 @@ class FieldGate:
             meta["field_xy"] = verdict.info.get("field_xy")
             meta["foot"] = verdict.info.get("foot")
             meta["perimeter"] = bool(verdict.info.get("perimeter", False))
+            fp = verdict.info.get("footprint_in")
+            meta["footprint_in"] = float(fp[0]) if fp is not None and np.isfinite(fp[0]) else None
             meta["flow"] = verdict.info.get("flow")
             meta["moving_fraction"] = verdict.info.get("moving_fraction")
             meta["energy"] = verdict.info.get("energy")
