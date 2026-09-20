@@ -266,15 +266,122 @@ def linear_assignment(cost: np.ndarray) -> list[tuple[int, int]]:
         return pairs
 
 
+def assemble_lanes(
+    samples: list[dict[str, Any]],
+    *,
+    n_red: int = 3,
+    n_blue: int = 3,
+    overlap_s: float = 0.5,
+    min_fragment_s: float = 0.6,
+    max_dist_in: float = 48.0,
+    speed_in_s: float = 60.0,
+) -> list[dict[str, Any]]:
+    """Assemble tracklets into at most ``n_red + n_blue`` robot lanes.
+
+    A match has exactly six robots, so every fragment that is *time-disjoint*
+    from a lane of its alliance belongs to one of them; the cheapest
+    (distance-plausible) lane wins, a jump farther than the robot could have
+    driven during the gap is still accepted (marked ``lane_jump`` on the first
+    sample) because coverage matters more than a rare wrong link. Fragments
+    that overlap every lane of their alliance are a seventh simultaneous
+    object — a plate, a referee, a cube — and are dropped.
+    """
+    if not samples:
+        return samples
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for s in samples:
+        by_id.setdefault(int(s["track_id"]), []).append(s)
+    frags: list[dict[str, Any]] = []
+    for tid, group in by_id.items():
+        group.sort(key=lambda r: float(r["t"]))
+        frags.append(
+            {
+                "tid": tid,
+                "alliance": majority_alliance(group),
+                "t0": float(group[0]["t"]),
+                "t1": float(group[-1]["t"]),
+                "start": (float(group[0]["x"]), float(group[0]["y"])),
+                "end": (float(group[-1]["x"]), float(group[-1]["y"])),
+                "dur": float(group[-1]["t"]) - float(group[0]["t"]),
+                "n": len(group),
+            }
+        )
+    # Long fragments first within the same start second so a solid track
+    # claims the lane before a blip does.
+    frags.sort(key=lambda f: (round(f["t0"], 0), -f["dur"]))
+    quota = {"red": n_red, "blue": n_blue}
+    lanes: list[dict[str, Any]] = []
+    remap: dict[int, int] = {}
+    cut_after: dict[int, float] = {}
+    jump_at: dict[int, float] = {}
+    dropped: set[int] = set()
+    for f in frags:
+        if f["dur"] < min_fragment_s and f["n"] < 4:
+            dropped.add(f["tid"])
+            continue
+        allowed = [f["alliance"]] if f["alliance"] in quota else list(quota)
+        free = [ln for ln in lanes if ln["alliance"] in allowed and ln["t1"] <= f["t0"] + overlap_s]
+        if free:
+            def cost(ln: dict[str, Any]) -> float:
+                gap = max(f["t0"] - ln["t1"], 0.0)
+                dist = float(np.hypot(f["start"][0] - ln["end"][0], f["start"][1] - ln["end"][1]))
+                allow = max_dist_in + speed_in_s * gap
+                return dist / max(allow, 1.0) + gap / 30.0
+
+            lane = min(free, key=cost)
+            gap = max(f["t0"] - lane["t1"], 0.0)
+            dist = float(np.hypot(f["start"][0] - lane["end"][0], f["start"][1] - lane["end"][1]))
+            if dist > max_dist_in + speed_in_s * gap:
+                jump_at[f["tid"]] = f["t0"]
+            if f["t0"] < lane["t1"]:
+                cut_after[lane["last_tid"]] = f["t0"]
+            remap[f["tid"]] = lane["root"]
+            lane.update(t1=f["t1"], end=f["end"], last_tid=f["tid"])
+            if lane["alliance"] not in quota and f["alliance"] in quota:
+                lane["alliance"] = f["alliance"]
+            continue
+        # New lane if the alliance still has room.
+        opened = False
+        for alliance in allowed:
+            used = sum(1 for ln in lanes if ln["alliance"] == alliance)
+            if used < quota[alliance]:
+                lanes.append({"alliance": alliance, "root": f["tid"], "t1": f["t1"], "end": f["end"], "last_tid": f["tid"]})
+                remap[f["tid"]] = f["tid"]
+                opened = True
+                break
+        if not opened:
+            dropped.add(f["tid"])
+    out: list[dict[str, Any]] = []
+    for s in samples:
+        tid = int(s["track_id"])
+        if tid in dropped or tid not in remap:
+            continue
+        cut = cut_after.get(tid)
+        if cut is not None and float(s["t"]) >= cut:
+            continue
+        row = dict(s)
+        row["track_id"] = remap[tid]
+        if jump_at.get(tid) is not None and float(s["t"]) == jump_at[tid]:
+            row["lane_jump"] = True
+        out.append(row)
+    return out
+
+
 def stitch_occlusions(
     samples: list[dict[str, Any]],
     max_gap_s: float = 3.0,
-    max_dist_in: float = 72.0,
+    max_dist_in: float = 48.0,
+    *,
+    overlap_s: float = 0.6,
+    speed_in_s: float = 60.0,
 ) -> list[dict[str, Any]]:
-    """Re-attach track IDs that likely belong to the same robot after a gap.
+    """Link tracklets that belong to the same robot into one path (chains).
 
-    Uses Hungarian matching on (distance + time gap + alliance mismatch).
-    Wider defaults than before so SORT fragments from MOT still stitch.
+    Fragments are sorted by start time; each chain end greedily claims the
+    best later fragment by (distance − plausible travel) + time gap, with an
+    alliance mismatch forbidden. Fragments may overlap the chain end by up to
+    ``overlap_s`` (a new ID often spawns a few frames before the old one
+    dies). Distance allowance grows with the gap at ``speed_in_s``.
     """
     if len(samples) < 2:
         return samples
@@ -295,52 +402,62 @@ def stitch_occlusions(
                 "t1": float(group[-1]["t"]),
                 "start": (float(group[0]["x"]), float(group[0]["y"])),
                 "end": (float(group[-1]["x"]), float(group[-1]["y"])),
+                "n": len(group),
             }
         )
     fragments.sort(key=lambda item: item["t0"])
+    by_tid = {f["tid"]: f for f in fragments}
 
-    remap = {item["tid"]: item["tid"] for item in fragments}
+    # chain root → (current end fragment)
+    root_of: dict[int, int] = {f["tid"]: f["tid"] for f in fragments}
+    chain_end: dict[int, dict[str, Any]] = {f["tid"]: f for f in fragments}
     claimed: set[int] = set()
-    for i, earlier in enumerate(fragments):
-        if remap[earlier["tid"]] != earlier["tid"]:
+    cut_after: dict[int, float] = {}  # fragment tid → drop its samples at/after this t
+    for frag in fragments:
+        if frag["tid"] in claimed:
             continue
-        costs: list[tuple[float, int]] = []
-        for later in fragments[i + 1 :]:
-            if later["tid"] in claimed:
-                continue
-            if remap.get(later["tid"]) != later["tid"]:
-                continue
-            if (
-                earlier["alliance"] in {"red", "blue"}
-                and later["alliance"] in {"red", "blue"}
-                and earlier["alliance"] != later["alliance"]
-            ):
-                continue
-            gap = later["t0"] - earlier["t1"]
-            if gap < 0 or gap > max_gap_s:
-                continue
-            dist = float(np.hypot(later["start"][0] - earlier["end"][0], later["start"][1] - earlier["end"][1]))
-            if dist > max_dist_in:
-                continue
-            costs.append((dist + gap * 8.0, later["tid"]))
-        if not costs:
-            continue
-        cost = np.array([[c[0] for c in costs]], dtype=float)
-        pairs = linear_assignment(cost)
-        if not pairs:
-            continue
-        _, col = pairs[0]
-        chosen = costs[col][1]
-        root = remap[earlier["tid"]]
-        remap[chosen] = root
-        claimed.add(chosen)
-        for tid, mapped in list(remap.items()):
-            if mapped == chosen:
-                remap[tid] = root
+        # Extend the chain that ends with ``frag`` (possibly just itself).
+        root = root_of[frag["tid"]]
+        end = chain_end[root]
+        while True:
+            costs: list[tuple[float, int]] = []
+            for later in fragments:
+                lt = later["tid"]
+                if lt in claimed or root_of[lt] != lt or lt == root or lt == end["tid"]:
+                    continue
+                if (
+                    end["alliance"] in {"red", "blue"}
+                    and later["alliance"] in {"red", "blue"}
+                    and end["alliance"] != later["alliance"]
+                ):
+                    continue
+                gap = later["t0"] - end["t1"]
+                if gap < -overlap_s or gap > max_gap_s:
+                    continue
+                dist = float(np.hypot(later["start"][0] - end["end"][0], later["start"][1] - end["end"][1]))
+                allow = max_dist_in + speed_in_s * max(gap, 0.0)
+                if dist > allow:
+                    continue
+                costs.append((dist / max(allow, 1.0) + max(gap, 0.0) / max_gap_s, lt))
+            if not costs:
+                break
+            costs.sort()
+            chosen = costs[0][1]
+            claimed.add(chosen)
+            root_of[chosen] = root
+            nxt = by_tid[chosen]
+            if nxt["t0"] <= end["t1"]:
+                cut_after[end["tid"]] = nxt["t0"]
+            end = nxt
+            chain_end[root] = end
 
     out: list[dict[str, Any]] = []
     for sample in samples:
+        tid = int(sample["track_id"])
+        cut = cut_after.get(tid)
+        if cut is not None and float(sample["t"]) >= cut:
+            continue
         row = dict(sample)
-        row["track_id"] = remap.get(int(sample["track_id"]), sample["track_id"])
+        row["track_id"] = root_of.get(tid, tid)
         out.append(row)
     return out

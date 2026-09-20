@@ -1,10 +1,19 @@
-"""SORT-inspired multi-object tracker for FRC robot boxes.
+"""SORT / ByteTrack / OC-SORT style multi-object tracker for FRC robot boxes.
 
 Associates per-frame detections (any source) into stable track IDs using:
 - constant-velocity Kalman prediction in pixel space
 - **constant-velocity Kalman in field inches (BEV)** when a projector is set,
   with hard gating by physical speed (FRC robots top out near 20 ft/s)
 - IoU + centroid distance + alliance / color cues + optical-flow direction
+- **ByteTrack two-stage association**: high-confidence proposals are matched
+  first; the tracks left over are then matched against *low*-confidence
+  proposals (partial occlusions, half-lit robots) which are never allowed to
+  start a new track on their own
+- **OC-SORT observation-centric re-update**: when a track is recovered after
+  coasting, the Kalman state is rebuilt from the *observations* (virtual
+  trajectory between the last and the new box) instead of the drifted
+  prediction, and the observation-centric momentum term penalises proposals
+  whose direction from the last observation disagrees with the track's
 - short-gap rebirth so occlusions do not mint endless new IDs
 - per-source confirmation (local proposals need more hits than YOLO / cloud)
 - static-track pruning (blobs that never move are walls / field elements)
@@ -104,14 +113,25 @@ class _KalmanBox:
         steps = float(max(self.time_since_update, 1))
         last = self.last_z if self.last_z is not None else z
         dz = (z - last) / steps
+        if steps > 1.0:
+            # OC-SORT observation-centric re-update: the track coasted on a
+            # prediction that drifted; trust the observed displacement over
+            # the gap rather than the (dampened) predicted velocity.
+            self.mean[4] = 0.2 * prev_v[0] + 0.8 * dz[0]
+            self.mean[5] = 0.2 * prev_v[1] + 0.8 * dz[1]
+        else:
+            self.mean[4] = 0.6 * prev_v[0] + 0.4 * dz[0]
+            self.mean[5] = 0.6 * prev_v[1] + 0.4 * dz[1]
         self.mean[0], self.mean[1], self.mean[2], self.mean[3] = cx, cy, w, h
-        self.mean[4] = 0.6 * prev_v[0] + 0.4 * dz[0]
-        self.mean[5] = 0.6 * prev_v[1] + 0.4 * dz[1]
         self.mean[6] = 0.5 * prev_v[2] + 0.5 * dz[2]
         self.mean[7] = 0.5 * prev_v[3] + 0.5 * dz[3]
         self.last_z = z
         self.hits += 1
         self.time_since_update = 0
+
+    def observed_velocity(self) -> tuple[float, float]:
+        """Velocity implied by the last two *observations* (OC-SORT momentum)."""
+        return float(self.mean[4]), float(self.mean[5])
 
     def bbox(self) -> list[float]:
         cx, cy, w, h = self.mean[:4]
@@ -127,6 +147,7 @@ class _FieldKalman:
     path_in: float = 0.0
     origin: np.ndarray | None = None
     last_z: np.ndarray | None = None
+    max_disp_in: float = 0.0
 
     @classmethod
     def from_xy(cls, x: float, y: float, dt: float) -> "_FieldKalman":
@@ -148,6 +169,8 @@ class _FieldKalman:
         self.mean[2] = 0.6 * prev_v[0] + 0.4 * (x - last[0]) / el
         self.mean[3] = 0.6 * prev_v[1] + 0.4 * (y - last[1]) / el
         self.last_z = np.array([x, y], dtype=np.float64)
+        if self.origin is not None:
+            self.max_disp_in = max(self.max_disp_in, float(np.hypot(x - self.origin[0], y - self.origin[1])))
 
     @property
     def speed_in_s(self) -> float:
@@ -174,12 +197,21 @@ class _Track:
     path_px: float = 0.0
     strong_hits: int = 0
     speed_rejects: int = 0
+    max_disp_px: float = 0.0
+    # Last gate measurements (parked-robot rule).
+    footprint_in: float | None = None
+    perimeter: bool = False
+    color_hits: int = 0
+    parked_confirmed: bool = False
 
     def displacement_px(self) -> float:
         if self.origin_px is None:
             return 0.0
         cx, cy = self.kalman.mean[0], self.kalman.mean[1]
         return float(np.hypot(cx - self.origin_px[0], cy - self.origin_px[1]))
+
+    def note_position(self) -> None:
+        self.max_disp_px = max(self.max_disp_px, self.displacement_px())
 
 
 @dataclass
@@ -189,7 +221,10 @@ class MotTracker:
     max_age: int = 15
     min_hits: int = 3
     iou_threshold: float = 0.18
-    max_tracks: int = 8
+    max_tracks: int = 8  # emitted per frame
+    # Internal pool: tentative tracks need room to mature while walls / cubes
+    # / plates also spawn candidates, otherwise real robots get evicted.
+    max_pool: int = 14
     next_id: int = 1000
     tracks: dict[int, _Track] = field(default_factory=dict)
     # BEV association (optional): bbox → field inches, seconds per update.
@@ -210,13 +245,74 @@ class MotTracker:
     require_motion_to_confirm: bool = False
     confirm_min_disp_px: float = 6.0
     confirm_min_disp_in: float = 8.0
+    # Parked-robot rule: a *bumper-derived* box that keeps being seen with a
+    # robot-sized footprint may confirm without ever moving (robots park to
+    # defend, load or climb). Walls fail the footprint test (long strips).
+    parked_confirm_hits: int = 12
+    parked_max_footprint_in: float = 48.0
+    # A "parked robot" that never moves for this long is a field element
+    # (switch / scale plate, lit wall panel): prune it and block respawns
+    # there for the rest of the match.
+    parked_max_static_s: float = 25.0
+    parked_dead_zone_s: float = 150.0
     # Coasting tracks stay alive for max_age steps but are only *emitted* for
     # a few: beyond that the predicted position is speculation.
     max_coast_emit: int = 3
+    # ByteTrack: proposals below ``high_conf`` only extend *recently seen*
+    # tracks (second association stage) and never spawn new ones.
+    bytetrack: bool = True
+    high_conf: float = 0.40
+    low_conf: float = 0.10
+    second_stage_max_gap: int = 3
+    second_stage_cost: float = 1.0
+    # OC-SORT observation-centric momentum weight.
+    ocm_weight: float = 0.3
+    # Association bookkeeping for diagnostics / tests.
+    stage_hits: dict[str, int] = field(default_factory=lambda: {"high": 0, "low": 0, "recovered": 0})
+    # Field positions where a static / in-place track was just pruned: no new
+    # track may *spawn* there for ``dead_zone_s`` (existing tracks may still
+    # drive through). Stops walls and scale plates from respawning forever.
+    dead_zones: list[tuple[float, float, int]] = field(default_factory=list)
+    dead_zone_s: float = 20.0
+    dead_zone_radius_in: float = 18.0
+    _step: int = 0
+    # Positions where parked-confirmed tracks that *never moved* keep dying
+    # and respawning (switch / scale plates, lit panels). After
+    # ``static_memory_hits`` recurrences the spot becomes a long dead zone.
+    static_memory: dict[tuple[int, int], int] = field(default_factory=dict)
+    static_memory_hits: int = 3
+    static_memory_cell_in: float = 16.0
 
     def reset(self) -> None:
         self.tracks = {}
         self.next_id = 1000
+        self.stage_hits = {"high": 0, "low": 0, "recovered": 0}
+        self.dead_zones = []
+        self.static_memory = {}
+        self._step = 0
+
+    def _in_dead_zone(self, xy: tuple[float, float] | None) -> bool:
+        if xy is None or not self.dead_zones:
+            return False
+        r2 = self.dead_zone_radius_in**2
+        return any((xy[0] - zx) ** 2 + (xy[1] - zy) ** 2 <= r2 for zx, zy, _exp in self.dead_zones)
+
+    def _remember_if_static(self, track: _Track) -> None:
+        if track.field is None or not track.parked_confirmed:
+            return
+        if track.max_disp_px >= 1.5 * self.static_min_disp_px or track.field.max_disp_in >= 1.5 * self.static_min_disp_in:
+            return
+        cell = (int(track.field.mean[0] // self.static_memory_cell_in), int(track.field.mean[1] // self.static_memory_cell_in))
+        n = self.static_memory.get(cell, 0) + 1
+        self.static_memory[cell] = n
+        if n >= self.static_memory_hits:
+            self._add_dead_zone(track, seconds=self.parked_dead_zone_s)
+
+    def _add_dead_zone(self, track: _Track, *, seconds: float | None = None) -> None:
+        if track.field is None:
+            return
+        expires = self._step + int(round((seconds or self.dead_zone_s) / max(self.dt_s, 1e-3)))
+        self.dead_zones.append((float(track.field.mean[0]), float(track.field.mean[1]), expires))
 
     # ------------------------------------------------------------------ helpers
     def _field_xy(self, det: Detection) -> tuple[float, float] | None:
@@ -248,6 +344,9 @@ class MotTracker:
         frame_h: int,
         frame_bgr: np.ndarray | None = None,
     ) -> list[Detection]:
+        self._step += 1
+        if self.dead_zones:
+            self.dead_zones = [z for z in self.dead_zones if z[2] > self._step]
         # Predict all live tracks forward one step.
         for track in self.tracks.values():
             track.kalman.predict()
@@ -259,19 +358,29 @@ class MotTracker:
             return []
 
         det_field = [self._field_xy(d) for d in detections]
-        cost = self._cost_matrix(track_ids, detections, det_field, frame_w, frame_h, frame_bgr)
-        matches, unmatched_tracks, unmatched_dets = self._associate(cost, track_ids, detections)
+        matches, unmatched_tracks, unmatched_dets = self._two_stage_associate(
+            track_ids, detections, det_field, frame_w, frame_h, frame_bgr
+        )
 
         for ti, di in matches:
             tid = track_ids[ti]
             det = detections[di]
             track = self.tracks[tid]
             elapsed_steps = max(track.kalman.time_since_update, 1)
+            if elapsed_steps > 1:
+                self.stage_hits["recovered"] += 1
             track.kalman.update(det.bbox)
             track.confidence = max(track.confidence * 0.7, float(det.confidence))
             track.source = det.source or track.source
             if det.source in STRONG_SOURCES:
                 track.strong_hits += 1
+            if det.meta:
+                fp = det.meta.get("footprint_in")
+                if fp is not None:
+                    track.footprint_in = float(fp)
+                track.perimeter = bool(det.meta.get("perimeter", False))
+                if det.source == "color" or "color" in (det.meta.get("agree") or []):
+                    track.color_hits += 1
             if det.alliance in {"red", "blue"}:
                 track.alliance = det.alliance
             if det.team:
@@ -287,6 +396,7 @@ class MotTracker:
             cx, cy = centroid(det.bbox)
             if track.origin_px is None:
                 track.origin_px = (cx, cy)
+            track.note_position()
             if self._can_confirm(track):
                 track.confirmed = True
 
@@ -294,6 +404,7 @@ class MotTracker:
             tid = track_ids[ti]
             track = self.tracks[tid]
             if track.kalman.time_since_update > self.max_age:
+                self._remember_if_static(track)
                 self.tracks.pop(tid, None)
 
         for di in unmatched_dets:
@@ -302,13 +413,21 @@ class MotTracker:
                 det.meta
                 and det.meta.get("static")
                 and det.source not in STRONG_SOURCES
+                and not (det.source == "color" and self._robot_sized(det))
             ):
-                # Static structures never get to start a track.
+                # Static structures never get to start a track. Robot-sized
+                # bumper boxes may (tentatively) — see the parked-robot rule.
                 continue
-            if len(self.tracks) >= self.max_tracks:
+            if self.bytetrack and _proposal_score(det) < self.high_conf:
+                # ByteTrack rule: low-score proposals may extend a track but
+                # never start one (they are mostly fragments and flicker).
+                continue
+            if det.source not in STRONG_SOURCES and self._in_dead_zone(det_field[di]):
+                continue
+            if len(self.tracks) >= self.max_pool:
                 # Drop oldest unmatched tentative track to make room.
                 self._evict_weakest()
-            if len(self.tracks) >= self.max_tracks:
+            if len(self.tracks) >= self.max_pool:
                 break
             hist = _patch_hist(frame_bgr, det.bbox) if frame_bgr is not None else None
             tid = self.next_id
@@ -380,7 +499,28 @@ class MotTracker:
             return True
         if track.displacement_px() >= self.confirm_min_disp_px:
             return True
-        return track.field is not None and track.field.displacement_in() >= self.confirm_min_disp_in
+        if track.field is not None and track.field.displacement_in() >= self.confirm_min_disp_in:
+            return True
+        if self._parked_robot(track):
+            track.parked_confirmed = True
+            return True
+        return False
+
+    def _robot_sized(self, det: Detection) -> bool:
+        fp = det.meta.get("footprint_in") if det.meta else None
+        if fp is None:
+            return False
+        limit = self.parked_max_footprint_in * (0.85 if det.meta.get("perimeter") else 1.25)
+        return float(fp) <= limit
+
+    def _parked_robot(self, track: _Track) -> bool:
+        """Bumper seen for a while, robot-sized footprint, no motion required."""
+        if track.color_hits < self.parked_confirm_hits:
+            return False
+        if track.footprint_in is None:
+            return False
+        limit = self.parked_max_footprint_in * (0.85 if track.perimeter else 1.25)
+        return track.footprint_in <= limit
 
     def _is_moving(self, track: _Track) -> bool:
         if track.field is not None and track.field.displacement_in() >= self.static_min_disp_in:
@@ -392,15 +532,37 @@ class MotTracker:
         for tid, track in list(self.tracks.items()):
             if track.strong_hits > 0:
                 continue
+            if track.parked_confirmed and self._parked_robot(track) and track.kalman.time_since_update == 0:
+                never_moved = (
+                    track.max_disp_px < 1.5 * self.static_min_disp_px
+                    and (track.field is None or track.field.max_disp_in < 1.5 * self.static_min_disp_in)
+                )
+                if never_moved and track.kalman.hits * self.dt_s >= self.parked_max_static_s:
+                    self._add_dead_zone(track, seconds=self.parked_dead_zone_s)
+                    self.tracks.pop(tid, None)
+                continue
             if track.kalman.hits < self.static_after_hits:
                 continue
-            disp_px = track.displacement_px()
-            disp_in = track.field.displacement_in() if track.field is not None else None
-            path_in = track.field.path_in if track.field is not None else 0.0
+            # Max excursion from the birth point: a robot that drove away and
+            # came back has a large one; a scale / switch plate wiggling in
+            # place (lots of path, no excursion) does not.
+            disp_px = max(track.displacement_px(), track.max_disp_px)
+            disp_in = track.field.max_disp_in if track.field is not None else None
             static_px = disp_px < self.static_min_disp_px
             static_in = disp_in is not None and disp_in < self.static_min_disp_in
-            wandered = path_in >= 4.0 * self.static_min_disp_in
-            if static_px and (disp_in is None or static_in) and not wandered:
+            if static_px and (disp_in is None or static_in):
+                self._add_dead_zone(track)
+                self.tracks.pop(tid, None)
+                continue
+            # In-place movers: hits pile up while the excursion stays tiny
+            # relative to how much the box has jittered around.
+            if (
+                track.field is not None
+                and track.kalman.hits >= 2 * self.static_after_hits
+                and track.field.max_disp_in < 2.0 * self.static_min_disp_in
+                and track.field.path_in > 6.0 * track.field.max_disp_in + 1.0
+            ):
+                self._add_dead_zone(track)
                 self.tracks.pop(tid, None)
 
     def _nms(self, dets: list[Detection]) -> list[Detection]:
@@ -469,6 +631,18 @@ class MotTracker:
                     # (rather than overrides) IoU and alliance cues.
                     c += 0.4 * min(fd / self.field_scale_in, 1.5)
 
+                # OC-SORT observation-centric momentum: the direction from the
+                # track's *last observation* to this proposal should agree
+                # with the direction the track was observed moving.
+                last_z = track.kalman.last_z
+                if last_z is not None and self.ocm_weight > 0 and np.hypot(tvx, tvy) > 1.5:
+                    ox, oy = dcx - float(last_z[0]), dcy - float(last_z[1])
+                    on = float(np.hypot(ox, oy))
+                    if on > 3.0:
+                        cosang = (ox * tvx + oy * tvy) / (on * np.hypot(tvx, tvy) + 1e-6)
+                        # 0 when aligned, up to ocm_weight when reversed.
+                        c += self.ocm_weight * float(np.clip((1.0 - cosang) * 0.5, 0.0, 1.0))
+
                 # Flow-direction consistency: a proposal drifting against the
                 # track's velocity is a different object passing by.
                 flow = det.meta.get("flow") if det.meta else None
@@ -481,11 +655,62 @@ class MotTracker:
                 cost[i, j] = c
         return cost
 
+    def _two_stage_associate(
+        self,
+        track_ids: list[int],
+        detections: list[Detection],
+        det_field: list[tuple[float, float] | None],
+        frame_w: int,
+        frame_h: int,
+        frame_bgr: np.ndarray | None,
+    ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+        """ByteTrack association: high-score boxes first, then leftovers."""
+        if not self.bytetrack:
+            cost = self._cost_matrix(track_ids, detections, det_field, frame_w, frame_h, frame_bgr)
+            return self._associate(cost, track_ids, detections)
+
+        def score(d: Detection) -> float:
+            return _proposal_score(d)
+
+        high = [j for j, d in enumerate(detections) if score(d) >= self.high_conf]
+        low = [j for j, d in enumerate(detections) if self.low_conf <= score(d) < self.high_conf]
+        dropped = [j for j, d in enumerate(detections) if score(d) < self.low_conf]
+
+        # Stage 1: every live track vs high-confidence proposals.
+        cost_hi = self._cost_matrix(track_ids, [detections[j] for j in high], [det_field[j] for j in high], frame_w, frame_h, frame_bgr)
+        m1, ut1, ud1 = self._associate(cost_hi, track_ids, [detections[j] for j in high])
+        matches = [(ti, high[dj]) for ti, dj in m1]
+        self.stage_hits["high"] += len(m1)
+        unmatched_dets = [high[dj] for dj in ud1]
+
+        # Stage 2: tracks that were seen very recently vs low-confidence
+        # proposals. Older (long-coasting) tracks are excluded: a weak blob
+        # near a stale prediction is more likely a different object.
+        stage2_tracks = [
+            ti for ti in ut1 if self.tracks[track_ids[ti]].kalman.time_since_update <= self.second_stage_max_gap
+        ]
+        remaining_tracks = [ti for ti in ut1 if ti not in stage2_tracks]
+        if stage2_tracks and low:
+            ids2 = [track_ids[ti] for ti in stage2_tracks]
+            cost_lo = self._cost_matrix(ids2, [detections[j] for j in low], [det_field[j] for j in low], frame_w, frame_h, frame_bgr)
+            m2, ut2, _ud2 = self._associate(cost_lo, ids2, [detections[j] for j in low], max_cost=self.second_stage_cost)
+            for ti2, dj in m2:
+                matches.append((stage2_tracks[ti2], low[dj]))
+            self.stage_hits["low"] += len(m2)
+            remaining_tracks += [stage2_tracks[ti2] for ti2 in ut2]
+        else:
+            remaining_tracks += stage2_tracks
+        # Unmatched low / dropped proposals are discarded (never spawn).
+        _ = dropped
+        return matches, sorted(remaining_tracks), unmatched_dets
+
     def _associate(
         self,
         cost: np.ndarray,
         track_ids: list[int],
         detections: list[Detection],
+        *,
+        max_cost: float = 1.35,
     ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
         from ramscout.identity import linear_assignment
 
@@ -498,7 +723,7 @@ class MotTracker:
         for ti, di in pairs:
             if ti >= cost.shape[0] or di >= cost.shape[1]:
                 continue
-            if cost[ti, di] > 1.35:
+            if cost[ti, di] > max_cost:
                 continue
             matches.append((ti, di))
             used_t.add(ti)
@@ -516,6 +741,21 @@ class MotTracker:
         )
         if not weakest.confirmed or weakest.kalman.time_since_update > 4:
             self.tracks.pop(weakest.track_id, None)
+
+
+def _proposal_score(det: Detection) -> float:
+    """Detector score used for ByteTrack tiering.
+
+    Strong (YOLO / cloud) boxes are always high tier. Local proposals use the
+    detector's own confidence *before* field-gate penalties (stored by the
+    gate as ``meta["raw_confidence"]``) so a robot parked against its
+    alliance wall is not demoted to the low tier by the perimeter penalty.
+    """
+    if det.source in STRONG_SOURCES:
+        return 1.0
+    if det.meta and det.meta.get("raw_confidence") is not None:
+        return float(det.meta["raw_confidence"])
+    return float(det.confidence)
 
 
 def _patch_hist(frame_bgr: np.ndarray, bbox: list[float]) -> np.ndarray | None:

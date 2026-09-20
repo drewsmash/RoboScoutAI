@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import drop_nested_boxes, plausible_robot_size
+from ramscout.trackers.utils import apply_field_mask, drop_nested_boxes, plausible_robot_size
 
 
 class MotionTracker:
@@ -74,6 +74,7 @@ class MotionTracker:
 
         self.prev_gray = gray
         self.warm_frames += 1
+        mask = apply_field_mask(mask, ctx)
 
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)

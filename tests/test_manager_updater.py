@@ -392,3 +392,121 @@ def test_releases_channel_uses_api_asset_url_with_token():
     chan.read_manifest()
     assert seen["https://api/assets/1"]["Accept"] == "application/octet-stream"
     assert seen["https://api/assets/1"]["Authorization"] == "Bearer tok"
+
+
+def test_download_artifact_falls_back_to_url_then_releases(tmp_path):
+    payload = b"APP-FROM-RELEASES" * 20
+    from roboscout_manager.manifest import Artifact
+
+    art = Artifact(
+        name="RoboScoutAI-app-windows-x64.exe",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size=len(payload),
+        kind="app",
+        platform="windows-x64",
+        url="https://example.invalid/missing.exe",
+    )
+
+    class BrokenGit:
+        name = "git"
+
+        def download(self, name, dest, progress=lambda *_a: None, *, expected_size=0):
+            raise updater.ChannelError("blob too large / missing")
+
+    class FakeRel:
+        name = "releases"
+
+        def __init__(self, repo, tag):
+            self.repo = repo
+            self.tag = tag
+            self.fetched = False
+
+        def fetch(self):
+            self.fetched = True
+            return "abc"
+
+        def download(self, name, dest, progress=lambda *_a: None, *, expected_size=0):
+            assert self.fetched and name == art.name
+            Path(dest).write_bytes(payload)
+            return Path(dest)
+
+    # URL fails, Releases succeeds.
+    out = tmp_path / "app.exe"
+    path = updater.download_artifact(
+        BrokenGit(),
+        art,
+        out,
+        github_repo="drewsmash/RoboScoutAI",
+        release_tag="0.6.2",
+        releases_factory=lambda repo, tag: FakeRel(repo, tag),
+    )
+    assert path.read_bytes() == payload
+
+    # Direct URL succeeds without touching Releases.
+    good = Artifact(
+        name=art.name,
+        sha256=art.sha256,
+        size=art.size,
+        kind="app",
+        url="https://cdn.example/app.exe",
+    )
+    seen = {}
+
+    def fake_http(url, dest, *, headers=None, progress=None, timeout=0):
+        seen["url"] = url
+        Path(dest).write_bytes(payload)
+        return Path(dest)
+
+    monkey_out = tmp_path / "via-url.exe"
+    import roboscout_manager.updater as U
+
+    original = U.http_download
+    U.http_download = fake_http
+    try:
+        updater.download_artifact(BrokenGit(), good, monkey_out, github_repo="x/y", release_tag="0.6.2")
+    finally:
+        U.http_download = original
+    assert seen["url"] == "https://cdn.example/app.exe"
+    assert monkey_out.read_bytes() == payload
+
+
+def test_perform_update_uses_releases_when_git_blob_missing(root, tmp_path, monkeypatch):
+    _install(root, tmp_path, "0.6.0")
+    payload = b"NEWAPP" * 40
+    files = {
+        "RoboScoutAI-app-windows-x64.exe": payload,
+        "RoboScoutAI.exe": b"MGR" * 10,
+    }
+    # Manifest lists the app, but the git channel has no blob for it.
+    app = tmp_path / "RoboScoutAI-app-windows-x64.exe"
+    app.write_bytes(payload)
+    mgr = tmp_path / "RoboScoutAI.exe"
+    mgr.write_bytes(files["RoboScoutAI.exe"])
+    manifest = build_manifest([app, mgr], version="0.6.2", channel="main", min_manager_version="0.6.0")
+    git = FakeChannel(manifest, {"RoboScoutAI.exe": files["RoboScoutAI.exe"]})  # no app blob
+
+    class Rel:
+        name = "releases"
+
+        def __init__(self, *a, **k):
+            pass
+
+        def fetch(self):
+            return "sha"
+
+        def download(self, name, dest, progress=lambda *_a: None, *, expected_size=0):
+            Path(dest).write_bytes(payload)
+            return Path(dest)
+
+    monkeypatch.setattr(
+        updater,
+        "download_artifact",
+        lambda channel, artifact, dest, **kw: (
+            Path(dest).write_bytes(payload) or Path(dest)
+        ),
+    )
+    check = updater.check_for_update(root, git_factory=lambda c, r: git)
+    assert check.available and check.latest_version == "0.6.2"
+    result = updater.perform_update(root, check)
+    assert result.ok and result.installed_version == "0.6.2"
+    assert state.app_exe_path(root, "0.6.2").read_bytes() == payload

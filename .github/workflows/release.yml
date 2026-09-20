@@ -303,17 +303,69 @@ jobs:
             git checkout -B "$CHANNEL" "$RELEASE_SHA"
           fi
           mkdir -p release-artifacts
-          cp channel-payload/manifest.json release-artifacts/manifest.json
-          cp channel-payload/RoboScoutAI.exe release-artifacts/RoboScoutAI.exe
-          cp channel-payload/RoboScoutAI-app-windows-x64.exe release-artifacts/RoboScoutAI-app-windows-x64.exe
-          # Legacy asset name: 0.5.x in-app updaters download this and run it from
-          # %LOCALAPPDATA%\RoboScoutAI\RoboScoutAI.exe — which is exactly the manager, so
-          # shipping the manager here migrates old installs onto the new layout.
-          cp channel-payload/RoboScoutAI.exe release-artifacts/RoboScoutAI-windows-x64.exe
+          # GitHub rejects blobs > 100 MB. Keep the thin manager (+ legacy name) on the
+          # channel; point oversized app/Setup builds at the matching GitHub Release URL.
+          export GIT_BLOB_LIMIT=95000000
+          python3 <<'PY'
+          import json, os, pathlib, shutil, subprocess
+
+          tag = os.environ["TAG"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          limit = int(os.environ.get("GIT_BLOB_LIMIT", "95000000"))
+          src = pathlib.Path("channel-payload")
+          dest = pathlib.Path("release-artifacts")
+          dest.mkdir(parents=True, exist_ok=True)
+
+          manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+          for name, art in list(manifest.get("artifacts", {}).items()):
+              path = src / name
+              size = int(art.get("size") or (path.stat().st_size if path.is_file() else 0))
+              art["size"] = size
+              use_url = (not path.is_file()) or size > limit or name.endswith("-Setup.exe")
+              if use_url:
+                  art["url"] = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+                  print(f"channel: {name} -> Release URL ({size} bytes)")
+              else:
+                  shutil.copy2(path, dest / name)
+                  art.pop("url", None)
+                  print(f"channel: {name} -> git blob ({size} bytes)")
+              manifest["artifacts"][name] = art
+
+          mgr = src / "RoboScoutAI.exe"
+          if mgr.is_file():
+              shutil.copy2(mgr, dest / "RoboScoutAI.exe")
+              # Legacy 0.5.x in-app updaters download this name and run it as RoboScoutAI.exe.
+              shutil.copy2(mgr, dest / "RoboScoutAI-windows-x64.exe")
+
+          (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          for stale in ("RoboScoutAI-app-windows-x64.exe", "RoboScoutAI-Setup.exe"):
+              stale_path = dest / stale
+              if stale_path.exists():
+                  print(f"removing {stale} from channel tree (hosted on Releases)")
+                  stale_path.unlink(missing_ok=True)
+                  subprocess.run(
+                      ["git", "rm", "-f", "--ignore-unmatch", f"release-artifacts/{stale}"],
+                      check=False,
+                  )
+          PY
           echo "$RELEASE_SHA" > release-artifacts/UPDATE.txt
+          git rm -f --ignore-unmatch release-artifacts/RoboScoutAI-app-windows-x64.exe \
+            release-artifacts/RoboScoutAI-Setup.exe || true
           git add -f release-artifacts/manifest.json release-artifacts/RoboScoutAI.exe \
-            release-artifacts/RoboScoutAI-app-windows-x64.exe release-artifacts/RoboScoutAI-windows-x64.exe \
-            release-artifacts/UPDATE.txt
+            release-artifacts/RoboScoutAI-windows-x64.exe release-artifacts/UPDATE.txt
+          # Stage any other small artifacts that remain under the limit.
+          for f in release-artifacts/*; do
+            [[ -f "$f" ]] || continue
+            base="$(basename "$f")"
+            case "$base" in
+              RoboScoutAI-app-windows-x64.exe|RoboScoutAI-Setup.exe) continue ;;
+            esac
+            size=$(wc -c < "$f" | tr -d ' ')
+            if (( size <= GIT_BLOB_LIMIT )); then
+              git add -f "$f"
+            fi
+          done
           if git diff --cached --quiet; then
             echo "channel already up to date"
           else

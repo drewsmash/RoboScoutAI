@@ -96,7 +96,7 @@ function loadTbaKey() {
   const openai = storageGet("openaiKey", "") || "";
   const google = storageGet("googleKey", "") || "";
   const gateway = storageGet("aiGatewayKey", "") || "";
-  const mode = storageGet("trackerMode", "") || (google ? "gemini" : "hybrid");
+  const mode = storageGet("trackerMode", "") || "auto";
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("ai-gateway-key")) $("ai-gateway-key").value = gateway;
@@ -123,7 +123,7 @@ function saveScoutKeys() {
 
 function trackerPayload() {
   return {
-    tracker_mode: $("tracker-mode")?.value || "hybrid",
+    tracker_mode: $("tracker-mode")?.value || "auto",
     auto_multicam: $("auto-multicam")?.checked !== false,
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
@@ -240,7 +240,7 @@ async function createJob(payload) {
     form.append("match_key", payload.match_key || "");
     form.append("crop_top", String(payload.crop_top ?? 0.1));
     form.append("crop_bottom", String(payload.crop_bottom ?? 0.65));
-    form.append("tracker_mode", payload.tracker_mode || "hybrid");
+    form.append("tracker_mode", payload.tracker_mode || "auto");
     form.append("openai_key", payload.openai_key || "");
     form.append("google_key", payload.google_key || "");
     form.append("ai_gateway_key", payload.ai_gateway_key || "");
@@ -619,43 +619,81 @@ function renderViews(job) {
   panel.hidden = false;
   if (lede) {
     const mode = job.views?.mode || job.camera?.mode || "single";
-    lede.textContent =
+    const detail = job.views?.detail || job.camera?.detail || "";
+    const base =
       mode === "stacked_sides"
         ? "Top wide-angle for movement · bottom-left blue scoring/climb · bottom-right red scoring/climb."
         : mode === "stacked_top"
           ? "Top wide-angle for the top-down map · lower pane for scoring & climb cues."
-          : "Single overview camera — BEV adjusts for camera angle on the field map.";
+          : mode === "side_by_side" || mode === "grid"
+            ? "Multi-pane broadcast — only the overview pane feeds the field map; side panes feed scoring cues."
+            : "Single overview camera — BEV adjusts for camera angle on the field map.";
+    lede.textContent = detail ? `${base} ${detail}` : base;
   }
   const roleTitle = {
     overview: "Overview",
+    overview_alt: "Overview (alt angle)",
     blue_side: "Blue side",
     red_side: "Red side",
     sideline: "Sideline",
+    graphics: "Graphics / scorebug",
+    other: "Other",
   };
+  const frameUrl = job.has_frame ? `/api/jobs/${job.id}/frame?ts=${job.status === "ready" ? "r" : Date.now()}` : "";
   grid.innerHTML = panes
     .map((pane) => {
       const role = pane.role || "overview";
+      const x0 = Number(pane.crop_left ?? 0);
+      const x1 = Number(pane.crop_right ?? 1);
+      const y0 = Number(pane.crop_top ?? 0);
+      const y1 = Number(pane.crop_bottom ?? 1);
       const crop =
-        `${Math.round((pane.crop_top || 0) * 100)}–${Math.round((pane.crop_bottom || 1) * 100)}%` +
-        (pane.crop_left != null || pane.crop_right != null
-          ? ` · x ${Math.round((pane.crop_left || 0) * 100)}–${Math.round((pane.crop_right ?? 1) * 100)}%`
-          : "");
+        `y ${Math.round(y0 * 100)}–${Math.round(y1 * 100)}% · x ${Math.round(x0 * 100)}–${Math.round(x1 * 100)}%`;
+      const conf = pane.confidence != null ? `${Math.round(Number(pane.confidence) * 100)}%` : "";
+      // Show the actual pane pixels: the calibration frame, CSS-cropped to
+      // this pane's box (background-size scales the full frame so the box
+      // fills the thumbnail).
+      const w = Math.max(x1 - x0, 0.02);
+      const h = Math.max(y1 - y0, 0.02);
+      const thumb = frameUrl
+        ? `<div class="view-thumb" style="aspect-ratio:${(16 * w) / (9 * h)};background-image:url('${frameUrl}');background-size:${(100 / w).toFixed(2)}% ${(100 / h).toFixed(2)}%;background-position:${((x0 / (1 - w)) * 100 || 0).toFixed(2)}% ${((y0 / (1 - h)) * 100 || 0).toFixed(2)}%;"></div>`
+        : "";
+      const bug = pane.scorebug ? `<span class="chip ghost tiny">scorebug inside</span>` : "";
       return `<article class="view-card ${role}">
-        <div class="view-role">${roleTitle[role] || role}</div>
+        ${thumb}
+        <div class="view-role">${roleTitle[role] || role}${conf ? ` <span class="view-conf">${conf}</span>` : ""}</div>
         <div class="view-purpose">${pane.purpose || ""}</div>
-        <div class="view-crop">${crop}</div>
+        <div class="view-crop">${crop} ${bug}</div>
       </article>`;
     })
     .join("");
   if (bevMeta) {
+    const bits = [];
     if (hasBev) {
-      bevMeta.hidden = false;
-      const bits = [];
       if (job.bev.depth_source) bits.push(`Depth: ${job.bev.depth_source}`);
+      if (job.bev.method) bits.push(`Homography: ${String(job.bev.method).replaceAll("_", " ")}`);
       if (job.bev.pitch_deg != null) bits.push(`Camera pitch ≈ ${Math.round(job.bev.pitch_deg)}°`);
       if (job.bev.tilt_strength != null) bits.push(`Tilt ${Number(job.bev.tilt_strength).toFixed(2)}`);
-      if (job.side_cues?.length) bits.push(`${job.side_cues.length} side cues`);
-      bevMeta.innerHTML = bits.map((b) => `<span class="chip ghost">${b}</span>`).join("");
+      if (job.bev.orientation && job.bev.orientation.blue_left === false) bits.push("Blue wall on the right (mirrored)");
+    }
+    if (job.depth_backends?.active) bits.push(`Depth backend: ${job.depth_backends.active}`);
+    const missing = job.depth_backends?.missing || {};
+    for (const [backend, mods] of Object.entries(missing)) {
+      if (mods && mods.length) bits.push(`${backend} unavailable (missing ${mods.join(", ")})`);
+    }
+    const views = job.views || {};
+    if (views.method === "decomposition") bits.push(`Layout: ${views.mode} (${Math.round((views.confidence || 0) * 100)}%)`);
+    if (views.timeline?.length > 1) bits.push(`${views.timeline.length - 1} layout switch(es)`);
+    if (job.gaps?.length) bits.push(`${job.gaps.length} overview gap(s)`);
+    const sel = job.tracker_selection;
+    if (sel?.chosen) {
+      const ranking = (sel.ranking || []).slice(0, 4).map((m) => `${m} ${Number(sel.scores?.[m]?.total ?? 0).toFixed(2)}`);
+      bits.push(`Auto picked ${sel.chosen} (${ranking.join(" · ")})`);
+    }
+    if (job.side_cues?.length) bits.push(`${job.side_cues.length} side cues`);
+    if (bits.length) {
+      bevMeta.hidden = false;
+      bevMeta.innerHTML = bits.map((b) => `<span class="chip ghost">${escapeHtml(b)}</span>`).join("");
     } else {
       bevMeta.hidden = true;
       bevMeta.innerHTML = "";
@@ -1059,6 +1097,46 @@ function escapeHtml(value) {
 }
 
 loadTbaKey();
+
+async function loadTrackerAvailability() {
+  const select = $("tracker-mode");
+  const note = $("tracker-availability");
+  if (!select) return;
+  try {
+    const res = await fetch("/api/trackers");
+    if (!res.ok) return;
+    const data = await res.json();
+    const byId = Object.fromEntries((data.modes || []).map((m) => [m.id, m]));
+    const known = new Set([...select.options].map((o) => o.value));
+    for (const mode of data.modes || []) {
+      if (!known.has(mode.id)) {
+        const opt = document.createElement("option");
+        opt.value = mode.id;
+        select.appendChild(opt);
+      }
+    }
+    for (const opt of select.options) {
+      const mode = byId[opt.value];
+      if (!mode) continue;
+      let label = mode.label;
+      if (mode.status === "fallback") label += ` · needs ${mode.missing.join("/")} → OpenCV fallback`;
+      else if (mode.status === "partial") label += ` · without ${mode.missing.join("/")}`;
+      else if (opt.value !== "auto" && opt.value !== "potato") label += " · ready";
+      opt.textContent = label;
+      opt.title = mode.description || "";
+    }
+    const strategies = (data.strategies || []).map((s) => `${s.name}${s.available ? " ✓" : " ✗"}`);
+    const depth = data.depth?.active ? `depth: ${data.depth.active}` : "";
+    if (note) {
+      note.hidden = false;
+      note.textContent = `Available on this machine: ${strategies.join(", ")}${depth ? ` · ${depth}` : ""}.`;
+    }
+  } catch (_err) {
+    /* offline UI still works with the static list */
+  }
+}
+loadTrackerAvailability();
+
 fetch("/api/game").then((res) => res.json()).then(applyGame).catch(() => applyGame({
   year: 2026,
   name: "REBUILT",

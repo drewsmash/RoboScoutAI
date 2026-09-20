@@ -27,6 +27,10 @@ class BevCalibration:
     depth_source: str
     detail: str
     used_depth: bool = True
+    # Field-line refinement (ramscout.fieldlines): carpet quad + orientation.
+    field_quad: dict[str, Any] | None = None
+    orientation: dict[str, Any] | None = None
+    method: str = "depth_trapezoid"  # depth_trapezoid | field_quad | field_quad+depth
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,40 +41,113 @@ def calibrate_bev(
     *,
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
+    crop_left: float = 0.0,
+    crop_right: float = 1.0,
     prefer_neural: bool = True,
     base_norm: Sequence[Sequence[float]] | None = None,
+    field_lines: bool = True,
+    extra_frames: Sequence[np.ndarray] | None = None,
+    motion_mask: np.ndarray | None = None,
+    min_quad_confidence: float = 0.55,
 ) -> tuple[BevCalibration, DepthResult]:
-    """Build BEV source corners from a calibration frame + depth estimate."""
+    """Build BEV source corners from a calibration frame + depth estimate.
+
+    Steps: (1) depth → camera pitch → tilt-adjusted trapezoid; (2) when
+    ``field_lines`` is on, the carpet boundary quad from
+    :mod:`ramscout.fieldlines` replaces the trapezoid if it is confident and
+    geometrically consistent with the depth pitch, and the alliance
+    orientation cue mirrors the corners so ``x = 0`` is the blue wall.
+    ``extra_frames`` (same size as ``frame_bgr``) make the carpet median robust
+    to robots; ``motion_mask`` is pane-sized (non-zero where robots drove).
+    """
     h, w = frame_bgr.shape[:2]
     y0 = int(h * crop_top)
     y1 = int(h * crop_bottom)
     y0 = max(0, min(y0, h - 2))
     y1 = max(y0 + 1, min(y1, h))
-    crop = frame_bgr[y0:y1, :]
+    x0 = int(np.clip(round(w * crop_left), 0, w - 2))
+    x1 = int(np.clip(round(w * crop_right), x0 + 2, w))
+    crop = frame_bgr[y0:y1, x0:x1]
     depth_result = estimate_depth(crop, prefer_neural=prefer_neural)
 
     norm = _tilt_adjusted_norm(base_norm or DEFAULT_SRC_NORM, depth_result.tilt_strength, depth_result.pitch_deg)
     crop_h = float(max(y1 - y0, 1))
+    crop_w = float(max(x1 - x0, 1))
     pts: list[list[float]] = []
     for nx, ny in norm:
-        pts.append([float(nx) * w, float(y0) + float(ny) * crop_h])
+        pts.append([float(x0) + float(nx) * crop_w, float(y0) + float(ny) * crop_h])
 
     # Optional: nudge left/right bottom corners using depth symmetry so a
     # slightly skewed camera still lands blue-left / red-right cleanly.
     pts = _nudge_from_depth_edges(pts, depth_result.depth, y0)
+
+    detail = (
+        f"BEV from {depth_result.source}: pitch≈{depth_result.pitch_deg:.0f}°, "
+        f"tilt={depth_result.tilt_strength:.2f}. {depth_result.detail}"
+    )
+    quad_info: dict[str, Any] | None = None
+    orient_info: dict[str, Any] | None = None
+    method = "depth_trapezoid"
+    if field_lines:
+        try:
+            from ramscout.fieldlines import alliance_orientation, detect_field_quad, orient_corners
+
+            pane_frames = [crop]
+            for extra in extra_frames or []:
+                if extra is not None and extra.shape[:2] == frame_bgr.shape[:2]:
+                    pane_frames.append(extra[y0:y1, x0:x1])
+            quad = detect_field_quad(pane_frames, motion_mask=motion_mask)
+            cue = alliance_orientation(pane_frames, quad)
+            orient_info = cue.as_dict()
+            if quad is not None:
+                quad_info = quad.as_dict()
+                quad_pts = [[float(x0) + c[0], float(y0) + c[1]] for c in quad.corners]
+                if quad.confidence >= min_quad_confidence and _quad_agrees_with_depth(quad.corners, crop_w, crop_h, depth_result.pitch_deg):
+                    pts = quad_pts
+                    method = "field_quad"
+                    detail += f" Homography from carpet boundary (conf {quad.confidence:.2f})."
+                elif quad.confidence >= 0.4:
+                    # Blend: keep the depth trapezoid's shape but centre/scale
+                    # it on the carpet quad's extent.
+                    pts = _blend_quads(pts, quad_pts, 0.5)
+                    method = "field_quad+depth"
+                    detail += f" Depth trapezoid nudged toward carpet boundary (conf {quad.confidence:.2f})."
+            if cue.confidence >= 0.25:
+                pts = orient_corners(pts, cue.blue_left)
+                if not cue.blue_left:
+                    detail += " Blue alliance wall on the right → homography mirrored."
+        except Exception as exc:  # noqa: BLE001
+            detail += f" Field-line refinement skipped ({exc})."
 
     cal = BevCalibration(
         src_points=[[round(p[0], 2), round(p[1], 2)] for p in pts],
         pitch_deg=depth_result.pitch_deg,
         tilt_strength=depth_result.tilt_strength,
         depth_source=depth_result.source,
-        detail=(
-            f"BEV from {depth_result.source}: pitch≈{depth_result.pitch_deg:.0f}°, "
-            f"tilt={depth_result.tilt_strength:.2f}. {depth_result.detail}"
-        ),
+        detail=detail,
         used_depth=True,
+        field_quad=quad_info,
+        orientation=orient_info,
+        method=method,
     )
     return cal, depth_result
+
+
+def _quad_agrees_with_depth(corners: Sequence[Sequence[float]], crop_w: float, crop_h: float, pitch_deg: float) -> bool:
+    """A carpet quad is trusted only when its perspective matches the pitch."""
+    tl, tr, br, bl = corners
+    top_w = abs(tr[0] - tl[0])
+    bot_w = abs(br[0] - bl[0])
+    if top_w < 0.25 * crop_w or bot_w < 0.25 * crop_w:
+        return False
+    persp = bot_w / max(top_w, 1.0)
+    # Steep camera → near-orthographic (ratio ~1); flat camera → strong taper.
+    expected = 1.0 + max(0.0, (60.0 - float(pitch_deg)) / 60.0) * 1.2
+    return abs(persp - expected) <= 0.9 and persp >= 0.8
+
+
+def _blend_quads(a: list[list[float]], b: list[list[float]], t: float) -> list[list[float]]:
+    return [[(1 - t) * pa[0] + t * pb[0], (1 - t) * pa[1] + t * pb[1]] for pa, pb in zip(a, b)]
 
 
 def project_detections_bev(
