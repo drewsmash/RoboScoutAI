@@ -39,6 +39,8 @@ def test_missing_pil_falls_back_to_classical(monkeypatch, caplog):
 
     monkeypatch.setattr(depth_mod, "_PIPE", None)
     monkeypatch.setattr(depth_mod, "_PIPE_FAILED", False)
+    # Exercise the torch path: pretend the ONNX backend is not present.
+    monkeypatch.setattr(depth_mod, "_get_onnx_session", lambda: None)
 
     real_import = builtins.__import__
 
@@ -136,3 +138,97 @@ def test_thin_cues_keeps_best_per_window():
     thin = _thin_cues(cues, window_s=2.0)
     assert len(thin) == 2
     assert thin[0].confidence == 0.9
+
+
+# --------------------------------------------------------------- backend chain
+
+
+def _no_download(monkeypatch):
+    import ramscout.depth as depth_mod
+
+    monkeypatch.setenv("ROBOSCOUT_NO_DOWNLOAD", "1")
+    depth_mod.reset_backends()
+    return depth_mod
+
+
+def test_depth_backends_reports_missing_modules(monkeypatch):
+    import builtins
+
+    depth_mod = _no_download(monkeypatch)
+    real_import = builtins.__import__
+
+    def _block(name, *args, **kwargs):
+        if name in {"onnxruntime", "transformers", "torch"}:
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block)
+    status = depth_mod.depth_backends()
+    assert status["backends"]["onnx"]["importable"] is False
+    assert "onnxruntime" in status["backends"]["onnx"]["missing"]
+    assert status["backends"]["torch"]["importable"] is False
+    assert "torch" in status["backends"]["torch"]["missing"] or "transformers" in status["backends"]["torch"]["missing"]
+    assert status["backends"]["classical"]["importable"] is True
+    assert status["preferred_order"] == ["onnx", "torch", "classical"]
+
+
+def test_onnx_backend_used_when_session_available(monkeypatch, tmp_path):
+    depth_mod = _no_download(monkeypatch)
+
+    class _Sess:
+        def run(self, _names, feeds):
+            x = feeds["pixel_values"]
+            assert x.shape == (1, 3, 518, 518)
+            # Fake "closer at the bottom" depth ramp.
+            ramp = np.linspace(0.0, 1.0, 518, dtype=np.float32).reshape(1, 518, 1)
+            return [np.repeat(ramp, 518, axis=2)]
+
+    monkeypatch.setattr(depth_mod, "_get_onnx_session", lambda: _Sess())
+    result = depth_mod.estimate_depth(_fieldish_frame(120, 200), prefer_neural=True)
+    assert result.source == "depth_anything_v2_onnx"
+    assert result.neural is True
+    assert result.depth.shape == (120, 200)
+    assert result.depth.min() >= 0.0 and result.depth.max() <= 1.0
+    assert depth_mod.active_backend() == "onnx"
+    # Bottom rows closer → tilt should be substantial.
+    assert result.tilt_strength > 0.3
+
+
+def test_onnx_failure_falls_through_to_torch_then_classical(monkeypatch):
+    depth_mod = _no_download(monkeypatch)
+    monkeypatch.setattr(depth_mod, "_get_onnx_session", lambda: None)
+    calls = {"torch": 0}
+
+    def _fake_torch(frame):
+        calls["torch"] += 1
+        return None
+
+    monkeypatch.setattr(depth_mod, "_try_depth_anything", _fake_torch)
+    result = depth_mod.estimate_depth(_fieldish_frame(), prefer_neural=True)
+    assert calls["torch"] == 1
+    assert result.source == "classical"
+    assert depth_mod.active_backend() == "classical"
+
+
+def test_torch_backend_used_when_onnx_unavailable(monkeypatch):
+    depth_mod = _no_download(monkeypatch)
+    monkeypatch.setattr(depth_mod, "_get_onnx_session", lambda: None)
+
+    def _fake_torch(frame):
+        h, w = frame.shape[:2]
+        return np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(h, 1).repeat(w, axis=1)
+
+    monkeypatch.setattr(depth_mod, "_try_depth_anything", _fake_torch)
+    result = depth_mod.estimate_depth(_fieldish_frame(), prefer_neural=True)
+    assert result.source == "depth_anything_v2"
+    assert depth_mod.active_backend() == "torch"
+
+
+def test_ensure_onnx_model_respects_no_download(monkeypatch, tmp_path):
+    depth_mod = _no_download(monkeypatch)
+    monkeypatch.setenv("ROBOSCOUT_MODELS", str(tmp_path))
+    assert depth_mod.onnx_model_cached() is False
+    assert depth_mod.ensure_onnx_model() is None
+    # A too-small (corrupt) cached file is not accepted either.
+    (tmp_path / "depth-anything-v2-small.onnx").write_bytes(b"x" * 100)
+    assert depth_mod.onnx_model_cached() is False

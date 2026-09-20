@@ -21,6 +21,7 @@ from ramscout.gameconfig import public_game
 from ramscout.geometry import default_source_points, reproject_samples
 from ramscout.identity import (
     assign_by_start,
+    assemble_lanes,
     balance_alliances,
     keep_top_tracks,
     majority_alliance,
@@ -81,7 +82,7 @@ class Job:
     crop_bottom: float = 0.65
     user_calibrated: bool = False
     seeds: list[dict[str, Any]] = field(default_factory=list)
-    tracker_mode: str = "hybrid"
+    tracker_mode: str = "auto"
     openai_key: str = ""
     google_key: str = ""
     ai_gateway_key: str = ""
@@ -90,6 +91,13 @@ class Job:
     camera: dict[str, Any] = field(default_factory=dict)
     views: dict[str, Any] = field(default_factory=dict)
     bev: dict[str, Any] = field(default_factory=dict)
+    # Auto-mode benchmark result (chosen mode + per-candidate scores).
+    tracker_selection: dict[str, Any] | None = None
+    # Which depth backend (onnx / torch / classical) is active + what is missing.
+    depth_backends: dict[str, Any] | None = None
+    # Overview-camera gaps and layout switches from the broadcast timeline.
+    gaps: list[dict[str, Any]] = field(default_factory=list)
+    layout_switches: list[dict[str, Any]] = field(default_factory=list)
     side_cues: list[dict[str, Any]] = field(default_factory=list)
     thinking_stages: list[dict[str, Any]] = field(default_factory=list)
     auto_multicam: bool = True
@@ -131,6 +139,10 @@ class Job:
             "camera": self.camera,
             "views": self.views,
             "bev": self.bev,
+            "tracker_selection": self.tracker_selection,
+            "depth_backends": self.depth_backends,
+            "gaps": self.gaps,
+            "layout_switches": self.layout_switches,
             "side_cues": self.side_cues,
             "thinking_stages": self.thinking_stages,
             "auto_multicam": self.auto_multicam,
@@ -231,7 +243,7 @@ def start_job(
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
     local_video: Path | str | None = None,
-    tracker_mode: str = "hybrid",
+    tracker_mode: str = "auto",
     openai_key: str = "",
     google_key: str = "",
     ai_gateway_key: str = "",
@@ -245,7 +257,7 @@ def start_job(
         demo=demo,
         crop_top=float(crop_top),
         crop_bottom=float(crop_bottom),
-        tracker_mode=(tracker_mode or "hybrid").strip().lower() or "hybrid",
+        tracker_mode=(tracker_mode or "auto").strip().lower() or "auto",
         openai_key=openai_key or "",
         google_key=google_key or "",
         ai_gateway_key=ai_gateway_key or "",
@@ -485,6 +497,7 @@ def _run_real(job: Job) -> None:
     video_match = merge_tba(match_from_overlay(reading), tba_match or video_match)
     STORE.update(job, match=video_match, overlay=reading.as_dict(), game=public_game(reading.year or hints.year))
 
+    layout_for_tracking = None
     if getattr(job, "auto_multicam", True) and job.video_path:
         try:
             from ramscout.multicam import analyze_video, apply_layout
@@ -540,7 +553,14 @@ def _run_real(job: Job) -> None:
                 "panes": [p.as_dict() for p in (chosen.panes or [])],
                 "split_y": chosen.split_y,
                 "split_x": chosen.split_x,
+                "confidence": round(float(chosen.confidence or 0.0), 3),
+                "method": getattr(chosen, "method", "heuristic"),
+                "scorebug": getattr(chosen, "scorebug", None),
+                "letterbox": getattr(chosen, "letterbox", None),
+                "timeline": list(getattr(chosen, "timeline", None) or []),
+                "detail": chosen.detail,
             }
+            layout_for_tracking = chosen
             STORE.update(
                 job,
                 crop_top=top,
@@ -563,24 +583,32 @@ def _run_real(job: Job) -> None:
     def track_progress(message: str, pct: float) -> None:
         STORE.set_progress(job, "tracking", message, 55 + pct * 0.25)
 
+    ov_pane = layout_for_tracking.overview_pane() if layout_for_tracking is not None else None
     result = track_video(
         video_path,
         src_points=job.src_points,
         model_path=str(model) if model else None,
         team_numbers=team_numbers or None,
-        frame_stride=3,
+        frame_stride=_stride_for(video_path),
         crop_top=job.crop_top,
         crop_bottom=job.crop_bottom,
         on_progress=track_progress,
-        tracker_mode=job.tracker_mode or "hybrid",
+        tracker_mode=job.tracker_mode or "auto",
         openai_key=job.openai_key,
         google_key=job.google_key,
         use_bev=not bool(job.user_calibrated),
+        crop_left=float(ov_pane.crop_left) if ov_pane is not None else 0.0,
+        crop_right=float(ov_pane.crop_right) if ov_pane is not None else 1.0,
+        layout=layout_for_tracking,
+        game_year=reading.year or hints.year,
     )
     frame_path = dest / "calibration.jpg"
     save_jpeg(result["first_frame"], frame_path)
     samples = stitch_occlusions(result["samples"])
     blue, red = _alliance_teams(video_match)
+    # Six robots → six lanes: every time-disjoint tracklet joins a lane of its
+    # alliance instead of being thrown away by the 6-track cap.
+    samples = assemble_lanes(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
     samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6) or 6)
     samples = balance_alliances(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
     warnings = list(job.warnings) + list(result.get("warnings") or [])
@@ -656,10 +684,30 @@ def _run_real(job: Job) -> None:
         tracker_strategies=list(result.get("strategies") or []),
         source_hits=dict(result.get("source_hits") or {}),
         bev=dict(result.get("bev") or {}),
+        tracker_mode=str(result.get("tracker_mode") or job.tracker_mode),
+        tracker_selection=result.get("tracker_selection"),
+        depth_backends=result.get("depth_backends"),
+        gaps=list(result.get("gaps") or []),
+        layout_switches=list(result.get("layout_switches") or []),
         side_cues=side_cues,
     )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
+
+
+def _stride_for(video_path: Path | str, target_hz: float = 10.0) -> int:
+    """Frame stride that samples the video at ~``target_hz`` regardless of fps."""
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        cap.release()
+    except Exception:  # noqa: BLE001
+        fps = 0.0
+    if fps <= 1.0:
+        return 3
+    return int(max(1, min(8, round(fps / target_hz))))
 
 
 def apply_browser_tracks(

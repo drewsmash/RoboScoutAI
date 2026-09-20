@@ -39,12 +39,16 @@ TRACKER_MODES: dict[str, dict[str, Any]] = {
         ),
     },
     "auto": {
-        "label": "Auto",
-        "strategies": ["gemini", "yolo", "openai", "color", "motion", "optical_flow"],
+        "label": "Auto (benchmark all)",
+        "strategies": ["motion", "color", "optical_flow", "gemini", "yolo", "openai"],
         "description": (
-            "Prefer Gemini when a Google key is set, then YOLO/OpenAI/OpenCV. "
-            "Uses SORT MOT; falls back to potato OpenCV so paths are never empty."
+            "Runs every available strategy set (motion, color, potato, hybrid, YOLO if installed, "
+            "Gemini/OpenAI if keyed) on the first ~12 s, scores each on robot count, 3v3 balance, "
+            "persistence, in-field ratio, speed plausibility and motion, then tracks the whole match "
+            "with the winner. The scores are recorded in the job as tracker_selection."
         ),
+        "cascade": True,
+        "benchmark": True,
     },
     "local": {
         "label": "Local only",
@@ -226,6 +230,7 @@ class EnsembleTracker:
     def _detect_flat(self, cropped, ctx: TrackerContext) -> list[Detection]:
         primary: list[Detection] = []
         support: list[Detection] = []
+        verifier: list[Detection] = []
         gemini_hit = False
         for tracker in self.strategies:
             name = getattr(tracker, "name", "unknown")
@@ -239,10 +244,14 @@ class EnsembleTracker:
             self.hits[name] = self.hits.get(name, 0) + len(dets)
             if name == "gemini":
                 gemini_hit = True
-            if name in {"yolo", "openai", "gemini"}:
+            if name == "yolo" and not getattr(tracker, "robot_tuned", True):
+                verifier = dets
+            elif name in {"yolo", "openai", "gemini"}:
                 primary = merge_detections(primary, dets)
             else:
                 support = merge_detections(support, dets)
+        if verifier:
+            support = verify_proposals(support, verifier)
         return merge_detections(primary, support) if primary else support
 
     def _detect_cascade(self, cropped, ctx: TrackerContext) -> list[Detection]:
@@ -273,7 +282,12 @@ class EnsembleTracker:
                 if not dets:
                     continue
                 self.hits[name] = self.hits.get(name, 0) + len(dets)
-                # Cloud/YOLO boxes are primary anchors; keep local fill.
+                if name == "yolo" and not getattr(tracker, "robot_tuned", True):
+                    # COCO classes (person / car / ...) cannot *propose* FRC
+                    # robots; they only corroborate overlapping local boxes.
+                    proposals = verify_proposals(proposals, dets)
+                    continue
+                # Cloud / FRC-tuned YOLO boxes are primary anchors; keep local fill.
                 proposals = merge_detections(dets, proposals, min_dist=30.0)
                 if name == "gemini":
                     gemini_ok = True
@@ -383,6 +397,39 @@ def fuse_local_proposals(
         if j not in used_color:
             fused.append(c)
     return merge_detections([], fused, min_dist=min_dist)
+
+
+def verify_proposals(
+    proposals: list[Detection],
+    verifier: list[Detection],
+    *,
+    min_iou: float = 0.25,
+    boost: float = 0.15,
+) -> list[Detection]:
+    """Raise confidence of local proposals that a verifier box overlaps.
+
+    Used for detectors that are *not* robot-tuned (COCO YOLO): their boxes
+    never enter the proposal set, so a bleacher "person" cannot start a
+    track, but a proposal they agree with is trusted more.
+    """
+    out: list[Detection] = []
+    for p in proposals:
+        best = max((_iou(p.bbox, v.bbox) for v in verifier), default=0.0)
+        if best >= min_iou:
+            meta = dict(p.meta or {})
+            meta["verified_by"] = "yolo"
+            meta["verify_iou"] = round(float(best), 3)
+            p = Detection(
+                track_id=p.track_id,
+                bbox=list(p.bbox),
+                source=p.source,
+                confidence=float(min(0.95, p.confidence + boost)),
+                alliance=p.alliance,
+                team=p.team,
+                meta=meta,
+            )
+        out.append(p)
+    return out
 
 
 def _iou(a: list[float], b: list[float]) -> float:

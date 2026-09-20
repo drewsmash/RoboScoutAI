@@ -21,16 +21,25 @@ import numpy as np
 class CameraPane:
     """One camera crop with a scouting role."""
 
-    role: str  # overview | blue_side | red_side | sideline
+    role: str  # overview | overview_alt | blue_side | red_side | sideline | graphics | other
     crop_top: float
     crop_bottom: float
     crop_left: float = 0.0
     crop_right: float = 1.0
     purpose: str = ""
     alliance_bias: str | None = None  # blue | red | None
+    confidence: float = 1.0
+    features: dict[str, float] = field(default_factory=dict)
+    scorebug: list[float] | None = None  # normalized box inside this pane
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["confidence"] = round(float(self.confidence), 3)
+        return data
+
+    @property
+    def box(self) -> list[float]:
+        return [float(self.crop_left), float(self.crop_top), float(self.crop_right), float(self.crop_bottom)]
 
     def slice_frame(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -47,7 +56,7 @@ class CameraPane:
 class CameraLayout:
     """Normalized crop layout for preferred + side camera panes."""
 
-    mode: str  # single | stacked_top | stacked_sides | manual
+    mode: str  # single | stacked_top | stacked_sides | side_by_side | grid | manual
     crop_top: float
     crop_bottom: float
     confidence: float
@@ -55,6 +64,14 @@ class CameraLayout:
     split_y: float | None = None
     split_x: float | None = None
     panes: list[CameraPane] = field(default_factory=list)
+    # Signal-decomposition extras (see ramscout.layout): per-segment timeline,
+    # detected scorebug box, active picture area, analysis method.
+    timeline: list[dict[str, Any]] = field(default_factory=list)
+    scorebug: list[float] | None = None
+    letterbox: list[float] | None = None
+    method: str = "heuristic"
+    crop_left: float = 0.0
+    crop_right: float = 1.0
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -69,6 +86,12 @@ class CameraLayout:
 
     def side_panes(self) -> list[CameraPane]:
         return [p for p in self.panes if p.role in {"blue_side", "red_side", "sideline"}]
+
+    def overview_box(self) -> list[float]:
+        pane = self.overview_pane()
+        if pane is not None:
+            return pane.box
+        return [0.0, float(self.crop_top), 1.0, float(self.crop_bottom)]
 
 
 def analyze_frame(frame: np.ndarray) -> CameraLayout:
@@ -213,7 +236,94 @@ def analyze_frame(frame: np.ndarray) -> CameraLayout:
     return layout
 
 
-def analyze_video(video_path: Path | str, sample_times_s: list[float] | None = None) -> CameraLayout:
+def analyze_video(
+    video_path: Path | str,
+    sample_times_s: list[float] | None = None,
+    *,
+    decompose: bool = True,
+    on_progress: Any = None,
+) -> CameraLayout:
+    """Decompose the broadcast into panes over time (see :mod:`ramscout.layout`).
+
+    Falls back to the legacy single-frame gutter heuristic when the temporal
+    decomposition fails or the caller passes explicit ``sample_times_s``.
+    """
+    if decompose and sample_times_s is None:
+        try:
+            return _analyze_video_decomposed(video_path, on_progress=on_progress)
+        except Exception as exc:  # noqa: BLE001
+            legacy = _analyze_video_legacy(video_path, sample_times_s)
+            legacy.detail = f"{legacy.detail} (temporal decomposition failed: {exc})"
+            return legacy
+    return _analyze_video_legacy(video_path, sample_times_s)
+
+
+def layout_from_decomposition(frame_layout: Any, *, timeline: Any = None) -> CameraLayout:
+    """Convert a :class:`ramscout.layout.FrameLayout` into a CameraLayout."""
+    from ramscout.layout import ROLE_PURPOSE
+
+    panes: list[CameraPane] = []
+    for dp in frame_layout.panes:
+        panes.append(
+            CameraPane(
+                role=dp.role,
+                crop_top=round(dp.box.y0, 4),
+                crop_bottom=round(dp.box.y1, 4),
+                crop_left=round(dp.box.x0, 4),
+                crop_right=round(dp.box.x1, 4),
+                purpose=ROLE_PURPOSE.get(dp.role, ""),
+                alliance_bias=dp.alliance_bias,
+                confidence=float(dp.confidence),
+                features=dict(dp.features),
+                scorebug=dp.scorebug,
+            )
+        )
+    ov = next((p for p in panes if p.role == "overview"), None)
+    if ov is not None:
+        crop_top, crop_bottom = ov.crop_top, ov.crop_bottom
+        crop_left, crop_right = ov.crop_left, ov.crop_right
+    else:
+        crop_top, crop_bottom, crop_left, crop_right = 0.10, 0.65, 0.0, 1.0
+    row_cuts = list(frame_layout.row_cuts or [])
+    col_cuts = list(frame_layout.col_cuts or [])
+    layout = CameraLayout(
+        mode=frame_layout.mode,
+        crop_top=crop_top,
+        crop_bottom=crop_bottom,
+        confidence=float(frame_layout.confidence),
+        detail=frame_layout.detail,
+        split_y=round(row_cuts[0], 4) if row_cuts else None,
+        split_x=round(col_cuts[0], 4) if col_cuts else None,
+        panes=panes,
+        timeline=[s.as_dict() for s in timeline.segments] if timeline is not None else [],
+        scorebug=frame_layout.scorebug,
+        letterbox=frame_layout.letterbox.as_list(),
+        method="decomposition",
+        crop_left=crop_left,
+        crop_right=crop_right,
+    )
+    return layout
+
+
+def _analyze_video_decomposed(video_path: Path | str, *, on_progress: Any = None) -> CameraLayout:
+    from ramscout.layout import analyze_video_layout
+
+    timeline = analyze_video_layout(video_path, on_progress=on_progress)
+    primary = timeline.primary()
+    if primary is None:
+        raise RuntimeError("no layout segments")
+    layout = layout_from_decomposition(primary.layout, timeline=timeline)
+    coverage = timeline.overview_coverage()
+    switches = max(len(timeline.segments) - 1, 0)
+    extra = f" Primary layout {primary.t0:.0f}–{primary.t1:.0f}s; overview visible {coverage:.0%} of the video"
+    extra += f"; {switches} layout switch(es)." if switches else "."
+    layout.detail = layout.detail + extra
+    if layout.overview_pane() is None:
+        layout.confidence = min(layout.confidence, 0.3)
+    return layout
+
+
+def _analyze_video_legacy(video_path: Path | str, sample_times_s: list[float] | None = None) -> CameraLayout:
     """Sample a few mid-match frames and vote on the camera layout."""
     import cv2
 
@@ -303,6 +413,24 @@ def apply_layout(
         if not layout.panes:
             layout.panes = [_single_overview(layout.crop_top, layout.crop_bottom)]
         return layout.crop_top, layout.crop_bottom, layout
+    if getattr(layout, "method", "") == "decomposition" and layout.overview_pane() is not None and layout.confidence >= 0.4:
+        ov = layout.overview_pane()
+        # A full-frame single camera still gets the classic scorebug-aware
+        # crop unless a scorebug was located explicitly.
+        if layout.mode == "single" and ov.crop_top <= 0.01 and ov.crop_bottom >= 0.99:
+            top = 0.10 if user_crop_top is None else float(user_crop_top)
+            bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
+            bug = layout.scorebug
+            if bug:
+                # Keep the field; cut only the band the scorebug occupies.
+                if bug[1] > 0.5:
+                    bottom = min(bottom, max(0.5, bug[1] - 0.01)) if user_crop_bottom is None else bottom
+                else:
+                    top = max(top, min(0.4, bug[3] + 0.01)) if user_crop_top is None else top
+            ov.crop_top, ov.crop_bottom = top, bottom
+            layout.crop_top, layout.crop_bottom = top, bottom
+            return top, bottom, layout
+        return ov.crop_top, ov.crop_bottom, layout
 
     top = 0.10 if user_crop_top is None else float(user_crop_top)
     bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
