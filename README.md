@@ -148,16 +148,24 @@ Also supported:
 
 ### Tracking modes
 
-Default is **hybrid cascade**: OpenCV motion/color proposals every frame → SORT multi-object tracking (Kalman + IoU + alliance/color) → sparse Gemini / YOLO / OpenAI confirmation only when local proposals look weak. OpenAI stays sparse (interval + frame stride + max calls) to avoid 429s. See [`docs/POTATO.md`](docs/POTATO.md).
+Default is **Auto (benchmark all)**: the first ~12 s of the match are tracked with every strategy set that is actually available on the machine (motion, bumper color, potato, hybrid, YOLO if `ultralytics` imports, Gemini / OpenAI if keyed). Each run is scored on physically meaningful criteria — mean visible robots vs. six, 3v3 balance per time bin, track persistence, in-field ratio, speed plausibility (20 ft/s cap), fraction of tracks that actually moved, ID churn — and the winner tracks the whole match. The choice and every score land in the job as `tracker_selection` and are shown in the UI; every other mode is still selectable as a manual override, and the mode list marks what each mode needs (`· needs gemini → OpenCV fallback`). See [`docs/TRACKING.md`](docs/TRACKING.md) for the full pipeline.
 
 **Field-aware tracking (all modes, no model needed).** Every proposal is checked against the field before it can become a track:
 
-- **Field gate** (`ramscout/trackers/field_gate.py`): the depth-corrected foot of each box is projected through the BEV homography; boxes outside the field polygon, wall-shaped boxes on the perimeter band, boxes with an implausible footprint for an FRC robot (~28–36 in), scorebug overlays and multi-edge boxes are rejected. A long-window motion-energy model plus dense optical flow flags static blobs (walls, LED strips, field elements) so they can never spawn a track; local tracks must physically move before they are confirmed.
-- **BEV association**: SORT also runs a constant-velocity Kalman in *field inches* and refuses associations that would need more than ~20 ft/s, which stops ID swaps when robots cross.
-- **Robust alliance color** (`ramscout/trackers/alliance.py`): bumper color is read from the lower band of the box only; the broadcast's own red/blue are learned per match in CIE Lab chroma from confirmed moving robots (self-supervised 2-means), so a warm or cool white balance moves both centroids together instead of breaking fixed HSV thresholds. Per-track votes use a sliding window with hysteresis, a starting-side prior helps early, a confirmed flip splits the track (ID-swap signature), and a final assignment forces exactly 3 red + 3 blue.
-- Motion proposals use `RETR_LIST` so a closed LED-wall ring in the foreground mask no longer swallows every robot inside it; motion + bumper-color agreement is rewarded, and only the *lowest* colored band on a robot counts as a bumper.
+- **Field-line homography** (`ramscout/fieldlines.py`): the carpet boundary is segmented from a temporal median of the overview pane (adaptive Lab colour + low saturation + low texture + edge cut), four straight edges are fitted robustly, and the resulting quad replaces the depth trapezoid when it is confident and agrees with the depth-derived pitch. Alliance tape and driver-station panels decide which side is blue, so the BEV is mirrored when blue is on the right.
+- **Field gate** (`ramscout/trackers/field_gate.py`): the depth-corrected foot of each box is projected through the BEV homography; boxes outside the field polygon, wall-shaped boxes on the perimeter band, boxes with an implausible footprint (< 16 in or > 96 in), scorebug overlays and multi-edge boxes are rejected. A field polygon mask is also applied to the motion / colour masks themselves, so crowd, referees and driver stations never become proposals.
+- **ByteTrack + OC-SORT association** (`ramscout/trackers/mot.py`): high-score proposals are matched first, low-score leftovers may only extend recently-seen tracks and never spawn; recovered tracks are re-updated from the observed displacement (observation-centric), and a momentum term penalises direction reversals. The BEV Kalman refuses associations above ~20 ft/s.
+- **Bumper strips → robot boxes**: the colour tracker looks for *thin* saturated strips with something standing on them and grows them into a robot box; parked robots confirm without motion when the footprint is robot-sized, while plates and lit panels that never move are pruned and their spot is blocked from respawning.
+- **Robust alliance colour** (`ramscout/trackers/alliance.py`): learned per broadcast in CIE Lab chroma from confirmed moving robots; sliding-window votes with hysteresis; final 3 red + 3 blue assignment.
+- **Six lanes** (`ramscout/identity.py`): tracklets are chained across occlusions and every time-disjoint tracklet joins one of six robot lanes (three per alliance) instead of being dropped by a track cap; paths are RTS-smoothed in field coordinates (`ramscout/smoothing.py`); bumper-number OCR (`ramscout/ocr.py`, Tesseract / `cv2.text` / OpenAI Vision when keyed) votes team numbers onto stable tracks.
 
-Job warnings report the gate tally (`Field gate: … rejected (outside_field=…, perimeter_wall=…)`) and whether alliance colors were calibrated to the broadcast. `track_video(..., field_gate=False)` restores the old pixel-only behaviour.
+### Depth backends (Anything → 3D)
+
+`ramscout/depth.py` tries **ONNX Runtime** (Depth Anything V2 Small, ~100 MB, auto-downloaded to the models dir on first use — `%LOCALAPPDATA%\RoboScoutAI\models` on Windows, `~/.local/share/RoboScoutAI/models` elsewhere), then **transformers + torch** (`pip install -r requirements-depth.txt`), then the classical row/texture prior. The active backend and anything missing are reported in `/api/trackers` (`depth`), in the job (`depth_backends`, `bev.depth_source`) and in the UI chips. Frozen desktop builds ship ONNX Runtime, so they get real neural depth without torch.
+
+### Broadcast decomposition (multi-view)
+
+`ramscout/layout.py` samples the whole VOD, finds composition seams from temporally persistent edges (coverage + continuity + a cross-seam correlation test that tells a real seam from a field wall), detects letterbox / pillarbox and the scorebug, classifies each pane (overview, alternate overview, blue / red side, sideline, graphics) and builds a timeline of layout segments. `track_video` follows that timeline: each overview crop gets its own homography, field gate and tracker; when the director cuts away from the overview the job records a gap instead of hallucinating paths, and side panes feed scoring / climb cues. The UI shows the real pane crops with labels and confidence.
 
 ## Next year’s game
 
@@ -194,4 +202,5 @@ pytest -q
 - Scorebug OCR needs a readable graphic; title/description is the backup
 - Climb detection is “stayed on the Tower in endgame”, not rung level
 - Hub candidates are low-speed dwells next to the Hub, not counted fuel
-- Depth Anything V2 is optional; without it, classical depth still adjusts the BEV trapezoid
+- Neural depth needs `onnxruntime` (bundled) or torch; without either, classical depth still adjusts the BEV trapezoid
+- Local (no-model) tracking is a class-agnostic moving-object detector: alliance-coloured field elements that move in place (2018 switch / scale plates) can still be picked up briefly, and robots parked against their own alliance wall are the hardest case. Set `ROBOSCOUT_ROBOT_WEIGHTS_URL` (or `ROBOSCOUT_ROBOT_WEIGHTS`) to FRC-tuned YOLO weights for a real robot detector; COCO YOLO is only used to verify local proposals
