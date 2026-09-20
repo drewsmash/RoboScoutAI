@@ -198,8 +198,10 @@ def test_color_tracker_finds_bumper_inside_led_wall_ring():
 
     ctx = TrackerContext(frame_w=640, frame_h=360, crop_w=640, crop_h=300)
     frame = np.full((300, 640, 3), (45, 90, 45), np.uint8)
-    # Blue LED strip along the whole perimeter + one blue bumper inside.
+    # Blue LED strip along the whole perimeter + one blue-bumpered robot
+    # inside (a bumper strip with a robot body standing on it).
     cv2.rectangle(frame, (6, 6), (634, 294), (230, 80, 20), 6)
+    cv2.rectangle(frame, (302, 125), (346, 160), (70, 70, 75), -1)
     cv2.rectangle(frame, (300, 160), (348, 178), (230, 80, 20), -1)
     dets = ColorTracker().detect(frame, ctx)
     blue = [d for d in dets if d.alliance == "blue"]
