@@ -75,6 +75,17 @@ def _maybe_check_updates(auto_apply: bool) -> None:
         log.warning("Could not auto-apply git update: %s", exc)
 
 
+def _export_manager_env(args: argparse.Namespace) -> None:
+    """Expose manager coordinates to ramscout.managed via the environment."""
+    os.environ["ROBOSCOUT_MANAGED"] = "1"
+    if args.manager_token:
+        os.environ["ROBOSCOUT_MANAGER_TOKEN"] = args.manager_token
+    if args.manager_root:
+        os.environ["ROBOSCOUT_MANAGER_ROOT"] = args.manager_root
+    if args.manager_exe:
+        os.environ["ROBOSCOUT_MANAGER_EXE"] = args.manager_exe
+
+
 def _stop_server(server: object) -> None:
     should_exit = getattr(server, "should_exit", None)
     if should_exit is not None:
@@ -110,7 +121,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Fetch and apply a newer build from the git remote on launch",
     )
     parser.add_argument("--skip-update-check", action="store_true")
+    managed_group = parser.add_argument_group("manager integration (set by RoboScoutAI.exe)")
+    managed_group.add_argument("--managed", action="store_true", help="Launched by the RoboScoutAI manager")
+    managed_group.add_argument("--manager-token", default="", help="IPC token issued by the manager")
+    managed_group.add_argument("--manager-root", default="", help="Manager install root (%%LOCALAPPDATA%%\\RoboScoutAI)")
+    managed_group.add_argument("--manager-exe", default="", help="Path to RoboScoutAI.exe")
     args = parser.parse_args(argv)
+
+    if args.managed:
+        _export_manager_env(args)
+        # The manager owns update checks/installs; never self-update in-place.
+        args.skip_update_check = True
 
     _configure_logging()
     jobs_dir()  # ensure writable data path exists

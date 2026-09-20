@@ -171,11 +171,14 @@ def run_launcher(
     clear_status(root)
     code = 0
     launches = 0
+    preferred_port = port or 8000
     while True:
         launches += 1
         state = read_current(root) or state
         exe = state.exe_path(root)
-        chosen_port = free_port(port or 8000)
+        # Keep the same port across relaunches so an open UI window can simply reload.
+        chosen_port = free_port(preferred_port)
+        preferred_port = chosen_port
         token = issue_token(root, port=chosen_port)
         cmd = build_app_command(exe, port=chosen_port, token=token, root=root, manager_exe=manager_exe, extra=extra_args)
         log_file = root / "app.log"

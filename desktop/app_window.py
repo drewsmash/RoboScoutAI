@@ -22,6 +22,28 @@ APP_TITLE = "RoboScoutAI"
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 840
 
+# Chrome/Edge --app child we own (so a managed relaunch can close the stale window).
+_ACTIVE_UI_PROC: subprocess.Popen[Any] | None = None
+
+
+def close_app_window(timeout: float = 3.0) -> bool:
+    """Terminate the chrome-less window process if we launched one."""
+    global _ACTIVE_UI_PROC
+    proc = _ACTIVE_UI_PROC
+    if proc is None:
+        return False
+    _ACTIVE_UI_PROC = None
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        return True
+    except OSError:
+        return False
+
 
 def _chrome_user_data_dir() -> Path:
     """Isolated profile so --app stays its own process (not an existing Chrome session)."""
@@ -215,9 +237,11 @@ def run_app_ui(
     # Windows: Edge/Chrome --app first. pywebview's WinForms/pythonnet path can
     # raise an unhandled NullReferenceException on a .NET thread (process death)
     # that Python try/except cannot catch — that is what broke the .exe.
+    global _ACTIVE_UI_PROC
     if sys.platform == "win32":
         proc = open_chrome_app_window(url)
         if proc is not None:
+            _ACTIVE_UI_PROC = proc
             try:
                 proc.wait()
             except KeyboardInterrupt:
@@ -230,6 +254,7 @@ def run_app_ui(
             return "webview"
         proc = open_chrome_app_window(url)
         if proc is not None:
+            _ACTIVE_UI_PROC = proc
             try:
                 proc.wait()
             except KeyboardInterrupt:
