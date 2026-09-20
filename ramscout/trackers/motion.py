@@ -77,7 +77,10 @@ class MotionTracker:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # RETR_LIST, not RETR_EXTERNAL: when the field perimeter (LED strips,
+        # flickering wall) forms a closed ring in the mask, EXTERNAL returns
+        # only the ring and silently drops every robot inside it.
+        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
         blobs: list[tuple[float, list[float]]] = []
         for contour in contours:
@@ -91,9 +94,14 @@ class MotionTracker:
             aspect = w / max(h, 1)
             if aspect > 3.6 or aspect < 0.28:
                 continue
+            # Ring-like contours (wall segments) enclose mostly empty space.
+            fill = area / float(max(w * h, 1))
+            if fill < 0.22:
+                continue
             blobs.append((area, [float(x), float(y), float(x + w), float(y + h)]))
 
         blobs.sort(key=lambda row: row[0], reverse=True)
+        blobs = _drop_nested(blobs)
         # FRC has at most 6 robots; keep a couple extras for noise before MOT.
         blobs = blobs[:8]
         out: list[Detection] = []
@@ -108,3 +116,21 @@ class MotionTracker:
                 )
             )
         return out
+
+
+def _drop_nested(blobs: list[tuple[float, list[float]]], containment: float = 0.8) -> list[tuple[float, list[float]]]:
+    """Drop boxes mostly contained in a larger kept box (inner contours of one blob)."""
+    kept: list[tuple[float, list[float]]] = []
+    for area, bbox in blobs:
+        x1, y1, x2, y2 = bbox
+        own = max((x2 - x1) * (y2 - y1), 1.0)
+        nested = False
+        for _a, kb in kept:
+            ix = max(0.0, min(x2, kb[2]) - max(x1, kb[0]))
+            iy = max(0.0, min(y2, kb[3]) - max(y1, kb[1]))
+            if (ix * iy) / own >= containment:
+                nested = True
+                break
+        if not nested:
+            kept.append((area, bbox))
+    return kept
