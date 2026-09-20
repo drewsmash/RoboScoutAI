@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for RoboScoutAI desktop builds (Windows .exe / macOS binary).
 
-Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
+Keeps the freeze lean by excluding torch/ultralytics; neural depth ships via
+onnxruntime (Depth Anything V2 Small weights download on first use). Demo mode, overlay OCR,
 YouTube ingest, and the git-remote in-app updater all work. Drop a robot .pt next to the
 app and install ultralytics in a source tree for full tracking.
 """
@@ -68,6 +69,14 @@ tmp_datas, tmp_binaries, tmp_hidden = collect_all("cv2")
 datas += tmp_datas
 binaries += tmp_binaries
 hiddenimports += tmp_hidden
+for _pkg in ("onnxruntime", "scipy"):
+    try:
+        tmp_datas, tmp_binaries, tmp_hidden = collect_all(_pkg)
+    except Exception:  # noqa: BLE001 — optional in the freeze
+        continue
+    datas += tmp_datas
+    binaries += tmp_binaries
+    hiddenimports += tmp_hidden
 
 a = Analysis(
     [str(ROOT / "desktop" / "main.py")],
