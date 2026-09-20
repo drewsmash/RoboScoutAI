@@ -955,3 +955,20 @@ video, #cal-canvas {
   .suite-grid { grid-template-columns: 1fr; }
   .pit-mode .composer-row { flex-direction: column; }
 }
+
+.view-thumb {
+  width: 100%;
+  border-radius: 6px;
+  background-repeat: no-repeat;
+  background-color: #000;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+}
+.view-conf {
+  font-family: var(--font-body, inherit);
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: 4px;
+}
+.chip.tiny { font-size: 10px; padding: 1px 6px; }
