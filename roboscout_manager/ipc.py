@@ -95,6 +95,7 @@ def write_status(
     version: str = "",
     current_version: str = "",
     error: str = "",
+    pid: int | None = None,
 ) -> UpdateStatus:
     if state not in STATES:
         raise ValueError(f"unknown status state {state!r}")
@@ -106,7 +107,7 @@ def write_status(
         current_version=current_version,
         error=error,
         updated_at=utc_now(),
-        pid=os.getpid(),
+        pid=int(pid if pid is not None else os.getpid()),
     )
     write_json_atomic(status_json_path(root), status.to_dict())
     return status

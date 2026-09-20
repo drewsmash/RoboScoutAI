@@ -39,7 +39,6 @@ from roboscout_manager.manifest import (
 from roboscout_manager.state import (
     CurrentState,
     ManagerConfig,
-    app_exe_path,
     app_version_dir,
     app_versions_dir,
     append_log,
@@ -369,6 +368,47 @@ def run_setup(
     return result
 
 
+def bootstrap_install(root: Path, *, frozen: bool | None = None) -> list[str]:
+    """First launch of a bare manager exe (no manager.json yet): make it a real install.
+
+    Covers two paths: a user double-clicked ``RoboScoutAI.exe`` from Downloads, or a
+    legacy 0.5.x in-app updater dropped the manager at %LOCALAPPDATA%\\RoboScoutAI\\.
+    Copies the manager into the root, writes manager.json, and (frozen only) creates
+    the Start Menu shortcut and uninstall entry. Idempotent; never fatal.
+    """
+    root = Path(root)
+    messages: list[str] = []
+    if manager_json_path(root).is_file():
+        return messages
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    root.mkdir(parents=True, exist_ok=True)
+    cfg = read_config(root)
+    cfg.manager_version = MANAGER_VERSION
+    write_config(root, cfg)
+    messages.append(f"wrote manager.json (channel {cfg.channel})")
+    if is_frozen and running_exe().suffix.lower() == ".exe":
+        try:
+            placed = install_manager_binary(root)
+            messages.append(f"manager -> {placed}")
+        except (InstallError, OSError) as exc:
+            messages.append(f"manager copy skipped: {exc}")
+        from roboscout_manager import registry, shortcuts
+
+        try:
+            shortcuts.create_shortcuts(root, desktop=False, start_menu=True)
+            messages.append("start menu shortcut created")
+        except Exception as exc:  # noqa: BLE001
+            messages.append(f"shortcut skipped: {exc}")
+        try:
+            current = read_current(root)
+            if registry.register_uninstall(root, current.version if current else MANAGER_VERSION):
+                messages.append("uninstall entry registered")
+        except Exception as exc:  # noqa: BLE001
+            messages.append(f"registry skipped: {exc}")
+    append_log(root, "bootstrap: " + "; ".join(messages))
+    return messages
+
+
 # --- uninstall -----------------------------------------------------------------
 
 
@@ -466,6 +506,7 @@ __all__ = [
     "InstallError",
     "SetupOptions",
     "SetupResult",
+    "bootstrap_install",
     "find_payload",
     "install_app_payload",
     "install_manager_binary",

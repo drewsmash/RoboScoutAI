@@ -193,6 +193,15 @@ def cmd_install(args: argparse.Namespace, root: Path) -> int:
     }
     human = f"{APP_NAME} {result.version or '(download pending)'} installed to {root}."
     emit(payload, as_json=args.json, out=args.out, human=human)
+    staged = result.manager_exe if result.manager_exe and result.manager_exe.name.endswith(".new") else None
+    if staged is not None:
+        # We are running *as* %LOCALAPPDATA%\RoboScoutAI\RoboScoutAI.exe (legacy updater dropped
+        # Setup there). Swap in the real manager after we exit, then launch it.
+        from roboscout_manager.updater import schedule_manager_swap
+
+        relaunch = ["--update", "--launch-after"] if result.needs_download else []
+        schedule_manager_swap(root, staged, relaunch_args=relaunch, spawn=opts.launch)
+        return 0
     if opts.launch:
         exe = manager_exe_path(root)
         launch_cmd = [str(exe)]

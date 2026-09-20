@@ -25,6 +25,10 @@ desktop-downloads/
 release-artifacts/
 !release-artifacts/
 !release-artifacts/RoboScoutAI-windows-x64.exe
+!release-artifacts/RoboScoutAI-app-windows-x64.exe
+!release-artifacts/RoboScoutAI.exe
+!release-artifacts/RoboScoutAI-Setup.exe
+!release-artifacts/manifest.json
 !release-artifacts/RoboScoutAI-windows-x64-signed.exe
 !release-artifacts/RoboScoutAI-linux-*.tar.gz
 !release-artifacts/RoboScoutAI-macos-*.zip

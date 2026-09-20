@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from roboscout_manager import APP_NAME, MANAGER_VERSION, RELAUNCH_EXIT_CODE
-from roboscout_manager.install import swap_staged_manager, verify_current
-from roboscout_manager.ipc import clear_status, issue_token, read_status, write_status
+from roboscout_manager.install import bootstrap_install, swap_staged_manager, verify_current
+from roboscout_manager.ipc import clear_status, issue_token, read_status
 from roboscout_manager.rollback import RollbackError, rollback
 from roboscout_manager.state import (
     CurrentState,
@@ -141,6 +141,7 @@ def run_launcher(
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     swap_staged_manager(root)
+    bootstrap_install(root)
     cfg = read_config(root)
     ui = Splash(enabled=splash)
 

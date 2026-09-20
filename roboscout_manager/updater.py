@@ -742,18 +742,26 @@ def self_update_manager(
         return UpdateResult(ok=True, message="manager updated", manager_update_scheduled=False)
 
     args = relaunch_args if relaunch_args is not None else ["--update", "--launch-after"]
+    schedule_manager_swap(root, staged, relaunch_args=args, spawn=spawn_swap)
+    report("manager-update", 100, "Manager will restart to finish the update…")
+    return UpdateResult(ok=True, message="manager update scheduled; restarting", manager_update_scheduled=True)
+
+
+def schedule_manager_swap(root: Path, staged: Path, *, relaunch_args: list[str], spawn: bool = True) -> Path:
+    """Write (and on Windows spawn) the .bat that swaps RoboScoutAI.exe after we exit."""
+    root = Path(root)
+    target = manager_exe_path(root)
     script = Path(tempfile.gettempdir()) / "RoboScoutAI-manager-update.bat"
     lines = manager_update_bat_lines(
         pid=os.getpid(),
         staged=str(staged),
         target=str(target),
         log_path=str(root / "update.log"),
-        relaunch_args=args,
+        relaunch_args=relaunch_args,
     )
     script.write_text("\r\n".join(lines), encoding="utf-8")
     append_log(root, f"manager swap scheduled via {script}")
-    report("manager-update", 100, "Manager will restart to finish the update…")
-    if spawn_swap and sys.platform.startswith("win"):
+    if spawn and sys.platform.startswith("win"):
         creation = 0x00000200 | 0x00000008 | 0x08000000
         subprocess.Popen(
             ["cmd.exe", "/c", str(script)],
@@ -763,7 +771,7 @@ def self_update_manager(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    return UpdateResult(ok=True, message="manager update scheduled; restarting", manager_update_scheduled=True)
+    return script
 
 
 def repair(root: Path, *, cfg: ManagerConfig | None = None, progress: ProgressFn = _noop_progress) -> UpdateResult:

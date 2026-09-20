@@ -1,9 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for RoboScoutAI desktop builds (Windows .exe / macOS binary).
+"""PyInstaller spec for the RoboScoutAI **app** build (FastAPI + web UI).
+
+Output: ``dist/RoboScoutAI-app.exe`` (Windows) / ``dist/RoboScoutAI-app`` (macOS).
+On Windows this binary is not run directly by users: ``RoboScoutAI.exe`` (the
+manager, see ``manager.spec``) installs it side-by-side under
+``%LOCALAPPDATA%\\RoboScoutAI\\app\\<version>\\`` and launches it with ``--managed``.
 
 Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
-YouTube ingest, and the git-remote in-app updater all work. Drop a robot .pt next to the
-app and install ultralytics in a source tree for full tracking.
+YouTube ingest and the manager-driven updater all work. Drop a robot .pt next to
+the app and install ultralytics in a source tree for full tracking.
 """
 
 from __future__ import annotations
@@ -53,6 +58,10 @@ hiddenimports = [
     "yt_dlp",
     "ramscout",
     "ramscout.trackers",
+    "ramscout.managed",
+    "roboscout_manager",
+    "roboscout_manager.ipc",
+    "roboscout_manager.state",
     "desktop",
     "desktop.main",
     "desktop.app_window",
@@ -61,6 +70,7 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("ramscout")
+hiddenimports += collect_submodules("roboscout_manager")
 hiddenimports += collect_submodules("webview")
 
 binaries = []
@@ -106,13 +116,15 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="RoboScoutAI",
+    name="RoboScoutAI-app",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
+    # Console build: the manager launches it with CREATE_NO_WINDOW and captures
+    # stdout/stderr into %LOCALAPPDATA%\RoboScoutAI\app.log.
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
