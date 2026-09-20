@@ -35,3 +35,4 @@ release-artifacts/
 !release-artifacts/UPDATE.txt
 !release-artifacts/update-channel.txt
 !release-artifacts/README.md
+data/

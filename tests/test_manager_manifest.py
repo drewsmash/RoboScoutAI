@@ -16,7 +16,7 @@ def _write(tmp_path, name, data):
 
 def test_manager_version_tracks_app_version():
     # Setup/manager and app ship from one tag; keep the two constants in lockstep.
-    assert roboscout_manager.__version__ == app_version == "0.6.1"
+    assert roboscout_manager.__version__ == app_version == "0.6.2"
 
 
 def test_version_helpers():

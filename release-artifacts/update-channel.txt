@@ -1,5 +1,7 @@
 # Default git branch for desktop updates (override per install: RoboScoutAI.exe --channel <branch-or-tag>,
 # or env ROBOSCOUT_CHANNEL / RAMSCOUT_GIT_BRANCH).
-# The manager reads release-artifacts/manifest.json + RoboScoutAI-app-windows-x64.exe from this branch;
-# legacy 0.5.x updaters read release-artifacts/RoboScoutAI-windows-x64.exe. CI publishes both on each v* tag.
+# The manager reads release-artifacts/manifest.json + RoboScoutAI.exe from this branch.
+# App/Setup builds over GitHub's 100 MB git limit are referenced by URL in manifest.json
+# and downloaded from GitHub Releases. Legacy 0.5.x updaters still read
+# release-artifacts/RoboScoutAI-windows-x64.exe (the thin manager, for migration).
 cursor/upload-cookies-github-updater-e0ef
