@@ -7,7 +7,7 @@ stable. The manager never runs the FastAPI app in-place: each app build lives in
 
 from __future__ import annotations
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 MANAGER_VERSION = __version__
 
 APP_NAME = "RoboScoutAI"

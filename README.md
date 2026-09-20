@@ -71,13 +71,13 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
-**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 when `transformers` + torch + Pillow are installed (falls back to classical depth), then a bird’s-eye (BEV) trapezoid so the top-down map accounts for camera angle. Stacked broadcasts are sectioned: top wide-angle → movement; bottom-left / bottom-right → blue / red scoring & climb cues. The broadcast panel draws a live tracking overlay.
+**Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 via **ONNX Runtime** by default (weights download on first use), then transformers+torch if installed, then classical depth. A bird’s-eye (BEV) trapezoid accounts for camera angle. Stacked broadcasts are decomposed into panes (overview / blue / red / scorebug) with a layout timeline. The broadcast panel draws a live tracking overlay. Details: `docs/TRACKING.md`.
 
-Optional neural depth (source installs):
+Optional torch depth backend (source installs; ONNX is already in `requirements.txt` / desktop):
 
 ```bash
-pip install transformers torch   # Pillow is in requirements.txt
-# Depth-Anything-V2-Small loads from Hugging Face on first use
+pip install -r requirements-depth.txt
+# or: pip install transformers torch
 ```
 
 API keys (optional, also in the UI Advanced panel):
