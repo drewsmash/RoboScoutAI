@@ -10,11 +10,16 @@ Pillow>=10.0.0
 yt-dlp[default]>=2025.9.26
 yt-dlp-getpot-wpc>=1.1.2
 nodriver>=0.40.0
-ultralytics>=8.3.0
 openpyxl>=3.1.5
 pytest>=8.3.0
-# Neural depth (Depth Anything V2 Small) without PyTorch: ONNX Runtime + a one-time
-# ~100 MB weights download to the per-user models folder.
+# Required runtime: neural depth (Depth Anything V2 Small) + packaged robot ONNX
+# detector path. Weights download separately; see docs/INSTALL.md.
 onnxruntime>=1.17.0
-# Optional torch/transformers depth backend + Hugging Face weight cache:
-# see requirements-depth.txt (pin torch to the CPU wheel index there).
+# Source-only neural tracker / training export (NOT in desktop freeze):
+ultralytics>=8.3.0
+# Optional torch/transformers depth backend:
+#   pip install -r requirements-depth.txt
+# Optional local Laya scout verification:
+#   pip install -r requirements-laya.txt
+# Verify installs:
+#   python -m ramscout.deps --strict

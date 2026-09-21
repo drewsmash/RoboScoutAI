@@ -133,8 +133,20 @@ def index() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": __version__}
+def health() -> dict:
+    from ramscout.deps import check_deps
+
+    deps = check_deps()
+    return {
+        "status": "ok" if deps.get("ok") else "degraded",
+        "version": __version__,
+        "deps_ok": bool(deps.get("ok")),
+        "missing_required": list(deps.get("missing_required") or []),
+        "missing_optional": list(deps.get("missing_optional") or []),
+        "install": list(deps.get("install") or []),
+        "detector": deps.get("detector") or {},
+        "notes": list(deps.get("notes") or []),
+    }
 
 
 @app.get("/api/version")
@@ -266,16 +278,31 @@ def trackers() -> dict:
         detector = detector_status()
     except Exception as exc:  # noqa: BLE001
         detector = {"error": str(exc), "frc_ready": False}
+    try:
+        from ramscout.deps import check_deps
+
+        deps = check_deps()
+    except Exception as exc:  # noqa: BLE001
+        deps = {"ok": False, "error": str(exc)}
     return {
         "modes": modes,
         "strategies": strategies,
         "depth": depth,
         "detector": detector,
+        "deps": {
+            "ok": bool(deps.get("ok")),
+            "missing_required": list(deps.get("missing_required") or []),
+            "missing_optional": list(deps.get("missing_optional") or []),
+            "install": list(deps.get("install") or []),
+            "required": deps.get("required") or [],
+            "optional": deps.get("optional") or [],
+        },
         "env_hints": {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
             "yolo": "pip install ultralytics (+ optional models/*.pt) — training only; runtime prefers ONNX",
             "onnx": "pip install onnxruntime (+ models/robot.onnx) — packaged local detector",
+            "install": "pip install -r requirements.txt && python -m ramscout.deps --strict",
             "jev": "AI_GATEWAY_API_KEY (Vercel AI Gateway → typesafe-ai/jev)",
         },
     }
