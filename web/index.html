@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RoboScoutAI</title>
   <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#0e0e10" />
+  <meta name="theme-color" content="#0b0d10" />
   <meta name="application-name" content="RoboScoutAI" />
   <meta name="apple-mobile-web-app-title" content="RoboScoutAI" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
@@ -14,30 +14,49 @@
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@380;500;650;750&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles/tokens.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
-  <header class="topbar">
-    <div class="brand">
-      <img class="mark-img" src="/static/icons/icon-64.png" width="36" height="36" alt="" />
-      <div>
-        <div class="wordmark">RoboScoutAI</div>
-        <div class="tagline" id="game-tagline">FRC auto-scout from match video</div>
+  <div class="app-shell" id="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Primary">
+      <button type="button" class="sidebar-brand" id="nav-home" title="Home">
+        <img class="mark-img" src="/static/icons/icon-64.png" width="32" height="32" alt="" />
+        <span class="sidebar-brand-text">
+          <span class="wordmark">RoboScoutAI</span>
+          <span class="tagline" id="game-tagline">FRC analysis studio</span>
+        </span>
+      </button>
+      <nav class="sidebar-nav">
+        <button type="button" class="nav-item is-active" data-nav="home"><span class="nav-ico" aria-hidden="true">⌂</span><span>Home</span></button>
+        <button type="button" class="nav-item" data-nav="matches"><span class="nav-ico" aria-hidden="true">▣</span><span>Matches</span></button>
+        <button type="button" class="nav-item" data-nav="studio"><span class="nav-ico" aria-hidden="true">▶</span><span>Analysis Studio</span></button>
+        <button type="button" class="nav-item" data-nav="teams"><span class="nav-ico" aria-hidden="true">◎</span><span>Teams</span></button>
+        <button type="button" class="nav-item" data-nav="compare"><span class="nav-ico" aria-hidden="true">⇄</span><span>Compare</span></button>
+        <button type="button" class="nav-item" data-nav="picklist" id="nav-scoutbook"><span class="nav-ico" aria-hidden="true">☰</span><span>Pick List</span></button>
+        <button type="button" class="nav-item" data-nav="settings"><span class="nav-ico" aria-hidden="true">⚙</span><span>Settings</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <button type="button" class="sidebar-collapse" id="sidebar-toggle" aria-label="Collapse sidebar">‹</button>
+        <span class="chip version" id="version-chip" title="App version">…</span>
+        <button type="button" class="chip update" id="update-chip" hidden>Update</button>
       </div>
-    </div>
+    </aside>
+    <div class="shell-main">
+  <header class="topbar topbar-compact">
+    <div class="topbar-title" id="topbar-title">Analyze a match</div>
     <div class="top-actions">
-      <button type="button" class="chip ghost" id="nav-scoutbook" title="Open pick list &amp; scout book">Pick list</button>
-      <button type="button" class="chip ghost" id="version-chip" title="Check for updates">v…</button>
-      <button type="button" class="chip update" id="update-chip" hidden>Update available</button>
-      <span class="chip ghost">FRC scouting</span>
+      <button type="button" class="btn primary small" id="cta-analyze">Analyze a match</button>
+      <span class="chip ghost" id="motion-chip" title="Motion preference">Motion</span>
     </div>
   </header>
 
-  <section class="composer" id="composer">
+  <section class="composer view-panel is-active" id="composer" data-view="home">
+    <p class="eyebrow">Home</p>
     <h1>Watch the match. Scout every robot.</h1>
-    <p class="lede">Paste a recorded FRC match YouTube link. RoboScoutAI reads the scorebug and teams from the video, follows each robot on the field map, and estimates hub, defense, and climb actions. TBA is optional for nicknames.</p>
+    <p class="lede">Paste a recorded FRC match YouTube link or upload a VOD. Tracking uses the <strong>top overview camera only</strong> — lock the crop, confirm the field map, then review uncertain moments. TBA is optional for nicknames.</p>
 
     <form id="start-form" class="composer-card" autocomplete="off">
       <label class="field grow">
@@ -110,19 +129,30 @@
         </div>
         <p class="tool-meta">Scout verification uses <strong>Laya</strong> on this machine when installed (<code>pip install laya</code> — ~10× faster than cloud Jev). Without local weights, an AI Gateway key falls back to <code>typesafe-ai/jev</code>. Multi-view detection runs separately on the overview and each angle shot, then correlates them.</p>
         <div class="composer-row">
+          <label class="field grow">
+            <span>Overview crop (top widescreen)</span>
+            <div class="crop-lock-row">
+              <label class="check tight"><input id="top-overview-only" name="top_overview_only" type="checkbox" checked /> Top overview only</label>
+              <button type="button" class="btn tonal small" id="crop-lock-btn" title="Lock the proposed top crop">Lock crop</button>
+              <span class="chip ghost" id="crop-lock-status">Auto · unlocked</span>
+            </div>
+          </label>
+        </div>
+        <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
-            <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.10" />
+            <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.02" />
           </label>
           <label class="field">
             <span>Crop bottom</span>
-            <input id="crop-bottom" name="crop_bottom" type="number" min="0.5" max="1" step="0.01" value="0.65" />
+            <input id="crop-bottom" name="crop_bottom" type="number" min="0.25" max="1" step="0.01" value="0.52" />
           </label>
           <label class="check field">
-            <span>Auto multi-view crop</span>
+            <span>Propose from layout</span>
             <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
           </label>
         </div>
+        <p class="tool-meta">Robot tracking runs only inside the locked overview crop. Side angle shots never create robot identities in this mode. Drag handles appear in Analysis Studio after the first frame.</p>
       </details>
       <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RoboScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
@@ -136,7 +166,56 @@
     </div>
   </section>
 
-  <main class="workspace" id="workspace" hidden>
+  <section class="view-panel library-view" id="matches-view" data-view="matches" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Matches</p>
+        <h2>Match library</h2>
+      </div>
+      <button type="button" class="btn primary small" id="lib-go-analyze" onclick="document.getElementById('cta-analyze')?.click()">Analyze a match</button>
+    </header>
+    <div class="match-library" id="match-library"></div>
+  </section>
+
+  <section class="view-panel settings-view" id="settings-view" data-view="settings" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Settings</p>
+        <h2>Analysis &amp; models</h2>
+      </div>
+    </header>
+    <div class="settings-grid">
+      <article class="tool-block">
+        <h3>General</h3>
+        <p class="tool-meta">Motion preference cycles via the Motion chip in the top bar (Full / Reduced / Off).</p>
+      </article>
+      <article class="tool-block">
+        <h3>Models</h3>
+        <p class="tool-meta" id="settings-depth">Loading detector / depth status…</p>
+        <p class="tool-meta">Packaged detection uses ONNX Runtime. Ultralytics is for training/export only — the app does not require it at runtime.</p>
+      </article>
+      <article class="tool-block">
+        <h3>Cloud</h3>
+        <p class="tool-meta">Cloud repair and training remain optional. Routine tracking stays local.</p>
+      </article>
+      <article class="tool-block">
+        <h3>Updates</h3>
+        <p class="tool-meta">Desktop updates install from the git release channel when managed by Setup.</p>
+      </article>
+    </div>
+  </section>
+
+  <main class="workspace studio-view view-panel" id="workspace" data-view="studio" hidden>
+    <header class="section-head studio-head">
+      <div>
+        <p class="eyebrow">Analysis Studio</p>
+        <h2 id="studio-heading">Match analysis</h2>
+      </div>
+      <div class="studio-actions">
+        <button type="button" class="btn tonal small" id="next-uncertain" title="Jump to next uncertain moment">Next uncertain</button>
+        <button type="button" class="btn tonal small" id="correct-team-btn">Correct team</button>
+      </div>
+    </header>
     <section class="progress-panel thinking" id="progress-panel">
       <div class="think-orbits" aria-hidden="true">
         <span class="orbit o1"></span>
@@ -231,8 +310,10 @@
         </header>
         <canvas id="field-canvas" width="1302" height="636"></canvas>
         <div class="legend">
-          <span><i class="swatch auto"></i> Auto</span>
-          <span><i class="swatch tele"></i> Teleop</span>
+          <span><i class="swatch red"></i> Red</span>
+          <span><i class="swatch blue"></i> Blue</span>
+          <span><i class="swatch unknown"></i> Unknown</span>
+          <span><i class="swatch auto"></i> Auto period</span>
           <span><i class="swatch end"></i> Endgame</span>
           <span><i class="swatch zebra"></i> Zebra</span>
           <span class="field-year" id="field-year">2026 REBUILT</span>
@@ -441,6 +522,8 @@
   <footer class="foot">
     Built for FRC scouting · Not affiliated with FIRST · Scores are read from the match video when possible
   </footer>
+    </div><!-- /.shell-main -->
+  </div><!-- /.app-shell -->
 
   <script src="/static/app.js" type="module"></script>
   <script src="/static/suite.js" type="module"></script>
