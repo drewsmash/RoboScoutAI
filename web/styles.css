@@ -1145,6 +1145,7 @@ html[data-motion="off"] .view-panel { animation: none; }
 .swatch.unknown { background: var(--unknown); }
 .chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.warn-text { color: var(--warn); }
 .robot-meta-row {
   display: flex; flex-wrap: wrap; gap: 6px;
   margin: 0 0 10px;

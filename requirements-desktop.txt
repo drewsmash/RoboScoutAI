@@ -1,4 +1,5 @@
-# Slim dependency set for Windows/macOS PyInstaller builds (no PyTorch).
+# Slim dependency set for Windows/macOS PyInstaller builds (no PyTorch / Ultralytics).
+# Verify after install: python -m ramscout.deps --strict
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.12
@@ -8,7 +9,7 @@ numpy>=1.26.0
 scipy>=1.11.0
 opencv-python-headless>=4.10.0
 Pillow>=10.0.0
-# Neural depth in the frozen app: ONNX Runtime + one-time weights download (no torch).
+# Required: neural depth + packaged robot ONNX detector (no ultralytics at runtime).
 onnxruntime>=1.17.0
 yt-dlp[default]>=2025.9.26
 openpyxl>=3.1.5

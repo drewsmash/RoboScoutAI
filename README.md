@@ -13,6 +13,17 @@ Paste a recorded FRC match VOD (not a live stream). RoboScoutAI:
 
 Action counts are **heuristics**. Confirm anything you put on a pick list.
 
+## From source
+
+```bash
+python -m pip install -U pip wheel
+python -m pip install -r requirements.txt
+python -m ramscout.deps --strict          # fail if anything required is missing
+uvicorn app:app --reload --port 8765
+```
+
+Full dependency map: [`docs/INSTALL.md`](docs/INSTALL.md).
+
 ## Desktop builds (Windows / macOS)
 
 RoboScoutAI can ship as a local desktop app that opens in its own chrome-less window (no URL bar):
@@ -20,6 +31,7 @@ RoboScoutAI can ship as a local desktop app that opens in its own chrome-less wi
 ```bash
 # from source
 pip install -r requirements-desktop.txt
+python -m ramscout.deps --strict
 python desktop/main.py
 
 # or package on the target OS
