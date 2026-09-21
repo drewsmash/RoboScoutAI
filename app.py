@@ -96,6 +96,8 @@ class StartRequest(BaseModel):
     google_key: str = ""
     ai_gateway_key: str = ""
     auto_multicam: bool = True
+    top_overview_only: bool = True
+    crop_locked: bool = False
 
 
 
@@ -131,8 +133,20 @@ def index() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": __version__}
+def health() -> dict:
+    from ramscout.deps import check_deps
+
+    deps = check_deps()
+    return {
+        "status": "ok" if deps.get("ok") else "degraded",
+        "version": __version__,
+        "deps_ok": bool(deps.get("ok")),
+        "missing_required": list(deps.get("missing_required") or []),
+        "missing_optional": list(deps.get("missing_optional") or []),
+        "install": list(deps.get("install") or []),
+        "detector": deps.get("detector") or {},
+        "notes": list(deps.get("notes") or []),
+    }
 
 
 @app.get("/api/version")
@@ -258,24 +272,48 @@ def trackers() -> dict:
         depth = depth_backends()
     except Exception as exc:  # noqa: BLE001
         depth = {"error": str(exc)}
+    try:
+        from ramscout.onnx_detector import detector_status
+
+        detector = detector_status()
+    except Exception as exc:  # noqa: BLE001
+        detector = {"error": str(exc), "frc_ready": False}
+    try:
+        from ramscout.deps import check_deps
+
+        deps = check_deps()
+    except Exception as exc:  # noqa: BLE001
+        deps = {"ok": False, "error": str(exc)}
     return {
         "modes": modes,
         "strategies": strategies,
         "depth": depth,
+        "detector": detector,
+        "deps": {
+            "ok": bool(deps.get("ok")),
+            "missing_required": list(deps.get("missing_required") or []),
+            "missing_optional": list(deps.get("missing_optional") or []),
+            "install": list(deps.get("install") or []),
+            "required": deps.get("required") or [],
+            "optional": deps.get("optional") or [],
+        },
         "env_hints": {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
-            "yolo": "pip install ultralytics (+ optional models/*.pt)",
+            "yolo": "pip install ultralytics (+ optional models/*.pt) — training only; runtime prefers ONNX",
+            "onnx": "pip install onnxruntime (+ models/robot.onnx) — packaged local detector",
+            "install": "pip install -r requirements.txt && python -m ramscout.deps --strict",
             "jev": "AI_GATEWAY_API_KEY (Vercel AI Gateway → typesafe-ai/jev)",
         },
     }
 
 
 def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
+    """Normalize overview crop. Bottom may be < 0.5 for a tight top widescreen lock."""
     if crop_bottom <= crop_top:
         raise HTTPException(400, "Crop bottom must be below crop top.")
     top = min(max(crop_top, 0.0), 0.45)
-    bottom = min(max(crop_bottom, 0.5), 1.0)
+    bottom = min(max(crop_bottom, 0.25), 1.0)
     if bottom <= top:
         raise HTTPException(400, "Crop bottom must be below crop top.")
     return top, bottom
@@ -305,6 +343,8 @@ def create_job(body: StartRequest) -> dict:
         or os.environ.get("AI_GATEWAY_API_KEY", "")
         or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
         auto_multicam=bool(body.auto_multicam),
+        top_overview_only=bool(body.top_overview_only),
+        crop_locked=bool(body.crop_locked),
     )
     return job.public()
 
@@ -323,6 +363,8 @@ async def create_job_upload(
     google_key: str = Form(""),
     ai_gateway_key: str = Form(""),
     auto_multicam: bool = Form(True),
+    top_overview_only: bool = Form(True),
+    crop_locked: bool = Form(False),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
     suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -368,6 +410,8 @@ async def create_job_upload(
             or os.environ.get("AI_GATEWAY_API_KEY", "")
             or os.environ.get("VERCEL_AI_GATEWAY_API_KEY", ""),
             auto_multicam=bool(auto_multicam),
+            top_overview_only=bool(top_overview_only),
+            crop_locked=bool(crop_locked),
         )
     except HTTPException:
         tmp_path.unlink(missing_ok=True)

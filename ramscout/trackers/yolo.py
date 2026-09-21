@@ -172,7 +172,14 @@ class YoloTracker:
         self.robot_tuned = False
 
     def available(self, ctx: TrackerContext | None = None) -> bool:
-        return ultralytics_available()
+        if ultralytics_available():
+            return True
+        try:
+            from ramscout.onnx_detector import find_robot_onnx, onnxruntime_available
+
+            return bool(onnxruntime_available() and find_robot_onnx())
+        except Exception:
+            return False
 
     def reset(self) -> None:
         self.model = None
@@ -180,17 +187,41 @@ class YoloTracker:
         self.warnings = []
         self._next_fallback_id = 1000
         self.robot_tuned = False
+        self._onnx = None
+
+    def _ensure_onnx(self) -> bool:
+        if getattr(self, "_onnx", None) is not None:
+            return self._onnx.available
+        try:
+            from ramscout.onnx_detector import OnnxRobotDetector
+
+            self._onnx = OnnxRobotDetector()
+            if self._onnx.available:
+                self.family = "ONNX"
+                self.robot_tuned = bool(self._onnx.meta.frc_ready)
+                if not self._onnx.meta.frc_ready:
+                    self.warnings.append(
+                        "ONNX robot detector loaded but meta.frc_ready is false — treat as unvalidated."
+                    )
+                return True
+        except Exception as exc:  # noqa: BLE001
+            self.warnings.append(f"ONNX detector unavailable ({exc}).")
+            self._onnx = None
+        return False
 
     def _ensure_model(self) -> bool:
         if self.model is not None:
             return True
         if not ultralytics_available():
-            return False
+            return self._ensure_onnx()
         weights = self.model_path or (str(ensure_detector_weights() or "") or None)
         if not weights:
             local = find_local_model()
             weights = str(local) if local else None
         if not weights:
+            # Prefer packaged ONNX over failing closed when Ultralytics has no weights.
+            if self._ensure_onnx():
+                return True
             self.warnings.append("YOLO requested but no detector weights were available.")
             return False
         try:
@@ -208,10 +239,14 @@ class YoloTracker:
         except Exception as exc:  # noqa: BLE001
             self.warnings.append(f"Could not load YOLO detector ({exc}).")
             self.model = None
-            return False
+            return self._ensure_onnx()
 
     def detect(self, cropped: np.ndarray, ctx: TrackerContext) -> list[Detection]:
-        if not self._ensure_model() or self.model is None:
+        if not self._ensure_model():
+            return []
+        if self.model is None and getattr(self, "_onnx", None) is not None:
+            return self._detect_onnx(cropped, ctx)
+        if self.model is None:
             return []
         try:
             kwargs: dict[str, Any] = {
@@ -249,8 +284,36 @@ class YoloTracker:
                 Detection(
                     track_id=int(tid),
                     bbox=[x1, y1, x2, y2],
-                    source=self.name,
                     confidence=float(conf),
+                    source=self.name,
+                    meta={"family": self.family, "robot_tuned": self.robot_tuned},
+                )
+            )
+        return out
+
+    def _detect_onnx(self, cropped: np.ndarray, ctx: TrackerContext) -> list[Detection]:
+        onnx = getattr(self, "_onnx", None)
+        if onnx is None or not onnx.available:
+            return []
+        out: list[Detection] = []
+        for det in onnx.detect(cropped, conf=0.25):
+            x1, y1, x2, y2 = det.bbox
+            if not plausible_robot_size(x2 - x1, y2 - y1, ctx.crop_w, ctx.crop_h):
+                continue
+            tid = self._next_fallback_id
+            self._next_fallback_id += 1
+            out.append(
+                Detection(
+                    track_id=tid,
+                    bbox=[x1, y1, x2, y2],
+                    confidence=float(det.score),
+                    source=self.name,
+                    meta={
+                        "family": "ONNX",
+                        "provider": onnx.provider,
+                        "robot_tuned": bool(onnx.meta.frc_ready),
+                        "frc_ready": bool(onnx.meta.frc_ready),
+                    },
                 )
             )
         return out

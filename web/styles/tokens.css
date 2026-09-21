@@ -1,0 +1,98 @@
+/* RoboScoutAI design tokens — robotics broadcast-analysis studio */
+
+:root {
+  /* Surfaces — dark graphite */
+  --bg: #0b0d10;
+  --bg-elevated: #12151a;
+  --surface: #171b22;
+  --surface-2: #1e2430;
+  --surface-3: #272e3c;
+  --surface-hover: #2e3646;
+
+  /* Ink */
+  --ink: #eef1f6;
+  --ink-muted: #9aa3b5;
+  --ink-faint: #6b7385;
+
+  /* Lines / elevation */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --glow-cyan: 0 0 24px rgba(34, 211, 238, 0.18);
+
+  /* Brand / controls — electric cyan */
+  --primary: #22d3ee;
+  --primary-ink: #042f2e;
+  --primary-dim: rgba(34, 211, 238, 0.14);
+  --primary-border: rgba(34, 211, 238, 0.35);
+
+  /* Alliance — never use blue for unknown */
+  --blue: #5b9cff;
+  --blue-deep: #1a3a6e;
+  --blue-soft: rgba(91, 156, 255, 0.16);
+  --red: #ff6b6b;
+  --red-deep: #6e2424;
+  --red-soft: rgba(255, 107, 107, 0.16);
+  --unknown: #94a3b8;
+  --unknown-soft: rgba(148, 163, 184, 0.16);
+
+  /* Status */
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --danger: #f87171;
+
+  /* Type */
+  --font-display: "Sora", "Outfit", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Roboto", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Radius / space */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --dur-fast: 140ms;
+  --dur-med: 240ms;
+  --dur-slow: 380ms;
+
+  /* Shell */
+  --sidebar-w: 232px;
+  --sidebar-collapsed: 68px;
+  --topbar-h: 56px;
+
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur-med: 1ms;
+    --dur-slow: 1ms;
+  }
+}
+
+html[data-motion="reduced"] {
+  --dur-fast: 80ms;
+  --dur-med: 120ms;
+  --dur-slow: 160ms;
+  --ease-spring: var(--ease-out);
+}
+
+html[data-motion="off"] {
+  --dur-fast: 1ms;
+  --dur-med: 1ms;
+  --dur-slow: 1ms;
+}

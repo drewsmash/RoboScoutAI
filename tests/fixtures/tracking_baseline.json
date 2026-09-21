@@ -1,0 +1,24 @@
+{
+  "name": "tracking-redesign-baseline",
+  "starting_commit": "4a67ad940ec653cf544680aad2e256575ce21f3e",
+  "notes": "Placeholder baseline manifest. Populate with HOTA/IDF1 on labeled VODs when footage is available. Do not treat synthetic dots as solved tracking.",
+  "invariants": [
+    "lower_panes_cannot_create_tracks_in_top_only",
+    "unknown_stays_unknown",
+    "confirmed_identity_colors_stable",
+    "backend_reporting_matches_execution",
+    "no_interpolation_across_invalid_intervals",
+    "manual_corrections_persist"
+  ],
+  "clips": [],
+  "metrics": {
+    "hota": null,
+    "idf1": null,
+    "id_switches": null,
+    "det_precision": null,
+    "det_recall": null,
+    "alliance_accuracy": null,
+    "visible_track_coverage": null,
+    "field_position_error_in": null
+  }
+}

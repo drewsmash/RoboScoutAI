@@ -6,11 +6,11 @@ On Windows this binary is not run directly by users: ``RoboScoutAI.exe`` (the
 manager, see ``manager.spec``) installs it side-by-side under
 ``%LOCALAPPDATA%\\RoboScoutAI\\app\\<version>\\`` and launches it with ``--managed``.
 
-Keeps the freeze lean by excluding torch/ultralytics; neural depth ships via
-onnxruntime (Depth Anything V2 Small weights download on first use). Demo mode,
-overlay OCR, YouTube ingest and the manager-driven updater all work. Drop a
-robot .pt next to the app and install ultralytics in a source tree for full
-tracking.
+Keeps the freeze lean by excluding torch/ultralytics; neural depth **and** the
+packaged robot detector ship via onnxruntime (Depth Anything V2 Small weights
+download on first use; place ``models/robot.onnx`` for FRC detection when
+available). Demo mode, overlay OCR, YouTube ingest and the manager-driven
+updater all work. Train with Ultralytics in a source tree, then export ONNX.
 """
 
 from __future__ import annotations
@@ -60,6 +60,10 @@ hiddenimports = [
     "yt_dlp",
     "ramscout",
     "ramscout.trackers",
+    "ramscout.crop",
+    "ramscout.identity_book",
+    "ramscout.onnx_detector",
+    "ramscout.deps",
     "ramscout.managed",
     "roboscout_manager",
     "roboscout_manager.ipc",
