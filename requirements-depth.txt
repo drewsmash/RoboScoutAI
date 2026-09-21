@@ -1,0 +1,17 @@
+# Optional PyTorch backend for Depth Anything V2 (Hugging Face Transformers).
+#
+# The default install already gets real neural depth through ONNX Runtime
+# (see requirements.txt). Install this file only if you want the torch path
+# (GPU / MPS acceleration, or to experiment with other Depth Anything checkpoints).
+#
+# CPU-only wheels (≈200 MB instead of ≈2 GB with CUDA):
+#   pip install -r requirements-depth.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# CUDA users: drop the --extra-index-url and let pip pick the default wheel.
+torch>=2.2.0
+transformers>=4.41.0
+Pillow>=10.0.0
+safetensors>=0.4.2
+huggingface_hub>=0.23.0
+timm>=0.9.12
+accelerate>=0.30.0

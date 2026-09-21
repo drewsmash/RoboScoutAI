@@ -6,9 +6,11 @@ On Windows this binary is not run directly by users: ``RoboScoutAI.exe`` (the
 manager, see ``manager.spec``) installs it side-by-side under
 ``%LOCALAPPDATA%\\RoboScoutAI\\app\\<version>\\`` and launches it with ``--managed``.
 
-Keeps the freeze lean by excluding torch/ultralytics. Demo mode, overlay OCR,
-YouTube ingest and the manager-driven updater all work. Drop a robot .pt next to
-the app and install ultralytics in a source tree for full tracking.
+Keeps the freeze lean by excluding torch/ultralytics; neural depth ships via
+onnxruntime (Depth Anything V2 Small weights download on first use). Demo mode,
+overlay OCR, YouTube ingest and the manager-driven updater all work. Drop a
+robot .pt next to the app and install ultralytics in a source tree for full
+tracking.
 """
 
 from __future__ import annotations
@@ -78,6 +80,14 @@ tmp_datas, tmp_binaries, tmp_hidden = collect_all("cv2")
 datas += tmp_datas
 binaries += tmp_binaries
 hiddenimports += tmp_hidden
+for _pkg in ("onnxruntime", "scipy"):
+    try:
+        tmp_datas, tmp_binaries, tmp_hidden = collect_all(_pkg)
+    except Exception:  # noqa: BLE001 — optional in the freeze
+        continue
+    datas += tmp_datas
+    binaries += tmp_binaries
+    hiddenimports += tmp_hidden
 
 a = Analysis(
     [str(ROOT / "desktop" / "main.py")],

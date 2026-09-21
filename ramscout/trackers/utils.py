@@ -98,3 +98,18 @@ def encode_jpeg_bgr(frame_bgr: np.ndarray, quality: int = 70) -> bytes:
     if not ok:
         raise RuntimeError("Could not encode JPEG for cloud vision.")
     return bytes(buf)
+
+
+def apply_field_mask(mask, ctx) -> "np.ndarray":
+    """AND a binary proposal mask with ``ctx.extras["field_mask"]`` when present.
+
+    The mask (uint8, crop-sized, 255 inside the carpet polygon plus margin) is
+    produced by the tracking session from the calibrated homography; it keeps
+    referees, crowd and driver-station motion from ever becoming proposals.
+    """
+    import cv2
+
+    fm = getattr(ctx, "extras", {}).get("field_mask") if ctx is not None else None
+    if fm is None or getattr(fm, "shape", None) != mask.shape[:2]:
+        return mask
+    return cv2.bitwise_and(mask, fm)

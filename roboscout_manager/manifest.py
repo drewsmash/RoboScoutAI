@@ -109,10 +109,15 @@ class Artifact:
     size: int
     kind: str = "other"
     platform: str = "any"
+    # Optional direct download URL (GitHub Release asset). Used when the git
+    # update channel cannot host the blob (GitHub's 100 MB hard limit).
+    url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("name")
+        if not data.get("url"):
+            data.pop("url", None)
         return data
 
 
@@ -204,6 +209,7 @@ def parse_manifest(source: str | bytes | dict[str, Any]) -> Manifest:
             size=size,
             kind=str(raw.get("kind") or infer_kind(str(name))),
             platform=str(raw.get("platform") or infer_platform(str(name))),
+            url=str(raw.get("url") or "").strip(),
         )
     return Manifest(
         version=version,

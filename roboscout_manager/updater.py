@@ -445,6 +445,51 @@ def _channel_is_tag(channel: str) -> bool:
     return looks_like_version(channel)
 
 
+def download_artifact(
+    channel: Any,
+    artifact: Artifact,
+    dest: Path,
+    *,
+    progress: ProgressFn = _noop_progress,
+    github_repo: str = "",
+    release_tag: str = "",
+    releases_factory: Callable[[str, str], ReleasesChannel] | None = None,
+) -> Path:
+    """Download ``artifact`` via the channel, then ``artifact.url``, then GitHub Releases.
+
+    Large app builds no longer fit in the git update channel (GitHub's 100 MB
+    blob limit). The channel still carries ``manifest.json`` + the thin manager;
+    the Windows app is fetched from the matching GitHub Release asset.
+    """
+    errors: list[str] = []
+    try:
+        return channel.download(artifact.name, dest, progress, expected_size=artifact.size)
+    except ChannelError as exc:
+        errors.append(f"{getattr(channel, 'name', 'channel')}: {exc}")
+
+    if artifact.url:
+        try:
+            return http_download(artifact.url, dest, progress=progress)
+        except ChannelError as exc:
+            errors.append(f"url: {exc}")
+
+    repo = (github_repo or "").strip()
+    tag = normalize_version(release_tag or "")
+    if repo and tag:
+        release_ref = tag if tag.startswith("v") else f"v{tag}"
+        try:
+            if releases_factory is not None:
+                rel = releases_factory(repo, release_ref)
+            else:
+                rel = ReleasesChannel(repo, tag=release_ref)
+            rel.fetch()
+            return rel.download(artifact.name, dest, progress, expected_size=artifact.size)
+        except (ChannelError, ManifestError, json.JSONDecodeError) as exc:
+            errors.append(f"releases: {exc}")
+
+    raise ChannelError("; ".join(errors) or f"could not download {artifact.name}")
+
+
 def check_for_update(
     root: Path,
     *,
@@ -622,7 +667,14 @@ def perform_update(
     tmp = dest_dir / ".download.part"
     try:
         report("downloading", 20, f"Downloading {APP_NAME} {manifest.version} ({art.size // (1024 * 1024)} MB)…")
-        channel.download(art.name, tmp, lambda s, p, m: report(s, p, m), expected_size=art.size)
+        download_artifact(
+            channel,
+            art,
+            tmp,
+            progress=lambda s, p, m: report(s, p, m),
+            github_repo=cfg.github_repo,
+            release_tag=manifest.version,
+        )
         report("verifying", 85, "Verifying download…")
         verify_file(tmp, art)
         report("installing", 92, f"Installing {manifest.version}…")
@@ -719,7 +771,15 @@ def self_update_manager(
     staged = root / f"{MANAGER_EXE_NAME}.new"
     try:
         report("manager-update", 10, f"Updating manager to {manifest.min_manager_version}+…")
-        channel.download(art.name, staged, lambda s, p, m: report("manager-update", p, m), expected_size=art.size)
+        cfg = read_config(root)
+        download_artifact(
+            channel,
+            art,
+            staged,
+            progress=lambda s, p, m: report("manager-update", p, m),
+            github_repo=cfg.github_repo,
+            release_tag=manifest.version,
+        )
         verify_file(staged, art)
     except (ChannelError, VerificationError, OSError) as exc:
         try:

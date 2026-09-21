@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from ramscout.trackers.types import Detection, TrackerContext
-from ramscout.trackers.utils import drop_nested_boxes, plausible_robot_size
+from ramscout.trackers.utils import apply_field_mask, drop_nested_boxes, plausible_robot_size
 
 
 class ColorTracker:
@@ -23,6 +23,7 @@ class ColorTracker:
         import cv2
 
         hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
         # Slightly wider ranges for broadcast compression / LED wash.
         red = cv2.inRange(hsv, (0, 70, 55), (14, 255, 255)) | cv2.inRange(hsv, (162, 70, 55), (180, 255, 255))
         blue = cv2.inRange(hsv, (90, 60, 45), (138, 255, 255))
@@ -31,6 +32,8 @@ class ColorTracker:
         blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, kernel)
         red = cv2.morphologyEx(red, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        red = apply_field_mask(red, ctx)
+        blue = apply_field_mask(blue, ctx)
 
         blobs: list[tuple[str, float, list[float]]] = []
         for alliance, mask in (("red", red), ("blue", blue)):
@@ -41,16 +44,27 @@ class ColorTracker:
             sized: list[tuple[float, list[float]]] = []
             for contour in contours:
                 x, y, w, h = cv2.boundingRect(contour)
-                if not plausible_robot_size(float(w), float(h), ctx.crop_w, ctx.crop_h):
-                    continue
-                if h < 8 or w < 10:
+                if w < 10 or h < 3 or w > 0.25 * ctx.crop_w:
                     continue
                 area = float(cv2.contourArea(contour))
-                if area < 35:
+                if area < 30:
                     continue
                 if area / float(max(w * h, 1)) < 0.25:
                     continue  # hollow / ring-like, not a bumper
-                sized.append((area, [float(x), float(y), float(x + w), float(y + h)]))
+                # Bumpers are *thin*: ~5 in tall on a ~30 in side. A saturated
+                # blob as tall as it is wide is a scale plate, alliance-wall
+                # panel or LED sign, never a bumper.
+                if h > 0.6 * w:
+                    continue
+                robot = bumper_to_robot_box(float(x), float(y), float(w), float(h), ctx.crop_w, ctx.crop_h)
+                rw, rh = robot[2] - robot[0], robot[3] - robot[1]
+                if not plausible_robot_size(rw, rh, ctx.crop_w, ctx.crop_h):
+                    continue
+                if not body_differs_from_surroundings(gray, robot):
+                    # Nothing stands on this strip: alliance tape / zone
+                    # outline / LED wall segment painted on bare carpet.
+                    continue
+                sized.append((area, robot))
             sized.sort(key=lambda row: row[0], reverse=True)
             for area, bbox in drop_nested_boxes(sized):
                 blobs.append((alliance, area, bbox))
@@ -71,6 +85,53 @@ class ColorTracker:
                 )
             )
         return out
+
+
+def body_differs_from_surroundings(gray: np.ndarray, robot: list[float], *, min_diff: float = 9.0) -> bool:
+    """Is there a robot body above the bumper strip, or just carpet?
+
+    Compares the upper part of the robot box with the carpet immediately to
+    its left and right (same rows): mean brightness and texture (std). Tape
+    rectangles, zone outlines and LED wall strips fail because the "body"
+    region is the same carpet as its neighbours.
+    """
+    x1, y1, x2, y2 = [int(round(v)) for v in robot]
+    h, w = gray.shape[:2]
+    bw = max(x2 - x1, 1)
+    by1, by2 = max(y1, 0), max(y1, 0) + max(int((y2 - y1) * 0.6), 2)
+    by2 = min(by2, h)
+    if by2 - by1 < 2:
+        return True
+    body = gray[by1:by2, max(x1, 0) : min(x2, w)]
+    if body.size < 8:
+        return True
+    ctx_parts = []
+    lx1, lx2 = max(x1 - bw, 0), max(x1, 0)
+    rx1, rx2 = min(x2, w), min(x2 + bw, w)
+    if lx2 - lx1 >= 3:
+        ctx_parts.append(gray[by1:by2, lx1:lx2])
+    if rx2 - rx1 >= 3:
+        ctx_parts.append(gray[by1:by2, rx1:rx2])
+    if not ctx_parts:
+        return True
+    ctx = np.concatenate([c.reshape(-1) for c in ctx_parts])
+    diff = abs(float(body.mean()) - float(ctx.mean())) + abs(float(body.std()) - float(ctx.std()))
+    return diff >= min_diff
+
+
+def bumper_to_robot_box(x: float, y: float, w: float, h: float, crop_w: int, crop_h: int) -> list[float]:
+    """Grow a bumper strip into the robot box that stands on it.
+
+    The strip is the bottom of the robot; the body rises roughly 0.7–0.9 of
+    the bumper width above it in a broadcast view. Wider (corner-on) strips
+    already include perspective, so the growth is capped.
+    """
+    body = float(np.clip(0.8 * w, min(2.5 * h, w), w))
+    x1 = max(0.0, x - 0.04 * w)
+    x2 = min(float(crop_w), x + w + 0.04 * w)
+    y2 = min(float(crop_h), y + h)
+    y1 = max(0.0, y2 - body - h)
+    return [x1, y1, x2, y2]
 
 
 def lowest_band_rule(

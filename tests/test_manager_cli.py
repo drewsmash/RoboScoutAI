@@ -74,7 +74,7 @@ def test_cli_version_and_list(root, tmp_path):
     out = tmp_path / "v.json"
     assert cli.main(["--root", str(root), "--version", "--json", "--out", str(out)]) == 0
     data = _read(out)
-    assert data["app_version"] == "0.6.0" and data["manager_version"] == "0.6.0"
+    assert data["app_version"] == "0.6.0" and data["manager_version"] == "0.6.2"
     assert data["installed_versions"] == ["0.6.0"]
     assert cli.main(["--root", str(root), "--list", "--json", "--out", str(out)]) == 0
     assert _read(out)["installed_versions"] == ["0.6.0"]
@@ -251,14 +251,14 @@ def test_run_launcher_stops_when_manager_swap_pending(root, tmp_path, monkeypatc
 
 
 def test_managed_endpoints_delegate_to_manager(root, tmp_path, monkeypatch):
-    _install(root, tmp_path, "0.6.0")
+    _install(root, tmp_path, "0.6.2")
     monkeypatch.setenv("ROBOSCOUT_MANAGED", "1")
     monkeypatch.setenv("ROBOSCOUT_MANAGER_ROOT", str(root))
     monkeypatch.setenv("ROBOSCOUT_MANAGER_TOKEN", ipc.issue_token(root))
-    monkeypatch.setenv("ROBOSCOUT_MANAGER_VERSION", "0.6.0")
+    monkeypatch.setenv("ROBOSCOUT_MANAGER_VERSION", "0.6.2")
     from ramscout import managed
 
-    monkeypatch.setattr(managed, "run_manager", lambda args, timeout=0: {"available": True, "latest_version": "0.6.1", "message": "update available", "can_apply": True})
+    monkeypatch.setattr(managed, "run_manager", lambda args, timeout=0: {"available": True, "latest_version": "0.6.3", "message": "update available", "can_apply": True})
     spawned = []
     monkeypatch.setattr(managed.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd))
     from fastapi.testclient import TestClient
@@ -266,17 +266,17 @@ def test_managed_endpoints_delegate_to_manager(root, tmp_path, monkeypatch):
 
     client = TestClient(app)
     version = client.get("/api/version").json()
-    assert version["managed"] is True and version["manager"]["manager_version"] == "0.6.0"
+    assert version["managed"] is True and version["manager"]["manager_version"] == "0.6.2"
     check = client.get("/api/updates/check").json()
-    assert check["available"] and check["mode"] == "managed" and check["current_version"] == "0.6.0"
+    assert check["available"] and check["mode"] == "managed" and check["current_version"] == "0.6.2"
     started = client.post("/api/updates/download").json()
     assert started["ok"] and started["managed"] and started["status_url"] == "/api/updates/status"
     updates = [c for c in spawned if "--update" in c]
     assert updates and "--token" in updates[0] and "--root" in updates[0]
     assert ipc.read_status(root).state == "checking"
-    ipc.write_status(root, "done", progress=100, version="0.6.1")
+    ipc.write_status(root, "done", progress=100, version="0.6.3")
     status = client.get("/api/updates/status").json()
-    assert status["state"] == "done" and status["version"] == "0.6.1" and status["managed"]
+    assert status["state"] == "done" and status["version"] == "0.6.3" and status["managed"]
     exits = []
     monkeypatch.setattr(managed.os, "_exit", lambda code: exits.append(code))
     monkeypatch.setattr(managed.threading, "Timer", lambda delay, fn: type("T", (), {"start": lambda self: fn()})())
@@ -305,7 +305,7 @@ def test_managed_run_manager_uses_python_module_in_dev(root, monkeypatch):
     assert cmd[:3] == [sys.executable, "-m", "roboscout_manager"]
     assert cmd[-2:] == ["--root", str(root)]
     result = managed.run_manager(["--version"])
-    assert result["manager_version"] == "0.6.0" and result["root"] == str(root)
+    assert result["manager_version"] == "0.6.2" and result["root"] == str(root)
 
 
 def test_legacy_updater_refuses_when_managed_install_present(root, tmp_path, monkeypatch):
