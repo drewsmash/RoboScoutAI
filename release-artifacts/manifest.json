@@ -1,32 +1,32 @@
 {
   "schema": 1,
   "product": "RoboScoutAI",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "channel": "cursor/upload-cookies-github-updater-e0ef",
-  "commit": "4a67ad940ec653cf544680aad2e256575ce21f3e",
-  "created_at": "2026-09-21T15:52:36+00:00",
-  "min_manager_version": "0.7.0",
+  "commit": "8082091fff32667e6c7f57868c6727e8e3763e6a",
+  "created_at": "2026-09-21T20:53:41+00:00",
+  "min_manager_version": "0.7.1",
   "notes": "",
   "artifacts": {
     "RoboScoutAI-app-windows-x64.exe": {
-      "sha256": "46307a7059ff42681663c6f08cd73428bf7add8a29f52c693643c0cef2f07e5d",
-      "size": 153221917,
+      "sha256": "e49cdf0949df9ad44aa1a3838d8f8faf1160a5ee1e4b7df8203f1670b2c1467b",
+      "size": 153256069,
       "kind": "app",
       "platform": "windows-x64",
-      "url": "https://github.com/drewsmash/RoboScoutAI/releases/download/v0.7.0/RoboScoutAI-app-windows-x64.exe"
+      "url": "https://github.com/drewsmash/RoboScoutAI/releases/download/v0.7.1/RoboScoutAI-app-windows-x64.exe"
     },
     "RoboScoutAI.exe": {
-      "sha256": "87923e75319978538e72c82a86828d1885e3eb96a16ada90892d10390ee1225f",
-      "size": 12038151,
+      "sha256": "ec888c4679f6aefd3e0c160543f7f6eabdee6112ebeb081009c7719aab8cc36a",
+      "size": 12038301,
       "kind": "manager",
       "platform": "windows-x64"
     },
     "RoboScoutAI-Setup.exe": {
-      "sha256": "4551ee658da15de8cb63d5c2f7152c312c5633248e424097bb94534a885c87e9",
-      "size": 176068797,
+      "sha256": "c7469e20e30c8a0ba9745d2c7ace0df5a80b5a64d30bf70e26fcd76b33ba1bdf",
+      "size": 176100963,
       "kind": "setup",
       "platform": "windows-x64",
-      "url": "https://github.com/drewsmash/RoboScoutAI/releases/download/v0.7.0/RoboScoutAI-Setup.exe"
+      "url": "https://github.com/drewsmash/RoboScoutAI/releases/download/v0.7.1/RoboScoutAI-Setup.exe"
     }
   }
 }
