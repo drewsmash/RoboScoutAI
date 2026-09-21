@@ -160,7 +160,20 @@ def cmd_install(args: argparse.Namespace, root: Path) -> int:
         payload_dir = alt if alt.is_dir() else payload_dir
     _app, _mgr, manifest = find_payload(payload_dir)
     version = manifest.version if manifest else MANAGER_VERSION
-    choice = setup_dialog(str(root), version=version, default_desktop=True if args.desktop_shortcut is None else args.desktop_shortcut, silent=args.silent)
+    existing = ""
+    try:
+        cur = read_current(root)
+        if cur is not None and cur.exe_path(root).is_file():
+            existing = cur.version or ""
+    except Exception:  # noqa: BLE001
+        existing = ""
+    choice = setup_dialog(
+        str(root),
+        version=version,
+        existing_version=existing,
+        default_desktop=True if args.desktop_shortcut is None else args.desktop_shortcut,
+        silent=args.silent,
+    )
     if not choice.proceed:
         emit({"ok": False, "cancelled": True}, as_json=args.json, out=args.out, human="Setup cancelled.")
         return 1
@@ -184,6 +197,8 @@ def cmd_install(args: argparse.Namespace, root: Path) -> int:
         "ok": True,
         "root": str(root),
         "version": result.version,
+        "previous_version": existing,
+        "mode": getattr(choice, "mode", "install"),
         "manager_exe": str(result.manager_exe) if result.manager_exe else "",
         "app_exe": str(result.app_exe) if result.app_exe else "",
         "shortcuts": [str(p) for p in result.shortcuts],
@@ -191,7 +206,12 @@ def cmd_install(args: argparse.Namespace, root: Path) -> int:
         "needs_download": result.needs_download,
         "messages": result.messages,
     }
-    human = f"{APP_NAME} {result.version or '(download pending)'} installed to {root}."
+    if existing and result.version and existing != result.version:
+        human = f"{APP_NAME} updated {existing} → {result.version} at {root}."
+    elif existing and result.version == existing:
+        human = f"{APP_NAME} {result.version} repaired at {root}."
+    else:
+        human = f"{APP_NAME} {result.version or '(download pending)'} installed to {root}."
     emit(payload, as_json=args.json, out=args.out, human=human)
     staged = result.manager_exe if result.manager_exe and result.manager_exe.name.endswith(".new") else None
     if staged is not None:
