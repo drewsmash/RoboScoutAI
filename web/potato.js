@@ -84,7 +84,7 @@ export async function runBrowserPotato(video, opts = {}) {
           tracks.set(id, { x: blob.cx, y: blob.cy, age: 0 });
           const px = blob.cx / scale;
           const py = (blob.cy + y0) / scale;
-          const alliance = px < (video.videoWidth || w / scale) * 0.5 ? "blue" : "red";
+          const alliance = "unknown"; // Bumper color unknown — never invent from field half
           samples.push({
             t: Math.round(t * 1000) / 1000,
             track_id: id,

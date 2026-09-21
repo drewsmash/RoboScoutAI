@@ -4,6 +4,7 @@ const ENDGAME_START = 130;
 const MATCH_END = 160;
 
 import { runBrowserPotato, shouldRunBrowserPotato } from "./potato.js";
+import { allianceColor, allianceLabel, resolveAlliance } from "./js/theme/alliance.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,7 +16,7 @@ const state = {
   lastTs: 0,
   calPoints: [],
   fieldImg: null,
-  bots: { blue: null, red: null },
+  bots: { blue: null, red: null, unknown: null },
   landmarks: {},
   calMode: false,
   calJob: null,
@@ -23,6 +24,8 @@ const state = {
   picklist: null,
   potatoJobs: new Set(),
   potatoRunning: false,
+  view: "home",
+  cropLocked: false,
 };
 
 function applyGame(game) {
@@ -52,6 +55,8 @@ function applyGame(game) {
     state.bots.red = img;
     drawField();
   });
+  // Unknown stays gray — never fall back to the blue sprite.
+  state.bots.unknown = null;
 }
 
 function loadAsset(key, src, onload) {
@@ -125,10 +130,19 @@ function trackerPayload() {
   return {
     tracker_mode: $("tracker-mode")?.value || "auto",
     auto_multicam: $("auto-multicam")?.checked !== false,
+    top_overview_only: $("top-overview-only")?.checked !== false,
+    crop_locked: Boolean(state.cropLocked),
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
     ai_gateway_key: $("ai-gateway-key")?.value.trim() || "",
   };
+}
+
+function robotThumb(alliance) {
+  const key = resolveAlliance(alliance);
+  if (key === "red") return "/static/robots/red.png";
+  if (key === "blue") return "/static/robots/blue.png";
+  return ""; // unknown: CSS swatch, never blue
 }
 
 $("start-form").addEventListener("submit", async (event) => {
@@ -245,6 +259,8 @@ async function createJob(payload) {
     form.append("google_key", payload.google_key || "");
     form.append("ai_gateway_key", payload.ai_gateway_key || "");
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
+    form.append("top_overview_only", payload.top_overview_only === false ? "false" : "true");
+    form.append("crop_locked", payload.crop_locked ? "true" : "false");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
     const { file: _file, ...body } = payload;
@@ -265,8 +281,7 @@ async function createJob(payload) {
   }
   const job = await res.json();
   state.job = job;
-  $("workspace").hidden = false;
-  $("workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+  navigate("studio");
   renderJob(job);
   if (state.poll) clearInterval(state.poll);
   state.poll = setInterval(refreshJob, 700);
@@ -451,7 +466,9 @@ function renderRobots(job) {
       <header>
         <div class="robot-ident">
           <div class="bot-thumb-wrap">
-            <img class="bot-thumb" alt="" src="${card.alliance === "red" ? "/static/robots/red.png" : "/static/robots/blue.png"}" />
+            ${robotThumb(card.alliance)
+              ? `<img class="bot-thumb" alt="" src="${robotThumb(card.alliance)}" />`
+              : `<span class="bot-thumb bot-thumb-unknown" aria-hidden="true"></span>`}
             <span class="bot-num">${escapeHtml(card.team)}</span>
           </div>
           <div>
@@ -459,7 +476,7 @@ function renderRobots(job) {
             <div class="nick">${escapeHtml(card.nickname || "")}</div>
           </div>
         </div>
-        <span class="chip ${card.alliance}">${card.alliance}</span>
+        <span class="chip ${resolveAlliance(card.alliance)}">${allianceLabel(card.alliance)}</span>
       </header>
       <div class="stats">
         <div class="stat"><b>${card.hub_score_candidates}</b><span>Hub dwells</span></div>
@@ -763,8 +780,8 @@ function drawTrackOverlay() {
   const byTrack = new Map();
   for (const sample of near) byTrack.set(sample.track_id, sample);
   for (const sample of byTrack.values()) {
-    const alliance = sample.alliance === "red" ? "red" : "blue";
-    const color = alliance === "red" ? "#f28b82" : "#8ab4f8";
+    const alliance = resolveAlliance(sample.alliance);
+    const color = allianceColor(alliance);
     const box = sample.bbox || [];
     if (box.length >= 4) {
       const [x1, y1, x2, y2] = box;
@@ -772,7 +789,7 @@ function drawTrackOverlay() {
       ctx.lineWidth = 2.5;
       ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
       ctx.fillStyle = color;
-      ctx.font = "700 13px Outfit, Roboto, sans-serif";
+      ctx.font = "700 13px IBM Plex Sans, sans-serif";
       ctx.fillText(String(sample.team || sample.track_id), x1 * sx + 4, Math.max(14, y1 * sy - 6));
     } else if (sample.px != null && sample.py != null) {
       const px = sample.px * sx;
@@ -781,16 +798,16 @@ function drawTrackOverlay() {
       ctx.beginPath();
       ctx.arc(px, py, 8, 0, Math.PI * 2);
       ctx.fill();
-      ctx.font = "700 12px Outfit, Roboto, sans-serif";
+      ctx.font = "700 12px IBM Plex Sans, sans-serif";
       ctx.fillText(String(sample.team || sample.track_id), px + 10, py - 4);
     }
   }
 
   for (const cue of job.side_cues || []) {
     if (Math.abs(Number(cue.t) - t) > 0.6) continue;
-    const color = cue.alliance === "red" ? "rgba(242,139,130,0.85)" : "rgba(138,180,248,0.85)";
+    const color = allianceColor(cue.alliance, { soft: true });
     ctx.fillStyle = color;
-    ctx.font = "650 12px Outfit, Roboto, sans-serif";
+    ctx.font = "650 12px IBM Plex Sans, sans-serif";
     const label = cue.kind === "climb_activity" ? "CLIMB" : cue.kind === "hub_activity" ? "SCORE" : "SIDE";
     ctx.fillText(label, 12, h - 14);
   }
@@ -859,6 +876,8 @@ function drawField() {
 
   const autoEnd = Number(job.game?.auto_end_s || AUTO_END);
   const endgameStart = Number(job.game?.endgame_start_s || ENDGAME_START);
+  // Period bands on the field edge — path strokes stay alliance-stable.
+  drawPeriodBands(ctx, w, h, state.t, autoEnd, endgameStart);
   const byTeam = {};
   for (const sample of job.samples || []) {
     const team = sample.team || `T${sample.track_id}`;
@@ -866,13 +885,32 @@ function drawField() {
   }
   for (const [team, samples] of Object.entries(byTeam)) {
     samples.sort((a, b) => a.t - b.t);
-    const alliance = samples[0]?.alliance || "blue";
-    const color = alliance === "red" ? "#f28b82" : "#8ab4f8";
-    drawPath(ctx, X, Y, samples, state.t, color, autoEnd, endgameStart);
+    const alliance = resolveAlliance(samples[0]?.alliance);
+    const color = allianceColor(alliance);
+    drawPath(ctx, X, Y, samples, state.t, color);
     const now = lastAt(samples, state.t);
     if (!now) continue;
-    drawBot(ctx, X(now.x), Y(now.y), alliance, team);
+    const predicted = Boolean(now.predicted || now.is_prediction);
+    drawBot(ctx, X(now.x), Y(now.y), alliance, team, { predicted });
   }
+}
+
+function drawPeriodBands(ctx, w, h, t, autoEnd, endgameStart) {
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  const barH = 4;
+  if (t < autoEnd) {
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillRect(0, h - barH, w * Math.min(1, t / autoEnd), barH);
+  } else if (t >= endgameStart) {
+    ctx.fillStyle = "#34d399";
+    const span = Math.max(MATCH_END - endgameStart, 1);
+    ctx.fillRect(0, h - barH, w * Math.min(1, (t - endgameStart) / span), barH);
+  } else {
+    ctx.fillStyle = allianceColor("blue");
+    ctx.fillRect(0, h - barH, w * 0.4, barH);
+  }
+  ctx.restore();
 }
 
 function drawZebra(ctx, X, Y, zebra) {
@@ -929,23 +967,34 @@ function drawLandmarks(ctx, X, Y) {
   ctx.restore();
 }
 
-function drawBot(ctx, x, y, alliance, team) {
-  const img = state.bots[alliance] || state.bots.blue;
+function drawBot(ctx, x, y, alliance, team, { predicted = false } = {}) {
+  const key = resolveAlliance(alliance);
+  const img = state.bots[key];
   const size = 58;
   if (img) {
+    ctx.save();
+    if (predicted) ctx.globalAlpha = 0.55;
     ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
+    ctx.restore();
   } else {
-    ctx.fillStyle = alliance === "red" ? "#c62828" : "#1565c0";
+    ctx.fillStyle = allianceColor(key);
     ctx.beginPath();
     if (typeof ctx.roundRect === "function") ctx.roundRect(x - 18, y - 18, 36, 36, 6);
     else ctx.rect(x - 18, y - 18, 36, 36);
     ctx.fill();
+    if (predicted) {
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.fillStyle = "#f8fafc";
     ctx.fillRect(x - 12, y - 16, 24, 8);
     ctx.fillRect(x - 12, y + 8, 24, 8);
   }
   const label = String(team);
-  ctx.font = `800 ${label.length > 3 ? 9 : 11}px Outfit, Roboto, sans-serif`;
+  ctx.font = `800 ${label.length > 3 ? 9 : 11}px IBM Plex Sans, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineWidth = 3;
@@ -956,25 +1005,46 @@ function drawBot(ctx, x, y, alliance, team) {
   ctx.fillText(label, x, plateY);
 }
 
-function drawPath(ctx, X, Y, samples, t, color, autoEnd, endgameStart) {
+/** Stable alliance path color. Period is shown via timeline / band — never recolors the trail. */
+function drawPath(ctx, X, Y, samples, t, color) {
   if (samples.length < 2) return;
   ctx.lineWidth = 3;
   ctx.lineJoin = "round";
   ctx.beginPath();
   let started = false;
+  let lastT = null;
   for (const sample of samples) {
     if (sample.t > t) break;
+    // Break path across camera cuts / long gaps — do not interpolate through invalid intervals.
+    if (lastT != null && sample.t - lastT > 1.25) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.9;
+      ctx.stroke();
+      ctx.beginPath();
+      started = false;
+    }
+    if (sample.gap || sample.camera_cut) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.9;
+      if (started) ctx.stroke();
+      ctx.beginPath();
+      started = false;
+      lastT = sample.t;
+      continue;
+    }
     const px = X(sample.x);
     const py = Y(sample.y);
     if (!started) {
       ctx.moveTo(px, py);
       started = true;
     } else ctx.lineTo(px, py);
+    lastT = sample.t;
   }
-  const period = t < autoEnd ? "#fdd663" : t >= endgameStart ? "#81c995" : color;
-  ctx.strokeStyle = period;
-  ctx.globalAlpha = 0.9;
-  ctx.stroke();
+  if (started) {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.9;
+    ctx.stroke();
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -1018,15 +1088,15 @@ function drawCal() {
     if (box.length < 4) return;
     const [x1, y1, x2, y2] = box;
     const selected = state.selectedSeed && String(state.selectedSeed.track_id) === String(seed.track_id);
-    ctx.strokeStyle = seed.alliance === "red" ? "#f28b82" : "#8ab4f8";
+    ctx.strokeStyle = allianceColor(seed.alliance);
     ctx.lineWidth = selected ? 4 : 2;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     ctx.fillStyle = ctx.strokeStyle;
-    ctx.font = "700 14px Outfit, Roboto, sans-serif";
+    ctx.font = "700 14px IBM Plex Sans, sans-serif";
     ctx.fillText(String(seed.team || seed.track_id), x1 + 4, Math.max(14, y1 - 6));
   });
-  ctx.fillStyle = "#a8c7fa";
-  ctx.strokeStyle = "#a8c7fa";
+  ctx.fillStyle = "#22d3ee";
+  ctx.strokeStyle = "#22d3ee";
   ctx.lineWidth = 3;
   state.calPoints.forEach((p, i) => {
     ctx.beginPath();
@@ -1055,8 +1125,12 @@ function matchTeams(job, alliance) {
 }
 
 function cycleTeam(job, seed) {
-  const alliance = seed.alliance === "red" ? "red" : "blue";
-  const teams = matchTeams(job, alliance);
+  const alliance = resolveAlliance(seed.alliance);
+  // Unknown: cycle through the full roster without inventing an alliance color.
+  const teams =
+    alliance === "unknown"
+      ? [...matchTeams(job, "blue"), ...matchTeams(job, "red")]
+      : matchTeams(job, alliance);
   if (!teams.length) return String(seed.team || "");
   const idx = teams.indexOf(String(seed.team || ""));
   return teams[(idx + 1) % teams.length];
@@ -1414,8 +1488,7 @@ function exportPicklist() {
 
 function initScoutTools() {
   $("nav-scoutbook")?.addEventListener("click", () => {
-    $("workspace").hidden = false;
-    $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    navigate("picklist");
   });
   $("add-match-book")?.addEventListener("click", () => addCurrentMatchToBook(true));
   $("refresh-picks")?.addEventListener("click", () => refreshPicklist());
@@ -1446,6 +1519,147 @@ function initScoutTools() {
   updateScoutbookMeta();
   renderNotes();
   refreshPicklist();
+}
+
+const VIEW_TITLES = {
+  home: "Analyze a match",
+  matches: "Match library",
+  studio: "Analysis Studio",
+  teams: "Teams",
+  compare: "Compare",
+  picklist: "Pick List",
+  settings: "Settings",
+};
+
+function navigate(view) {
+  const next = VIEW_TITLES[view] ? view : "home";
+  state.view = next;
+  document.querySelectorAll(".nav-item[data-nav]").forEach((el) => {
+    el.classList.toggle("is-active", el.dataset.nav === next);
+  });
+  document.querySelectorAll(".view-panel").forEach((panel) => {
+    const match = panel.dataset.view === next;
+    panel.classList.toggle("is-active", match);
+    if (panel.id === "workspace") {
+      panel.hidden = next !== "studio" && next !== "picklist" && next !== "compare" && next !== "teams";
+      if (next === "picklist") {
+        $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (next === "compare") {
+        $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        $("cmp-a")?.focus();
+      } else if (next === "teams") {
+        $("notes-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (next === "studio" && state.job) {
+        panel.hidden = false;
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } else if (panel.dataset.view) {
+      panel.hidden = !match;
+    }
+  });
+  const title = $("topbar-title");
+  if (title) title.textContent = VIEW_TITLES[next] || "RoboScoutAI";
+  if (next === "home") {
+    $("composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (next === "matches") renderMatchLibrary();
+  if (next === "settings") renderSettingsPanel();
+}
+
+function renderMatchLibrary() {
+  const root = $("match-library");
+  if (!root) return;
+  const book = loadBook();
+  const matches = book.matches || [];
+  if (!matches.length) {
+    root.innerHTML = `<div class="empty-state"><h3>No matches yet</h3><p>Analyze a VOD from Home, or try the sample match.</p><button type="button" class="btn primary" id="lib-analyze">Analyze a match</button></div>`;
+    $("lib-analyze")?.addEventListener("click", () => navigate("home"));
+    return;
+  }
+  root.innerHTML = matches
+    .slice()
+    .reverse()
+    .map(
+      (m) => `<article class="match-card">
+      <header><strong>${escapeHtml(m.match_key || m.id || "Match")}</strong>
+      <span class="chip ghost">${escapeHtml(m.event_key || "")}</span></header>
+      <p class="tool-meta">${(m.teams || []).join(" · ") || "Teams pending"}</p>
+      <span class="chip ${(m.quality || "unknown") === "good" ? "ok" : "warn"}">${escapeHtml(m.quality || "tracked")}</span>
+    </article>`
+    )
+    .join("");
+}
+
+function renderSettingsPanel() {
+  const depth = $("settings-depth");
+  if (depth) {
+    depth.textContent = "Depth & detector status load from /api/trackers when available.";
+  }
+  fetch("/api/trackers")
+    .then((r) => r.json())
+    .then((data) => {
+      if (!depth) return;
+      const d = data.depth || {};
+      const active = d.active || d.selected || "unknown";
+      depth.textContent = `Depth backend: ${active}. ONNX: ${d.onnx?.importable ? "available" : "not installed"}.`;
+    })
+    .catch(() => {});
+}
+
+function initShell() {
+  document.querySelectorAll(".nav-item[data-nav]").forEach((btn) => {
+    btn.addEventListener("click", () => navigate(btn.dataset.nav));
+  });
+  $("nav-home")?.addEventListener("click", () => navigate("home"));
+  $("sidebar-toggle")?.addEventListener("click", () => {
+    $("app-shell")?.classList.toggle("is-collapsed");
+  });
+  $("cta-analyze")?.addEventListener("click", () => navigate("home"));
+  $("crop-lock-btn")?.addEventListener("click", () => {
+    state.cropLocked = !state.cropLocked;
+    const status = $("crop-lock-status");
+    const btn = $("crop-lock-btn");
+    if (status) status.textContent = state.cropLocked ? "Locked · top overview" : "Auto · unlocked";
+    if (btn) btn.textContent = state.cropLocked ? "Unlock crop" : "Lock crop";
+  });
+  $("motion-chip")?.addEventListener("click", () => {
+    const order = ["full", "reduced", "off"];
+    const cur = document.documentElement.dataset.motion || "full";
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    document.documentElement.dataset.motion = next;
+    storageSet("motion", next);
+    $("motion-chip").textContent = `Motion: ${next}`;
+  });
+  const savedMotion = storageGet("motion", "full");
+  document.documentElement.dataset.motion = savedMotion;
+  if ($("motion-chip")) $("motion-chip").textContent = `Motion: ${savedMotion}`;
+  $("next-uncertain")?.addEventListener("click", () => {
+    const job = state.job;
+    if (!job) return;
+    const t = state.t;
+    const gaps = [...(job.gaps || []), ...(job.layout_switches || [])]
+      .map((g) => Number(g.t ?? g.t0 ?? NaN))
+      .filter((v) => Number.isFinite(v) && v > t + 0.2)
+      .sort((a, b) => a - b);
+    const conflict = (job.samples || [])
+      .filter((s) => s.alliance_conflict || s.flags?.includes?.("alliance_conflict"))
+      .map((s) => Number(s.t))
+      .filter((v) => v > t + 0.2)
+      .sort((a, b) => a - b);
+    const next = [...gaps, ...conflict].sort((a, b) => a - b)[0];
+    if (next == null) {
+      alert("No further uncertain moments marked in this match.");
+      return;
+    }
+    state.t = next;
+    if ($("time-slider")) $("time-slider").value = String(next);
+    if ($("time-label")) $("time-label").textContent = `${next.toFixed(1)}s`;
+    const video = $("match-video");
+    if (video && Number.isFinite(video.duration)) video.currentTime = next;
+    drawField();
+    drawTrackOverlay();
+  });
+  navigate("home");
 }
 
 /** Only open a URL when git apply failed and the API attached a manual fallback. */
@@ -1702,6 +1916,7 @@ async function initUpdater() {
 
 initUpdater();
 initScoutTools();
+initShell();
 bindTrackOverlay();
 drawField();
 drawTrackOverlay();

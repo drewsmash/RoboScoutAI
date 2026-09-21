@@ -512,9 +512,18 @@ def _track_video_impl(
 
         s = active
         cropped = frame[s.y0 : s.y1, s.x0 : s.x1]
-        if use_bev and s.frames % depth_refresh == 0:
+        # Depth refresh must preserve the backend used at calibration. Silently
+        # forcing classical (prefer_neural=False) was wiping neural depth.
+        if use_bev and s.frames % depth_refresh == 0 and s.depth is not None:
             try:
-                s.depth = estimate_depth(cropped, prefer_neural=False).depth
+                prefer_neural = True
+                src = ""
+                if isinstance(getattr(s, "bev_info", None), dict):
+                    src = str(s.bev_info.get("depth_source") or "")
+                src = src or str(getattr(s, "depth_source", "") or "")
+                prefer_neural = src.startswith(("onnx", "torch", "neural")) or "classical" not in src
+                refreshed = estimate_depth(cropped, prefer_neural=prefer_neural)
+                s.depth = refreshed.depth
                 s._holder["depth"] = s.depth  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
@@ -559,10 +568,11 @@ def _track_video_impl(
                     s.calibrator.fit()
             if tid not in s.seen_tracks:
                 s.seen_tracks.add(tid)
+                # Soft start-side prior only — never hard-assign unknown from field half.
                 prior_label, prior_w = side_prior(
                     float(mx), float(seg_elapsed), field_length=FIELD_LENGTH, alliance_depth=ALLIANCE_DEPTH
                 )
-                s.voter.set_prior(tid, prior_label, prior_w)
+                s.voter.set_prior(tid, prior_label, min(float(prior_w), 0.25))
             label, conf, _method = s.calibrator.classify(feature)
             if label in {"red", "blue"}:
                 s.voter.vote(tid, label, conf)
@@ -570,15 +580,26 @@ def _track_video_impl(
                 s.voter.vote(tid, det.alliance, 0.7 if det.source in {"gemini", "openai"} else 0.45)
             alliance, alliance_conf = s.voter.label(tid)
             prev_label = s.emitted_label.get(tid)
-            if prev_label in {"red", "blue"} and alliance in {"red", "blue"} and alliance != prev_label:
-                split_count += 1
-                s.tid_alias[tid] = 50000 + split_count
+            # Confirmed alliance flip: flag association conflict — do NOT mint a new track ID.
+            if (
+                prev_label in {"red", "blue"}
+                and alliance in {"red", "blue"}
+                and alliance != prev_label
+                and float(alliance_conf) >= 0.55
+            ):
+                det.meta = dict(det.meta or {})
+                det.meta["alliance_conflict"] = True
+                det.meta["previous_alliance"] = prev_label
+                # Keep the confirmed alliance until a scout corrects or evidence dominates.
+                alliance = prev_label
+                alliance_conf = max(float(alliance_conf), 0.55)
             if alliance in {"red", "blue"}:
                 s.emitted_label[tid] = alliance
-            out_tid = s.tid_alias.get(tid, tid)
-            if alliance == "unknown":
-                alliance = "blue" if float(mx) < FIELD_LENGTH * 0.5 else "red"
-                alliance_conf = 0.3
+            out_tid = tid
+            # Unknown stays unknown. Never invent alliance from field half.
+            if alliance not in {"red", "blue"}:
+                alliance = "unknown"
+                alliance_conf = float(alliance_conf or 0.0)
 
             team = det.team or ""
             if not team and ocr_engine is not None and hits >= 4 and s.frames % 6 == 0:
@@ -603,6 +624,9 @@ def _track_video_impl(
                 "view": "overview",
                 "pane": s.seg.index,
             }
+            if det.meta and det.meta.get("alliance_conflict"):
+                sample["alliance_conflict"] = True
+                sample["previous_alliance"] = det.meta.get("previous_alliance")
             if det.meta and det.meta.get("speed_in_s") is not None:
                 sample["speed_in_s"] = float(det.meta["speed_in_s"])
             samples.append(sample)

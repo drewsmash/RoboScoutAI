@@ -80,23 +80,21 @@ def assign_by_start(
 
     blue_ids: list[tuple[float, int]] = []
     red_ids: list[tuple[float, int]] = []
+    unknown_ids: list[tuple[float, int]] = []
     for tid, sample in first.items():
         alliance = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else None
-        if alliance is None:
-            alliance = "blue" if float(sample["x"]) < FIELD_LENGTH / 2 else "red"
         if alliance == "blue":
             blue_ids.append((float(sample["y"]), tid))
-        else:
+        elif alliance == "red":
             red_ids.append((float(sample["y"]), tid))
+        else:
+            # Keep unknown as unknown — do NOT invent alliance from field half.
+            unknown_ids.append((float(sample["y"]), tid))
 
-    # If one side is empty/overfull, rebucket by field half using all first poses.
-    if (len(blue_ids) < min(3, len(blue_teams)) or len(red_ids) < min(3, len(red_teams))) and first:
-        blue_ids, red_ids = [], []
-        for tid, sample in first.items():
-            if float(sample["x"]) < FIELD_LENGTH / 2:
-                blue_ids.append((float(sample["y"]), tid))
-            else:
-                red_ids.append((float(sample["y"]), tid))
+    # Do not soft-fill unknowns into red/blue slots from x-position. Roster
+    # slots remain empty until bumper/OCR/user evidence assigns a team.
+    # Unknown tracklets stay unmapped so the UI can show gray + "Correct team".
+    _ = unknown_ids  # retained for callers / future gallery matching
 
     blue_ids.sort()
     red_ids.sort()

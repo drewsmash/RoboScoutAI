@@ -80,6 +80,9 @@ class Job:
     game: dict[str, Any] | None = None
     crop_top: float = 0.10
     crop_bottom: float = 0.65
+    top_overview_only: bool = True
+    crop_locked: bool = False
+    crop_lock: dict[str, Any] | None = None
     user_calibrated: bool = False
     seeds: list[dict[str, Any]] = field(default_factory=list)
     tracker_mode: str = "auto"
@@ -136,6 +139,9 @@ class Job:
             "user_calibrated": self.user_calibrated,
             "crop_top": self.crop_top,
             "crop_bottom": self.crop_bottom,
+            "top_overview_only": bool(self.top_overview_only),
+            "crop_locked": bool(self.crop_locked),
+            "crop_lock": self.crop_lock,
             "tracker_mode": self.tracker_mode,
             "tracker_strategies": self.tracker_strategies,
             "source_hits": self.source_hits,
@@ -254,7 +260,23 @@ def start_job(
     google_key: str = "",
     ai_gateway_key: str = "",
     auto_multicam: bool = True,
+    top_overview_only: bool = True,
+    crop_locked: bool = False,
 ) -> Job:
+    from ramscout.crop import CropLockState, OverviewCrop
+
+    crop = OverviewCrop(
+        0.0,
+        float(crop_top),
+        1.0,
+        float(crop_bottom),
+        locked=bool(crop_locked),
+        source="user" if crop_locked else "auto",
+    )
+    lock = CropLockState(
+        active=crop,
+        mode="top_overview_only" if top_overview_only else "legacy_multiview",
+    )
     job = STORE.create(
         url=url,
         tba_key=tba_key,
@@ -263,6 +285,9 @@ def start_job(
         demo=demo,
         crop_top=float(crop_top),
         crop_bottom=float(crop_bottom),
+        top_overview_only=bool(top_overview_only),
+        crop_locked=bool(crop_locked),
+        crop_lock=lock.as_dict(),
         tracker_mode=(tracker_mode or "auto").strip().lower() or "auto",
         openai_key=openai_key or "",
         google_key=google_key or "",
@@ -567,14 +592,53 @@ def _run_real(job: Job) -> None:
                 "detail": chosen.detail,
             }
             layout_for_tracking = chosen
-            STORE.update(
-                job,
-                crop_top=top,
-                crop_bottom=bottom,
-                camera=chosen.as_dict(),
-                views=views,
-                warnings=warnings,
-            )
+            # Top-overview-only: propose/lock the overview crop; side panes never seed identities.
+            if getattr(job, "top_overview_only", True):
+                from ramscout.crop import CropLockState, OverviewCrop, propose_top_overview
+
+                panes = [p.as_dict() for p in (chosen.panes or [])]
+                proposed = propose_top_overview(panes, fallback_bottom=float(bottom))
+                if job.crop_locked:
+                    proposed = OverviewCrop(
+                        0.0,
+                        float(job.crop_top),
+                        1.0,
+                        float(job.crop_bottom),
+                        locked=True,
+                        source="user",
+                        confidence=1.0,
+                        detail="user lock",
+                    ).clamp()
+                    top, bottom = proposed.y0, proposed.y1
+                else:
+                    top, bottom = proposed.y0, proposed.y1
+                lock = CropLockState(
+                    active=proposed,
+                    mode="top_overview_only",
+                )
+                views = dict(views)
+                views["tracking_mode"] = "top_overview_only"
+                views["overview_crop"] = proposed.as_dict()
+                # Keep side panes for OCR/cues only — correlation must not create tracks.
+                STORE.update(
+                    job,
+                    crop_top=top,
+                    crop_bottom=bottom,
+                    crop_lock=lock.as_dict(),
+                    crop_locked=bool(job.crop_locked or proposed.locked),
+                    camera=chosen.as_dict(),
+                    views=views,
+                    warnings=warnings,
+                )
+            else:
+                STORE.update(
+                    job,
+                    crop_top=top,
+                    crop_bottom=bottom,
+                    camera=chosen.as_dict(),
+                    views=views,
+                    warnings=warnings,
+                )
         except Exception as exc:  # noqa: BLE001
             warnings = list(job.warnings or [])
             warnings.append(f"Multi-camera detect skipped: {exc}")
