@@ -1597,18 +1597,32 @@ function renderMatchLibrary() {
 
 function renderSettingsPanel() {
   const depth = $("settings-depth");
+  const depsEl = $("settings-deps");
   if (depth) {
     depth.textContent = "Depth & detector status load from /api/trackers when available.";
   }
-  fetch("/api/trackers")
-    .then((r) => r.json())
-    .then((data) => {
-      if (!depth) return;
-      const d = data.depth || {};
-      const active = d.active || d.selected || "unknown";
-      depth.textContent = `Depth backend: ${active}. ONNX: ${d.onnx?.importable ? "available" : "not installed"}.`;
-    })
-    .catch(() => {});
+  if (depsEl) depsEl.textContent = "Checking installed packages…";
+  Promise.all([
+    fetch("/api/trackers").then((r) => r.json()).catch(() => ({})),
+    fetch("/api/health").then((r) => r.json()).catch(() => ({})),
+  ]).then(([trackers, health]) => {
+    const d = trackers.depth || {};
+    const active = d.active || d.selected || "unknown";
+    if (depth) {
+      depth.textContent = `Depth backend: ${active}. ONNX: ${d.onnx?.importable || trackers.detector?.onnxruntime ? "available" : "not installed"}. Detector FRC-ready: ${trackers.detector?.frc_ready ? "yes" : "no"}.`;
+    }
+    if (depsEl) {
+      const missing = health.missing_required || trackers.deps?.missing_required || [];
+      const optional = health.missing_optional || trackers.deps?.missing_optional || [];
+      if (health.deps_ok === false || missing.length) {
+        depsEl.textContent = `Missing required: ${missing.join(", ") || "unknown"}. Run: ${(health.install || trackers.deps?.install || ["pip install -r requirements.txt"])[0]}`;
+        depsEl.classList.add("warn-text");
+      } else {
+        depsEl.textContent = `Required packages OK. Optional not installed: ${optional.length ? optional.join(", ") : "none"}.`;
+        depsEl.classList.remove("warn-text");
+      }
+    }
+  });
 }
 
 function initShell() {
