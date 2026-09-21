@@ -71,6 +71,8 @@ Desktop binaries are intentionally slim (no PyTorch / `ultralytics`). Demo mode,
 | `motion` / `color` | No neural net |
 | `openai` / `gemini` / `cloud` | Sparse cloud keyframes (OpenAI ~every 2s / 30 frames, capped) + local fill; Gemini preferred when keyed |
 
+**Per-pane detection:** stacked broadcasts are cropped into overview + blue/red angle shots; each pane is detected separately, then correlated onto overview tracks so scoring/climb cues attach to the right team.
+
 **Depth / BEV / multi-view:** overview tracking uses Depth Anything V2 via **ONNX Runtime** by default (weights download on first use), then transformers+torch if installed, then classical depth. A bird’s-eye (BEV) trapezoid accounts for camera angle. Stacked broadcasts are decomposed into panes (overview / blue / red / scorebug) with a layout timeline. The broadcast panel draws a live tracking overlay. Details: `docs/TRACKING.md`.
 
 Optional torch depth backend (source installs; ONNX is already in `requirements.txt` / desktop):
@@ -84,7 +86,8 @@ API keys (optional, also in the UI Advanced panel):
 
 - `OPENAI_API_KEY`
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY`
-- `AI_GATEWAY_API_KEY` — Vercel AI Gateway; enables [Jev](https://vercel.com/ai-gateway/models/jev) (`typesafe-ai/jev`) to verify hub/climb/defense candidates and help classify multi-view layouts. A 403 usually means a bad/missing key or missing evaluation access — scout heuristics still run. Optional strict routing (often causes 403): `AI_GATEWAY_ONLY=typesafe-ai`, `AI_GATEWAY_ZERO_DATA_RETENTION=1`
+- Local **Laya** (recommended): `pip install -r requirements-laya.txt` — on-machine System-1 decisions (~10× faster than cloud Jev) verify scout events, classify layouts, and scout each team’s role/climb
+- `AI_GATEWAY_API_KEY` — optional cloud fallback to `typesafe-ai/jev` when Laya weights are not installed. Set `LAYA_LOCAL=0` to force the gateway.
 
 For stronger local neural detection from source:
 

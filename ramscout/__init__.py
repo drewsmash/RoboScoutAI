@@ -2,5 +2,5 @@
 
 from ramscout.brand import APP_NAME
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 __all__ = ["APP_NAME", "__version__"]

@@ -134,6 +134,142 @@ def process_side_views(
     return result
 
 
+def detect_all_panes(
+    video_path: Path | str,
+    layout: CameraLayout,
+    *,
+    frame_stride: int = 5,
+    max_frames: int | None = 500,
+    on_progress: ProgressFn | None = None,
+    skip_roles: set[str] | None = None,
+) -> dict[str, Any]:
+    """Run bumper-color + motion detection independently on every non-graphics pane.
+
+    Overview tracking still owns the top-down map; this pass produces per-pane
+    detections (absolute frame coordinates) so we can correlate blue/red angle
+    shots and overview_alt with the main feed.
+    """
+    import cv2
+
+    from ramscout.trackers.color import ColorTracker
+    from ramscout.trackers.motion import MotionTracker
+    from ramscout.trackers.types import TrackerContext
+
+    skip = set(skip_roles or {"graphics", "scorebug", "other"})
+    panes = [p for p in (layout.panes or []) if p.role not in skip]
+    # Prefer side + alt; overview is optional here (already tracked separately).
+    panes = [p for p in panes if p.role != "overview"] or panes
+    out: dict[str, Any] = {"detections": [], "warnings": [], "panes": [p.role for p in panes]}
+    if not panes:
+        out["warnings"].append("No panes available for per-view detection.")
+        return out
+
+    path = Path(video_path)
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        out["warnings"].append(f"Could not open video for pane detection: {path}")
+        return out
+
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0) or 30.0
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    color = ColorTracker()
+    motion = MotionTracker()
+    dets: list[dict[str, Any]] = []
+    frame_index = 0
+    processed = 0
+
+    while True:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        if max_frames is not None and processed >= max_frames:
+            break
+        if frame_index % max(frame_stride, 1) != 0:
+            frame_index += 1
+            continue
+
+        fh, fw = frame.shape[:2]
+        t = frame_index / fps
+        for pane in panes:
+            crop = pane.slice_frame(frame)
+            if crop.size == 0 or crop.shape[0] < 32 or crop.shape[1] < 32:
+                continue
+            ch, cw = crop.shape[:2]
+            x0 = int(np.clip(pane.crop_left, 0, 1) * fw)
+            y0 = int(np.clip(pane.crop_top, 0, 1) * fh)
+            ctx = TrackerContext(frame_w=fw, frame_h=fh, crop_w=cw, crop_h=ch, t=t, frame_index=frame_index)
+            found: list[Any] = []
+            try:
+                found.extend(color.detect(crop, ctx))
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                found.extend(motion.detect(crop, ctx))
+            except Exception:  # noqa: BLE001
+                pass
+            # Deduplicate by IoU-ish center distance inside the crop.
+            kept: list[Any] = []
+            for det in found:
+                bx0, by0, bx1, by1 = det.bbox
+                cx = 0.5 * (bx0 + bx1)
+                cy = 0.5 * (by0 + by1)
+                if any(abs(cx - 0.5 * (k.bbox[0] + k.bbox[2])) < 18 and abs(cy - 0.5 * (k.bbox[1] + k.bbox[3])) < 18 for k in kept):
+                    continue
+                kept.append(det)
+            alliance_bias = pane.alliance_bias or (
+                "blue" if pane.role.startswith("blue") else "red" if pane.role.startswith("red") else None
+            )
+            for det in kept[:6]:
+                bx0, by0, bx1, by1 = det.bbox
+                alliance = det.alliance if det.alliance in {"red", "blue"} else (alliance_bias or "")
+                dets.append(
+                    {
+                        "t": round(t, 3),
+                        "role": pane.role,
+                        "alliance": alliance or "",
+                        "confidence": float(det.confidence or 0.4),
+                        "x_norm": float(np.clip((0.5 * (bx0 + bx1)) / max(cw, 1), 0, 1)),
+                        "y_norm": float(np.clip((0.5 * (by0 + by1)) / max(ch, 1), 0, 1)),
+                        "bbox": [
+                            float(x0 + bx0),
+                            float(y0 + by0),
+                            float(x0 + bx1),
+                            float(y0 + by1),
+                        ],
+                        "source": f"pane:{det.source}",
+                        "view": pane.role,
+                    }
+                )
+
+        processed += 1
+        frame_index += 1
+        if on_progress and total:
+            on_progress("Detecting robots per camera pane…", min(99.0, 100.0 * frame_index / total))
+
+    cap.release()
+    out["detections"] = _thin_pane_detections(dets)
+    out["warnings"].append(
+        f"Per-pane detection: {len(out['detections'])} robot hits across "
+        f"{len(panes)} pane(s) ({', '.join(p.role for p in panes)})."
+    )
+    return out
+
+
+def _thin_pane_detections(dets: list[dict[str, Any]], *, bin_s: float = 1.0) -> list[dict[str, Any]]:
+    """Keep the strongest detection per role/alliance/~1s bin."""
+    best: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for d in dets:
+        key = (
+            str(d.get("role") or ""),
+            str(d.get("alliance") or ""),
+            int(float(d.get("t") or 0.0) / max(bin_s, 0.25)),
+        )
+        prev = best.get(key)
+        if prev is None or float(d.get("confidence") or 0) >= float(prev.get("confidence") or 0):
+            best[key] = d
+    return sorted(best.values(), key=lambda r: float(r.get("t") or 0.0))
+
+
 def merge_side_cues_into_events(
     events: list[dict[str, Any]],
     side_cues: list[dict[str, Any]],
@@ -187,8 +323,9 @@ def merge_side_cues_into_events(
             continue
 
         # Soft candidate when overview tracking missed the action.
+        # Prefer a correlated team id; fall back to first alliance card.
         teams = teams_by_alliance.get(alliance) or []
-        team = teams[0] if teams else alliance
+        team = str(cue.get("team") or "") or (teams[0] if teams else alliance)
         if kind == "hub_activity" and conf >= 0.45:
             out.append(
                 {
@@ -200,7 +337,8 @@ def merge_side_cues_into_events(
                     "detail": cue.get("detail") or "Side camera hub activity",
                     "period": "",
                     "duration_s": 0.0,
-                    "source": "side_cam",
+                    "source": cue.get("source") or "side_cam",
+                    "track_id": cue.get("track_id"),
                 }
             )
         elif kind == "climb_activity" and conf >= 0.5:
@@ -214,7 +352,8 @@ def merge_side_cues_into_events(
                     "detail": cue.get("detail") or "Side camera climb activity",
                     "period": "",
                     "duration_s": 0.0,
-                    "source": "side_cam",
+                    "source": cue.get("source") or "side_cam",
+                    "track_id": cue.get("track_id"),
                 }
             )
 

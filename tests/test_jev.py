@@ -31,6 +31,7 @@ def test_verify_scout_events_noops_without_key(monkeypatch):
 
 def test_verify_scout_events_boosts_and_rejects(monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-key")
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     events = [
         {"type": "hub_score_candidate", "team": "195", "t": 10.0, "zone": "blue_hub", "confidence": 0.48, "detail": "dwell"},
         {"type": "defense", "team": "230", "t": 40.0, "zone": "red_half", "confidence": 0.5, "detail": "block"},
@@ -45,10 +46,10 @@ def test_verify_scout_events_boosts_and_rejects(monkeypatch):
             "e2": {"type": "boolean", "probability": 0.5},
         },
     }
-    with patch.object(jev, "evaluate", return_value=fake) as mocked:
+    with patch("ramscout.laya.evaluate", return_value=fake) as mocked:
         out, notes = jev.verify_scout_events(events, match={"key": "qm1"}, api_key="test-key")
     assert mocked.called
-    assert len(notes) == 1 and "Jev" in notes[0]
+    assert len(notes) == 1 and ("Laya" in notes[0] or "Jev" in notes[0])
     by_team = {e["team"]: e for e in out}
     assert by_team["195"]["confidence"] > 0.48
     assert by_team["195"]["jev_probability"] == 0.92
@@ -95,6 +96,7 @@ def _fake_client(status_code: int, body: dict | str, captured: dict):
 
 def test_evaluate_posts_to_ai_gateway(monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw-secret")
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     monkeypatch.delenv("AI_GATEWAY_ONLY", raising=False)
     monkeypatch.delenv("JEV_GATEWAY_ONLY", raising=False)
     monkeypatch.delenv("AI_GATEWAY_ZERO_DATA_RETENTION", raising=False)
@@ -124,6 +126,7 @@ def test_evaluate_posts_to_ai_gateway(monkeypatch):
 
 
 def test_evaluate_provider_options_env_gated(monkeypatch):
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw")
     monkeypatch.setenv("AI_GATEWAY_ONLY", "typesafe-ai")
     monkeypatch.setenv("AI_GATEWAY_ZERO_DATA_RETENTION", "1")
@@ -141,6 +144,7 @@ def test_evaluate_provider_options_env_gated(monkeypatch):
 
 
 def test_evaluate_403_raises_actionable_message(monkeypatch):
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad-key")
     captured: dict = {}
 
@@ -161,6 +165,7 @@ def test_evaluate_403_raises_actionable_message(monkeypatch):
 
 
 def test_verify_scout_events_soft_fails_on_403(monkeypatch):
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad-key")
     events = [
         {"type": "hub_score_candidate", "team": "195", "t": 10.0, "confidence": 0.4, "detail": "dwell"},
@@ -190,7 +195,7 @@ def test_classify_camera_layout(monkeypatch):
             }
         }
     }
-    with patch.object(jev, "evaluate", return_value=fake):
+    with patch("ramscout.laya.evaluate", return_value=fake):
         mode, conf, notes = jev.classify_camera_layout({"classical_mode": "single"})
     assert mode == "stacked_sides"
     assert conf == 0.85
@@ -198,6 +203,7 @@ def test_classify_camera_layout(monkeypatch):
 
 
 def test_classify_camera_layout_soft_fails_on_403(monkeypatch):
+    monkeypatch.setenv("LAYA_LOCAL", "0")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "bad")
     captured: dict = {}
     with patch.object(

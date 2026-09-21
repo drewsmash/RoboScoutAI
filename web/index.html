@@ -104,11 +104,11 @@
         </div>
         <div class="composer-row">
           <label class="field grow">
-            <span>Vercel AI Gateway key (Jev)</span>
-            <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · AI_GATEWAY_API_KEY · verifies scout events" autocomplete="off" />
+            <span>AI Gateway key (optional cloud fallback)</span>
+            <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · only if local Laya is not installed" autocomplete="off" />
           </label>
         </div>
-        <p class="tool-meta">With an AI Gateway key, RoboScoutAI calls <code>typesafe-ai/jev</code> to verify hub/climb/defense candidates and help classify multi-view layouts. Get a key at vercel.com/ai-gateway.</p>
+        <p class="tool-meta">Scout verification uses <strong>Laya</strong> on this machine when installed (<code>pip install laya</code> — ~10× faster than cloud Jev). Without local weights, an AI Gateway key falls back to <code>typesafe-ai/jev</code>. Multi-view detection runs separately on the overview and each angle shot, then correlates them.</p>
         <div class="composer-row">
           <label class="field">
             <span>Crop top</span>
