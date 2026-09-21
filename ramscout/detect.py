@@ -654,8 +654,34 @@ def _track_video_impl(
                 warnings.append(w)
     warnings.append(f"Tracking mode '{cascade_label}' using: {', '.join(strategy_names)} + BEV MOT (ByteTrack/OC-SORT association).")
 
-    # Exactly 3 red + 3 blue across the strongest tracks (color votes + start side).
+    # Stabilize labels without inventing a forced 3v3 roster.
     samples = balance_alliances(samples)
+
+    # Persistent match-level identities (one physical robot → one ID).
+    from ramscout.identity_book import IdentityBook
+
+    book = IdentityBook()
+    for sample in samples:
+        ident = book.bind(int(sample["track_id"]), t=float(sample.get("t") or 0.0))
+        al = sample.get("alliance")
+        if al in {"red", "blue"}:
+            book.observe_alliance(ident.identity_id, al, float(sample.get("alliance_conf") or 0.5))
+        if sample.get("alliance_conflict"):
+            if "alliance_conflict" not in ident.flags:
+                ident.flags.append("alliance_conflict")
+        live = book.identity_for_tracklet(int(sample["track_id"]))
+        if live is not None:
+            sample["identity_id"] = live.identity_id
+            sample["identity_state"] = live.state
+            # Confirmed book alliance wins over frame noise; unknown stays unknown.
+            if live.alliance in {"red", "blue"} and live.alliance_conf >= 0.55:
+                sample["alliance"] = live.alliance
+                sample["alliance_conf"] = live.alliance_conf
+            elif sample.get("alliance") not in {"red", "blue"}:
+                sample["alliance"] = "unknown"
+            if live.flags:
+                sample["identity_flags"] = list(live.flags)
+
     if smooth and samples:
         try:
             from ramscout.smoothing import smooth_samples
@@ -742,6 +768,7 @@ def _track_video_impl(
         ],
         "processed_frames": processed,
         "window": [round(t_start, 3), round(min(t_end, frame_index / fps), 3)],
+        "identities": book.as_list() if samples else [],
     }
 
 

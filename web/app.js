@@ -478,6 +478,11 @@ function renderRobots(job) {
         </div>
         <span class="chip ${resolveAlliance(card.alliance)}">${allianceLabel(card.alliance)}</span>
       </header>
+      <div class="robot-meta-row">
+        <span class="chip ghost">${escapeHtml(card.identity_state || card.visibility || "observed")}</span>
+        ${card.alliance_conf != null ? `<span class="chip ghost" title="Alliance confidence">${Math.round(Number(card.alliance_conf) * 100)}%</span>` : ""}
+        ${card.assignment_source === "start_pose_unverified" ? `<span class="chip warn">Unverified team</span>` : ""}
+      </div>
       <div class="stats">
         <div class="stat"><b>${card.hub_score_candidates}</b><span>Hub dwells</span></div>
         <div class="stat"><b>${card.climb_attempt ? "Yes" : "No"}</b><span>Climb attempt</span></div>

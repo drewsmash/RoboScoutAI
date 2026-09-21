@@ -106,8 +106,8 @@ def test_assign_alliance_slots_forces_three_and_three():
 
 def test_balance_alliances_on_samples():
     samples = []
-    # Four tracks lean red, two blue; the weakest red (x on blue side) flips.
-    spec = {1: ("red", 0.9, 600), 2: ("red", 0.9, 580), 3: ("red", 0.85, 560), 4: ("red", 0.55, 40), 5: ("blue", 0.9, 30), 6: ("blue", 0.9, 60)}
+    # Four tracks lean red, two blue — consensus keeps evidence; does NOT force 3v3.
+    spec = {1: ("red", 0.9, 600), 2: ("red", 0.9, 580), 3: ("red", 0.85, 560), 4: ("red", 0.9, 540), 5: ("blue", 0.9, 30), 6: ("blue", 0.9, 60)}
     for tid, (al, conf, x) in spec.items():
         for i in range(10):
             samples.append({"track_id": tid, "t": i * 0.5, "x": float(x), "y": 100.0, "alliance": al, "alliance_conf": conf})
@@ -115,7 +115,20 @@ def test_balance_alliances_on_samples():
     per = {tid: {s["alliance"] for s in out if s["track_id"] == tid} for tid in spec}
     assert all(len(v) == 1 for v in per.values())
     final = {tid: next(iter(v)) for tid, v in per.items()}
-    assert sum(1 for v in final.values() if v == "red") == 3
-    assert final[4] == "blue"
+    # No forced flip of a strong red into blue to invent a 3v3 roster.
+    assert final[4] == "red"
     assert final[1] == "red" and final[5] == "blue"
+    assert sum(1 for v in final.values() if v == "red") == 4
     assert all("alliance_conf" in s for s in out)
+
+
+def test_balance_alliances_keeps_unknown():
+    samples = [
+        {"track_id": 1, "t": 0.0, "x": 50.0, "y": 100.0, "alliance": "unknown", "alliance_conf": 0.1},
+        {"track_id": 1, "t": 1.0, "x": 55.0, "y": 100.0, "alliance": "unknown", "alliance_conf": 0.1},
+        {"track_id": 2, "t": 0.0, "x": 500.0, "y": 100.0, "alliance": "red", "alliance_conf": 0.9},
+        {"track_id": 2, "t": 1.0, "x": 510.0, "y": 100.0, "alliance": "red", "alliance_conf": 0.9},
+    ]
+    out = balance_alliances(samples)
+    assert all(s["alliance"] == "unknown" for s in out if s["track_id"] == 1)
+    assert all(s["alliance"] == "red" for s in out if s["track_id"] == 2)

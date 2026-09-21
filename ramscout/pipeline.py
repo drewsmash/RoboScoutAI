@@ -106,6 +106,7 @@ class Job:
     view_correlation: dict[str, Any] | None = None
     team_scouts: dict[str, Any] = field(default_factory=dict)
     thinking_stages: list[dict[str, Any]] = field(default_factory=list)
+    identities: list[dict[str, Any]] = field(default_factory=list)
     auto_multicam: bool = True
     edited_events: bool = False
     media_source: str = "youtube"  # upload | youtube | demo
@@ -160,6 +161,7 @@ class Job:
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
             "media_source": self.media_source,
+            "identities": self.identities,
         }
 
 
@@ -676,12 +678,16 @@ def _run_real(job: Job) -> None:
     save_jpeg(result["first_frame"], frame_path)
     samples = stitch_occlusions(result["samples"])
     blue, red = _alliance_teams(video_match)
-    # Six robots → six lanes: every time-disjoint tracklet joins a lane of its
-    # alliance instead of being thrown away by the 6-track cap.
+    # Prefer evidence-backed tracklets; do not invent robots to fill six slots.
     samples = assemble_lanes(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
-    samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 6) or 6)
+    # Cap noise fragments, but allow fewer than six visible robots.
+    samples = keep_top_tracks(samples, max_tracks=max(len(blue) + len(red), 8) or 8)
+    # Soft consensus only — never force a 3v3 recolor.
     samples = balance_alliances(samples, n_red=len(red) or 3, n_blue=len(blue) or 3)
+    identities = list(result.get("identities") or [])
     warnings = list(job.warnings) + list(result.get("warnings") or [])
+    if getattr(job, "top_overview_only", True):
+        warnings.append("Top-overview-only tracking: side panes contribute cues, not robot identities.")
     if not samples:
         warnings.append(
             "Tracking produced no robot paths. Click the four field corners on the broadcast frame, "
@@ -806,6 +812,7 @@ def _run_real(job: Job) -> None:
         gaps=list(result.get("gaps") or []),
         layout_switches=list(result.get("layout_switches") or []),
         side_cues=side_cues,
+        identities=identities,
     )
     _reproject_and_scout(job)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)

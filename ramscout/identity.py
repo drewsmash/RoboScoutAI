@@ -161,15 +161,16 @@ def balance_alliances(
     early_s: float = 30.0,
     min_tracks: int = 2,
 ) -> list[dict[str, Any]]:
-    """Force exactly n_red / n_blue alliance labels across the strongest tracks.
+    """Stabilize per-track alliance labels without inventing a 3v3 roster.
 
-    Per-track color evidence (weighted alliance votes) is combined with the
-    starting-side prior and solved as a minimum-cost assignment onto 3 red +
-    3 blue slots. Tracks beyond the slot count keep their own majority label.
-    Returns new sample dicts; ``alliance_conf`` is attached per sample.
+    Historically this forced exactly ``n_red`` / ``n_blue`` slots via assignment,
+    which recolored unknowns and inventing-visible robots. The redesign keeps
+    unknown as unknown and never fills empty roster slots from field half.
+
+    ``n_red`` / ``n_blue`` / ``early_s`` are retained for API compatibility but
+    no longer drive forced recoloring.
     """
-    from ramscout.trackers.alliance import assign_alliance_slots, side_prior
-
+    _ = (n_red, n_blue, early_s)  # API compat — not used for forced slots
     if not samples:
         return samples
     by_id: dict[int, list[dict[str, Any]]] = {}
@@ -178,15 +179,13 @@ def balance_alliances(
     if len(by_id) < min_tracks:
         return samples
 
-    ranked = sorted(by_id.items(), key=lambda item: track_quality(item[1]), reverse=True)
-    slots = n_red + n_blue
-    assignable = ranked[:slots]
-
-    p_color: list[float] = []
-    p_prior: list[float] = []
-    for _tid, group in assignable:
+    consensus: dict[int, tuple[str, float]] = {}
+    for tid, group in by_id.items():
         red_w = blue_w = 0.0
+        conflict = False
         for s in group:
+            if s.get("alliance_conflict"):
+                conflict = True
             label = s.get("alliance")
             if label not in {"red", "blue"}:
                 continue
@@ -196,37 +195,36 @@ def balance_alliances(
             else:
                 blue_w += w
         total = red_w + blue_w
-        p_color.append(red_w / total if total > 0 else 0.5)
-        first = min(group, key=lambda s: float(s.get("t") or 0.0))
-        label, weight = side_prior(
-            float(first.get("x") or 0.0),
-            float(first.get("t") or 0.0),
-            field_length=FIELD_LENGTH,
-            alliance_depth=ALLIANCE_DEPTH,
-            early_s=early_s,
-        )
-        if label == "red":
-            p_prior.append(0.5 + 0.5 * weight)
-        elif label == "blue":
-            p_prior.append(0.5 - 0.5 * weight)
+        if total <= 0:
+            consensus[tid] = ("unknown", 0.0)
+            continue
+        if red_w >= blue_w:
+            label, conf = "red", red_w / total
         else:
-            p_prior.append(0.5)
-
-    labels = assign_alliance_slots(p_color, n_red=n_red, n_blue=n_blue, prior_red=p_prior, prior_weight=0.3)
-    forced: dict[int, tuple[str, float]] = {}
-    for (tid, _group), label, pc, pp in zip(assignable, labels, p_color, p_prior):
-        p = 0.7 * pc + 0.3 * pp
-        conf = p if label == "red" else 1.0 - p
-        forced[tid] = (label, float(np.clip(conf, 0.0, 1.0)))
+            label, conf = "blue", blue_w / total
+        # Weak or conflicted evidence stays unknown rather than inventing color.
+        if conflict or conf < 0.55:
+            # Keep the majority only when clearly dominant; else unknown.
+            if conf < 0.55:
+                consensus[tid] = ("unknown", float(conf))
+            else:
+                consensus[tid] = (label, float(conf))
+                # Preserve conflict flag on emission via sample copy below.
+        else:
+            consensus[tid] = (label, float(conf))
 
     out: list[dict[str, Any]] = []
     for sample in samples:
         row = dict(sample)
         tid = int(row["track_id"])
-        if tid in forced:
-            row["alliance"], row["alliance_conf"] = forced[tid]
-        elif row.get("alliance") not in {"red", "blue"}:
-            row["alliance"] = majority_alliance(by_id[tid])
+        if tid in consensus:
+            label, conf = consensus[tid]
+            row["alliance"] = label
+            row["alliance_conf"] = round(float(conf), 3)
+            if label == "unknown" and row.get("alliance_conflict"):
+                pass  # keep conflict marker for the review UI
+        elif row.get("alliance") not in {"red", "blue", "unknown"}:
+            row["alliance"] = "unknown"
         out.append(row)
     return out
 
@@ -234,8 +232,7 @@ def balance_alliances(
 def majority_alliance(samples: list[dict[str, Any]]) -> str:
     votes = Counter(s.get("alliance") for s in samples if s.get("alliance") in {"red", "blue"})
     if not votes:
-        xs = [float(s["x"]) for s in samples]
-        return "blue" if (sum(xs) / max(len(xs), 1)) < FIELD_LENGTH / 2 else "red"
+        return "unknown"
     return votes.most_common(1)[0][0]
 
 
