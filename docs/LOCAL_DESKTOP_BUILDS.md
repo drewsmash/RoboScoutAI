@@ -9,9 +9,16 @@ bash packaging/build.sh
 ```
 
 ### Windows
-- Output: `dist/release/RoboScoutAI-windows-x64.exe` (or `dist/RoboScoutAI.exe`)
-- Optional signed copy: `RoboScoutAI-windows-x64-signed.exe`
-- For the **git updater** to auto-apply frozen builds, commit the EXE under `release-artifacts/` on the tracked branch (see below). `desktop-downloads/` is only for local staging and is gitignored.
+
+```powershell
+pwsh packaging/build_windows.ps1        # app + manager + Setup + manifest.json → dist/release/
+```
+
+- `RoboScoutAI-Setup.exe` — installer users download once (`packaging/setup.spec`, bundles the two below as payload)
+- `RoboScoutAI.exe` — manager: launcher / updater / rollback / uninstall (`packaging/manager.spec`)
+- `RoboScoutAI-app-windows-x64.exe` — the app (`packaging/app.spec`, formerly `ramscout.spec`)
+- `manifest.json` — sha256 + version + `min_manager_version`
+- The manager reads `manifest.json` + the app exe from `release-artifacts/` on the update-channel branch; CI publishes them there on every tag. See `docs/DESKTOP_APP.md`.
 
 The Windows app opens Edge/Chrome in `--app` mode (no URL bar). It does **not** use the
 bundled WinForms WebView path, which crashed some installs with

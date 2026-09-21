@@ -1367,6 +1367,74 @@ function shouldOpenUpdateManualFallback(body) {
   return Boolean(body) && body.ok === false && Boolean(body.open_url);
 }
 
+/** Label for the update chip while the manager downloads/installs side-by-side. */
+function managedUpdateLabel(status) {
+  if (!status) return "Updating…";
+  const pct = Number.isFinite(status.progress) ? `${status.progress}%` : "";
+  switch (status.state) {
+    case "checking":
+      return "Checking…";
+    case "downloading":
+      return `Downloading ${pct}`.trim();
+    case "verifying":
+      return "Verifying…";
+    case "installing":
+      return "Installing…";
+    case "manager-update":
+      return `Updating manager ${pct}`.trim();
+    case "done":
+      return status.version ? `Restart to ${status.version}` : "Restart to finish";
+    case "error":
+      return "Update failed";
+    default:
+      return "Updating…";
+  }
+}
+
+/** Poll /api/updates/status until the manager reports done or error. */
+async function waitForManagedUpdate(onProgress, { intervalMs = 1000, timeoutMs = 30 * 60 * 1000 } = {}) {
+  const started = Date.now();
+  let lastState = "";
+  while (Date.now() - started < timeoutMs) {
+    let status = null;
+    try {
+      const res = await fetch("/api/updates/status", { cache: "no-store" });
+      status = await res.json();
+    } catch (_err) {
+      status = null;
+    }
+    if (status) {
+      if (status.state !== lastState || status.state === "downloading") onProgress(status);
+      lastState = status.state || "";
+      if (status.state === "done" || status.state === "error") return status;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return { state: "error", error: "Timed out waiting for the update to finish." };
+}
+
+/** After a managed relaunch, wait for the new app process and reload the page. */
+async function waitForRelaunchThenReload(updateChip) {
+  updateChip.textContent = "Restarting…";
+  const started = Date.now();
+  // Give the old process time to exit before we start treating a healthy reply as the new one.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  while (Date.now() - started < 3 * 60 * 1000) {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (res.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (_err) {
+      // still restarting
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  updateChip.textContent = "Restart RoboScoutAI";
+  updateChip.disabled = false;
+}
+
 async function initUpdater() {
   const versionChip = $("version-chip");
   const updateChip = $("update-chip");
@@ -1381,15 +1449,17 @@ async function initUpdater() {
       const update = data.update || data;
       const available = Boolean(update?.available);
       const canApply = Boolean(update?.can_apply) || Boolean(update?.mode === "source" && available);
-      // Only show the chip when something can actually be applied (never for downgrades / missing binaries).
-      updateChip.hidden = !(available && canApply);
-      if (available && canApply) {
+      if (updateChip.dataset.pendingRestart === "1" || updateChip.disabled) {
+        // A managed update is in flight or installed; leave the chip alone.
+      } else if (available && canApply) {
+        updateChip.hidden = false;
         const label = update.latest_version || (update.remote_sha || "").slice(0, 7) || "git";
         updateChip.textContent = `Update ${label}`;
         updateChip.title = update.message || "Update available from git";
         updateChip.dataset.releaseUrl = update.release_url || update.remote || "";
         updateChip.dataset.canApply = "1";
       } else {
+        updateChip.hidden = true;
         updateChip.dataset.canApply = "0";
       }
       const cookiesEl = $("cookies-status");
@@ -1451,8 +1521,19 @@ async function initUpdater() {
       alert("Could not check the git remote for updates.");
     }
   });
+  async function relaunchManaged() {
+    updateChip.disabled = true;
+    updateChip.dataset.pendingRestart = "0";
+    await fetch("/api/updates/relaunch", { method: "POST" }).catch(() => {});
+    await waitForRelaunchThenReload(updateChip);
+  }
+
   updateChip.addEventListener("click", async () => {
     const releaseUrl = updateChip.dataset.releaseUrl || "";
+    if (updateChip.dataset.pendingRestart === "1") {
+      await relaunchManaged();
+      return;
+    }
     if (updateChip.dataset.canApply === "1") {
       updateChip.textContent = "Updating from git…";
       updateChip.disabled = true;
@@ -1471,6 +1552,35 @@ async function initUpdater() {
           );
           updateChip.disabled = false;
           updateChip.textContent = "Update available";
+          return;
+        }
+        if (body.managed) {
+          // Manager downloads side-by-side; we only show progress and then ask to restart.
+          updateChip.textContent = managedUpdateLabel({ state: "checking" });
+          const status = await waitForManagedUpdate((s) => {
+            updateChip.textContent = managedUpdateLabel(s);
+            updateChip.title = s.message || "";
+          });
+          if (status.state === "error") {
+            alert(
+              `Update failed: ${status.error || status.message || "unknown error"}\n\n` +
+                "Check %LOCALAPPDATA%\\RoboScoutAI\\update.log, or run RoboScoutAI.exe --repair."
+            );
+            updateChip.disabled = false;
+            updateChip.textContent = "Update available";
+            return;
+          }
+          updateChip.disabled = false;
+          updateChip.textContent = managedUpdateLabel(status);
+          const restartNow = window.confirm(
+            `RoboScoutAI ${status.version || ""} is installed side-by-side.\n\nRestart now to switch to it? (The previous version is kept for rollback.)`
+          );
+          if (!restartNow) {
+            updateChip.dataset.pendingRestart = "1";
+            updateChip.title = "Click to restart into the new version";
+            return;
+          }
+          await relaunchManaged();
           return;
         }
         alert(

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ramscout import __version__
+from ramscout import __version__, managed
 from ramscout.detect import TRACKER_MODES, list_strategies
 from ramscout.gameconfig import public_game
 from ramscout.ingest import is_youtube_url, resolve_cookies_path
@@ -61,7 +61,10 @@ def _safe_upload_name(filename: str | None, suffix: str) -> str:
 async def lifespan(_app: FastAPI):
     def worker() -> None:
         try:
-            check_for_update()
+            if managed.is_managed():
+                managed.check_for_update()
+            else:
+                check_for_update()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -134,7 +137,8 @@ def health() -> dict[str, str]:
 
 @app.get("/api/version")
 def version() -> dict:
-    cached = last_check()
+    is_managed = managed.is_managed()
+    cached = managed.last_check() if is_managed else last_check()
     cookies = resolve_cookies_path()
     return {
         "version": __version__,
@@ -142,7 +146,9 @@ def version() -> dict:
         "platform": platform_key(),
         "repo": github_repo(),
         "git_remote": git_remote(),
-        "git_branch": git_branch(),
+        "git_branch": (managed.update_channel() or git_branch()) if is_managed else git_branch(),
+        "managed": is_managed,
+        "manager": managed.info(),
         "update": cached,
         "cookies": {
             "found": cookies is not None,
@@ -153,12 +159,31 @@ def version() -> dict:
 
 @app.get("/api/updates/check")
 def updates_check() -> dict:
+    if managed.is_managed():
+        return managed.check_for_update()
     return check_for_update().as_dict()
+
+
+@app.get("/api/updates/status")
+def updates_status() -> dict:
+    """Progress of a manager-driven update (side-by-side download/verify/install)."""
+    return managed.status()
+
+
+@app.post("/api/updates/relaunch")
+def updates_relaunch() -> dict:
+    """Ask the manager to restart us on the freshly installed version."""
+    result = managed.request_relaunch()
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "not managed")
+    return result
 
 
 @app.post("/api/updates/download")
 def updates_download() -> dict:
-    """Fetch and apply an update from the configured git remote."""
+    """Fetch and apply an update: via the manager when managed, else the git updater."""
+    if managed.is_managed():
+        return managed.start_update()
     try:
         result = apply_update_now()
     except Exception as exc:  # noqa: BLE001

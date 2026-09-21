@@ -294,7 +294,31 @@ def check_for_update(current: str | None = None, timeout: float = 60.0) -> Updat
     root = source_git_root()
     if root is not None:
         return _store(_check_source(info, root, timeout=timeout))
+    if managed_install_present():
+        # A RoboScoutAI.exe manager owns this install: never replace binaries in-place.
+        info.mode = "frozen"
+        info.message = "managed install"
+        info.error = (
+            f"This {APP_NAME} build is installed by {BINARY_NAME}.exe (manager). "
+            f"Start {APP_NAME} from the Start Menu and use its Update button, or run "
+            f"%LOCALAPPDATA%\\{APP_NAME}\\{BINARY_NAME}.exe --update."
+        )
+        return _store(info)
     return _store(_check_frozen(info, timeout=timeout))
+
+
+def managed_install_present() -> bool:
+    """True when a manager-style install (current.json + app/) exists for this user."""
+    try:
+        from roboscout_manager.state import default_install_root
+
+        root = default_install_root()
+    except Exception:  # noqa: BLE001
+        root = _windows_user_install_dir()
+    try:
+        return (root / "current.json").is_file() and (root / "app").is_dir()
+    except OSError:
+        return False
 
 
 def last_check() -> dict[str, Any] | None:
