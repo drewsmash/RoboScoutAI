@@ -1,0 +1,10 @@
+# Optional on-machine Laya decision model (Jev replacement).
+#
+# ~10× faster than cloud typesafe-ai/jev; Apache-2.0 open weights.
+#   pip install -r requirements-laya.txt
+#
+# First run downloads ~800 MB of weights from Hugging Face into the
+# transformers cache. Set LAYA_LOCAL=0 to force the AI Gateway Jev fallback.
+laya>=0.3.0
+# Laya pulls torch/transformers transitively; USE_TF=0 is set at runtime to
+# avoid TensorFlow import deadlocks on some Windows desktops.

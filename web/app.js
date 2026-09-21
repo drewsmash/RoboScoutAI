@@ -620,15 +620,23 @@ function renderViews(job) {
   if (lede) {
     const mode = job.views?.mode || job.camera?.mode || "single";
     const detail = job.views?.detail || job.camera?.detail || "";
+    const nPane = Number(job.views?.pane_detections || job.pane_detections?.length || 0);
+    const matchRate = job.views?.view_match_rate ?? job.view_correlation?.match_rate;
+    const corr =
+      nPane > 0
+        ? ` Detected separately on each pane (${nPane} hits${
+            matchRate != null ? `, ${Math.round(Number(matchRate) * 100)}% correlated to overview tracks` : ""
+          }).`
+        : "";
     const base =
       mode === "stacked_sides"
         ? "Top wide-angle for movement · bottom-left blue scoring/climb · bottom-right red scoring/climb."
         : mode === "stacked_top"
           ? "Top wide-angle for the top-down map · lower pane for scoring & climb cues."
           : mode === "side_by_side" || mode === "grid"
-            ? "Multi-pane broadcast — only the overview pane feeds the field map; side panes feed scoring cues."
+            ? "Multi-pane broadcast — each camera is cropped and detected on its own, then linked."
             : "Single overview camera — BEV adjusts for camera angle on the field map.";
-    lede.textContent = detail ? `${base} ${detail}` : base;
+    lede.textContent = `${detail ? `${base} ${detail}` : base}${corr}`;
   }
   const roleTitle = {
     overview: "Overview",

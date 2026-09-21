@@ -99,6 +99,9 @@ class Job:
     gaps: list[dict[str, Any]] = field(default_factory=list)
     layout_switches: list[dict[str, Any]] = field(default_factory=list)
     side_cues: list[dict[str, Any]] = field(default_factory=list)
+    pane_detections: list[dict[str, Any]] = field(default_factory=list)
+    view_correlation: dict[str, Any] | None = None
+    team_scouts: dict[str, Any] = field(default_factory=dict)
     thinking_stages: list[dict[str, Any]] = field(default_factory=list)
     auto_multicam: bool = True
     edited_events: bool = False
@@ -144,6 +147,9 @@ class Job:
             "gaps": self.gaps,
             "layout_switches": self.layout_switches,
             "side_cues": self.side_cues,
+            "pane_detections": self.pane_detections,
+            "view_correlation": self.view_correlation,
+            "team_scouts": self.team_scouts,
             "thinking_stages": self.thinking_stages,
             "auto_multicam": self.auto_multicam,
             "edited_events": self.edited_events,
@@ -512,13 +518,13 @@ def _run_real(job: Job) -> None:
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
-            # When classical layout confidence is middling, ask Jev to classify.
+            # When classical layout confidence is middling, ask Laya (local) / Jev.
             try:
-                from ramscout.jev import classify_camera_layout, is_available
+                from ramscout.laya import classify_camera_layout, is_available
 
                 conf = float(getattr(chosen, "confidence", 0.0) or 0.0)
                 if is_available(job.ai_gateway_key) and 0.35 <= conf < 0.78:
-                    STORE.set_progress(job, "views", "Jev classifying camera layout…", 54)
+                    STORE.set_progress(job, "views", "Laya classifying camera layout…", 54)
                     jev_mode, jev_conf, jev_notes = classify_camera_layout(
                         {
                             "classical_mode": chosen.mode,
@@ -536,18 +542,18 @@ def _run_real(job: Job) -> None:
                         if jev_mode == chosen.mode:
                             chosen.confidence = float(min(0.95, max(conf, jev_conf)))
                             chosen.detail = (
-                                f"{chosen.detail} · Jev agrees ({jev_conf:.2f})"
+                                f"{chosen.detail} · Laya agrees ({jev_conf:.2f})"
                             )
                             warnings.append(
-                                f"Jev (typesafe-ai/jev) confirmed camera layout={jev_mode}."
+                                f"Laya confirmed camera layout={jev_mode}."
                             )
                         else:
                             warnings.append(
-                                f"Jev (typesafe-ai/jev) suggests layout={jev_mode} "
+                                f"Laya suggests layout={jev_mode} "
                                 f"({jev_conf:.2f}) vs classical {chosen.mode} — keeping classical panes."
                             )
             except Exception as jev_exc:  # noqa: BLE001
-                warnings.append(f"Jev camera layout skipped: {jev_exc}")
+                warnings.append(f"Laya camera layout skipped: {jev_exc}")
             views = {
                 "mode": chosen.mode,
                 "panes": [p.as_dict() for p in (chosen.panes or [])],
@@ -623,11 +629,13 @@ def _run_real(job: Job) -> None:
             "For stronger detection: install ultralytics, or add an OpenAI / Google API key."
         )
 
-    # Side / lower cameras: scoring & climb reasoning (separate from overview paths).
+    # Side / lower cameras: detect each pane separately, then correlate with overview.
     side_cues: list[dict[str, Any]] = []
+    pane_detections: list[dict[str, Any]] = []
     try:
+        from ramscout.correlate import correlate_views
         from ramscout.multicam import CameraLayout, CameraPane
-        from ramscout.multiview import process_side_views
+        from ramscout.multiview import detect_all_panes, process_side_views
 
         cam = job.camera or {}
         panes = []
@@ -643,26 +651,70 @@ def _run_real(job: Job) -> None:
             split_x=cam.get("split_x"),
             panes=panes,
         )
-        if layout_obj.side_panes():
-            STORE.set_progress(job, "side_views", "Reading side cameras for scoring & climbs…", 82)
+        if layout_obj.panes:
+            STORE.set_progress(job, "side_views", "Detecting robots in each camera pane…", 80)
 
-            def side_progress(message: str, pct: float) -> None:
-                STORE.set_progress(job, "side_views", message, 82 + pct * 0.08)
+            def pane_progress(message: str, pct: float) -> None:
+                STORE.set_progress(job, "side_views", message, 80 + pct * 0.06)
 
-            mv = process_side_views(video_path, layout_obj, on_progress=side_progress)
-            side_cues = list(mv.side_cues or [])
-            warnings.extend(mv.warnings or [])
+            pane_result = detect_all_panes(video_path, layout_obj, on_progress=pane_progress)
+            pane_detections = list(pane_result.get("detections") or [])
+            warnings.extend(pane_result.get("warnings") or [])
+
+            STORE.set_progress(job, "side_views", "Correlating side views with overview tracks…", 86)
+            corr = correlate_views(samples, pane_detections)
+            view_links = corr
+            correlated_cues = list(corr.get("side_cues") or [])
+
+            # Legacy MOG2 cues still help when correlation is sparse.
+            if layout_obj.side_panes():
+
+                def side_progress(message: str, pct: float) -> None:
+                    STORE.set_progress(job, "side_views", message, 87 + pct * 0.03)
+
+                mv = process_side_views(video_path, layout_obj, on_progress=side_progress)
+                warnings.extend(mv.warnings or [])
+                # Prefer correlated (team-linked) cues; keep unmatched MOG2 as backup.
+                side_cues = correlated_cues + [
+                    c for c in (mv.side_cues or []) if not correlated_cues
+                ] or list(mv.side_cues or [])
+                if correlated_cues:
+                    side_cues = correlated_cues
+                    # Merge in MOG2 cues that don't overlap in time/alliance.
+                    seen = {(round(float(c.get("t") or 0), 0), c.get("alliance"), c.get("kind")) for c in correlated_cues}
+                    for c in mv.side_cues or []:
+                        key = (round(float(c.get("t") or 0), 0), c.get("alliance"), c.get("kind"))
+                        if key not in seen:
+                            side_cues.append(c)
+            else:
+                side_cues = correlated_cues
+
             views = dict(job.views or {})
             views["side_cues"] = len(side_cues)
-            STORE.update(job, views=views, side_cues=side_cues)
+            views["pane_detections"] = len(pane_detections)
+            views["view_match_rate"] = (corr.get("stats") or {}).get("match_rate")
+            STORE.update(
+                job,
+                views=views,
+                side_cues=side_cues,
+                pane_detections=pane_detections,
+                view_correlation=corr.get("stats"),
+            )
     except Exception as exc:  # noqa: BLE001
-        warnings.append(f"Side-view processing skipped: {exc}")
+        warnings.append(f"Side-view / multi-pane processing skipped: {exc}")
 
     assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
     # Prefer OCR team labels when present.
     for sample in samples:
         if sample.get("team"):
             assignments[str(sample["track_id"])] = str(sample["team"])
+    if side_cues:
+        try:
+            from ramscout.correlate import attach_teams_to_cues
+
+            side_cues = attach_teams_to_cues(side_cues, assignments, samples)
+        except Exception:  # noqa: BLE001
+            pass
 
     src_points = job.src_points
     if src_points is None:
@@ -879,16 +931,16 @@ def _reproject_and_scout(job: Job) -> None:
             from ramscout.event_editor import cards_from_events
 
             card_dicts = cards_from_events(card_dicts, event_dicts)
-        # Optional Jev (Vercel AI Gateway) verification of heuristic scout events.
+        # Optional Laya (local) / Jev (gateway) verification of heuristic scout events.
         try:
-            from ramscout.jev import is_available, verify_scout_events
+            from ramscout.laya import is_available, scout_team_actions, verify_scout_events
 
             if is_available(job.ai_gateway_key):
-                STORE.set_progress(job, "scouting", "Jev verifying scout events…", 94)
+                STORE.set_progress(job, "scouting", "Laya verifying scout events…", 94)
                 event_dicts, jev_notes = verify_scout_events(
                     event_dicts,
                     match=job.match,
-                    side_cues=list(job.side_cues or []),
+                    cards=card_dicts,
                     api_key=job.ai_gateway_key,
                 )
                 if jev_notes:
@@ -898,9 +950,42 @@ def _reproject_and_scout(job: Job) -> None:
                 from ramscout.event_editor import cards_from_events
 
                 card_dicts = cards_from_events(card_dicts, event_dicts)
+
+                # Per-team scout inference — what each robot actually did.
+                STORE.set_progress(job, "scouting", "Laya scouting each team…", 96)
+                team_scouts: dict[str, Any] = {}
+                for card in card_dicts[:6]:
+                    team = str(card.get("team") or "")
+                    if not team:
+                        continue
+                    team_events = [e for e in event_dicts if str(e.get("team")) == team]
+                    state = {
+                        "team": team,
+                        "alliance": card.get("alliance"),
+                        "nickname": card.get("nickname"),
+                        "summary": card,
+                        "events": team_events[:12],
+                        "match": {"key": (job.match or {}).get("key")},
+                    }
+                    scout = scout_team_actions(state, api_key=job.ai_gateway_key)
+                    if scout.get("available"):
+                        team_scouts[team] = scout
+                        answers = scout.get("answers") or {}
+                        # Attach a short role label onto the card for the UI.
+                        role = (answers.get("role") or {}).get("choice")
+                        if role:
+                            card["scout_role"] = role
+                        climb = (answers.get("climb") or {}).get("choice")
+                        if climb:
+                            card["scout_climb"] = climb
+                if team_scouts:
+                    STORE.update(job, team_scouts=team_scouts)
+                    warnings = list(job.warnings or [])
+                    warnings.append(f"Laya scouted {len(team_scouts)} team(s) on-machine.")
+                    STORE.update(job, warnings=warnings)
         except Exception as jev_exc:  # noqa: BLE001
             warnings = list(job.warnings or [])
-            warnings.append(f"Jev verification skipped: {jev_exc}")
+            warnings.append(f"Laya verification skipped: {jev_exc}")
             STORE.update(job, warnings=warnings)
         card_dicts = enrich_cards_with_tba(card_dicts, job.match)
     except Exception as exc:  # noqa: BLE001
