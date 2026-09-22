@@ -26,6 +26,7 @@ const state = {
   potatoRunning: false,
   view: "home",
   cropLocked: false,
+  selectedRobot: null,
 };
 
 function applyGame(game) {
@@ -286,7 +287,7 @@ async function refreshJob() {
   const job = await res.json();
   state.job = job;
   renderJob(job);
-  if (job.status === "ready" || job.status === "error") {
+  if (job.status === "ready" || job.status === "error" || job.status === "cancelled") {
     clearInterval(state.poll);
     state.poll = null;
   }
@@ -329,11 +330,19 @@ function renderJob(job) {
   if (ytHelp) ytHelp.hidden = !youtubeBlocked;
   if (uploadHelp) uploadHelp.hidden = !(uploadFailed || (failed && isUpload));
 
+  const pct = Math.max(0, Math.min(100, Number(job.progress || 0)));
   $("progress-status").textContent = labelStatus(job.status);
   $("progress-message").textContent = job.error || job.message || "";
-  $("progress-fill").style.width = `${Math.max(4, job.progress || 0)}%`;
+  const percentEl = $("progress-percent");
+  if (percentEl) percentEl.textContent = `${Math.round(pct)}%`;
+  const track = $("progress-track");
+  if (track) track.setAttribute("aria-valuenow", String(Math.round(pct)));
+  $("progress-fill").style.width = `${pct}%`;
+  renderProgressClock(job);
+  const cancelBtn = $("cancel-job");
+  if (cancelBtn) cancelBtn.hidden = ["ready", "error", "cancelled"].includes(job.status);
   $("progress-panel").hidden = job.status === "ready";
-  $("progress-panel")?.classList.toggle("thinking", job.status !== "ready" && job.status !== "error");
+  $("progress-panel")?.classList.toggle("thinking", job.status !== "ready" && job.status !== "error" && job.status !== "cancelled");
   renderThinkStages(job);
   renderViews(job);
 
@@ -424,6 +433,7 @@ function renderJob(job) {
   $("export-csv").setAttribute("download", `${job.id}.csv`);
 
   renderRobots(job);
+  renderPlayByPlay(job);
   renderTimeline(job);
   renderWarnings(job);
   drawField();
@@ -448,12 +458,70 @@ function renderTeams(elId, match, color) {
   }
 }
 
+function formatClock(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m <= 0) return `${r}s`;
+  return `${m}m ${String(r).padStart(2, "0")}s`;
+}
+
+function renderProgressClock(job) {
+  const el = $("progress-eta");
+  if (!el) return;
+  if (["ready", "error", "cancelled"].includes(job.status)) {
+    el.textContent = "";
+    return;
+  }
+  const pct = Number(job.progress || 0);
+  const start = Date.parse(job.created_at || "");
+  if (!Number.isFinite(start)) {
+    el.textContent = "";
+    return;
+  }
+  const elapsed = Math.max(0, (Date.now() - start) / 1000);
+  if (pct < 3) {
+    el.textContent = `${formatClock(elapsed)} elapsed`;
+    return;
+  }
+  const remain = elapsed * (100 - pct) / pct;
+  el.textContent = `${formatClock(elapsed)} elapsed · ${formatClock(remain)} left`;
+}
+
+function renderPlayByPlay(job) {
+  const root = $("play-by-play");
+  if (!root) return;
+  const rows = job.play_by_play || [];
+  if (!rows.length) {
+    const waiting = job.status && !["ready", "error", "cancelled"].includes(job.status);
+    root.innerHTML = `<li><span>${waiting ? "Play-by-play appears when the overview track finishes." : "No play-by-play yet."}</span></li>`;
+    return;
+  }
+  root.innerHTML = rows.map((row) => {
+    const who = row.team ? `${row.robot} · ${row.team}` : row.robot;
+    const pos = row.x == null ? "" : `${Number(row.x).toFixed(0)}, ${Number(row.y).toFixed(0)}`;
+    return `<li>
+      <span class="t">${Number(row.t).toFixed(1)}s</span>
+      <span>${escapeHtml(who)}</span>
+      <span class="doing">${escapeHtml(row.doing || "")}</span>
+      <span class="chip ghost">${escapeHtml(row.period || "")}${pos ? ` · ${escapeHtml(pos)}` : ""}</span>
+    </li>`;
+  }).join("");
+}
+
 function renderRobots(job) {
   const grid = $("robot-grid");
   grid.innerHTML = "";
   for (const card of job.cards || []) {
     const el = document.createElement("article");
     el.className = "robot-card";
+    el.dataset.team = String(card.team || "");
+    if (state.selectedRobot && String(state.selectedRobot) === String(card.team)) el.classList.add("is-selected");
+    const trust = card.trust_carpet == null ? "" : `<span class="chip ghost" title="Share of this path on the carpet, not the wall">Carpet ${Math.round(Number(card.trust_carpet) * 100)}%</span>`;
+    const role = card.scout_role ? `<span class="chip">${escapeHtml(card.scout_role)}</span>` : "";
+    const climb = card.scout_climb ? `<span class="chip ghost">Climb ${escapeHtml(card.scout_climb)}</span>` : "";
+    const note = card.scout_note ? `<p class="tool-meta">${escapeHtml(card.scout_note)}</p>` : "";
+    const why = card.why ? `<p class="tool-meta">${escapeHtml(card.why)}</p>` : "";
     el.innerHTML = `
       <header>
         <div class="robot-ident">
@@ -470,7 +538,12 @@ function renderRobots(job) {
         </div>
         <span class="chip ${resolveAlliance(card.alliance)}">${allianceLabel(card.alliance)}</span>
       </header>
+      ${why}
+      ${note}
       <div class="robot-meta-row">
+        ${trust}
+        ${role}
+        ${climb}
         <span class="chip ghost">${escapeHtml(card.identity_state || card.visibility || "observed")}</span>
         ${card.alliance_conf != null ? `<span class="chip ghost" title="Alliance confidence">${Math.round(Number(card.alliance_conf) * 100)}%</span>` : ""}
         ${card.assignment_source === "start_pose_unverified" ? `<span class="chip warn">Unverified team</span>` : ""}
@@ -489,8 +562,8 @@ function renderRobots(job) {
         <button type="button" data-note="${escapeHtml(card.team)}">Note</button>
       </div>
       <label class="field">
-        <span>Team override</span>
-        <input class="team-input" data-track="${escapeHtml(card.team)}" value="${escapeHtml(card.team)}" />
+        <span>Assign team number</span>
+        <input class="team-input" data-track="${escapeHtml(card.team)}" value="${escapeHtml(card.team)}" inputmode="numeric" />
       </label>
     `;
     grid.appendChild(el);
@@ -584,21 +657,26 @@ function labelStatus(status) {
     downloading: "Downloading video",
     views: "Sectioning camera views",
     tracking: "Tracking robots",
+    tryout: "Tracker tryout",
+    playbyplay: "Play-by-play",
     side_views: "Side cameras · scoring & climbs",
-    scouting: "Auto-scouting",
+    scouting: "Reading the play-by-play",
     ready: "Ready",
+    cancelled: "Cancelled",
     error: "Error",
   })[status] || status;
 }
 
-const STAGE_ORDER = ["resolving", "downloading", "views", "tracking", "side_views", "scouting", "ready"];
+const STAGE_ORDER = ["resolving", "downloading", "views", "tryout", "tracking", "playbyplay", "side_views", "scouting", "ready"];
 const STAGE_LABELS = {
   resolving: "Resolve",
   downloading: "Download",
-  views: "Views",
-  tracking: "Track + BEV",
+  views: "Layout",
+  tryout: "Tryout",
+  tracking: "Overview",
+  playbyplay: "Play-by-play",
   side_views: "Side cams",
-  scouting: "Scout",
+  scouting: "Scout model",
   ready: "Done",
 };
 
@@ -893,20 +971,28 @@ function drawField() {
 }
 
 function drawPeriodBands(ctx, w, h, t, autoEnd, endgameStart) {
+  const matchEnd = Number(state.job?.game?.match_end_s || MATCH_END);
+  const bands = [
+    { a: 0, b: autoEnd / matchEnd, color: "#fbbf24", label: "AUTO" },
+    { a: autoEnd / matchEnd, b: endgameStart / matchEnd, color: "#8ab4f8", label: "TELEOP" },
+    { a: endgameStart / matchEnd, b: 1, color: "#34d399", label: "ENDGAME" },
+  ];
+  const barH = 16;
+  const y = h - barH;
   ctx.save();
-  ctx.globalAlpha = 0.35;
-  const barH = 4;
-  if (t < autoEnd) {
-    ctx.fillStyle = "#fbbf24";
-    ctx.fillRect(0, h - barH, w * Math.min(1, t / autoEnd), barH);
-  } else if (t >= endgameStart) {
-    ctx.fillStyle = "#34d399";
-    const span = Math.max(MATCH_END - endgameStart, 1);
-    ctx.fillRect(0, h - barH, w * Math.min(1, (t - endgameStart) / span), barH);
-  } else {
-    ctx.fillStyle = allianceColor("blue");
-    ctx.fillRect(0, h - barH, w * 0.4, barH);
+  for (const band of bands) {
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = band.color;
+    ctx.fillRect(w * band.a, y, Math.max(0, w * (band.b - band.a)), barH);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#0e0e10";
+    ctx.font = "700 10px IBM Plex Sans, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(band.label, w * (band.a + band.b) / 2, y + barH / 2);
   }
+  ctx.fillStyle = "#f8fafc";
+  ctx.fillRect(w * Math.max(0, Math.min(1, t / matchEnd)) - 1, y, 2, barH);
   ctx.restore();
 }
 
@@ -1303,6 +1389,10 @@ function addCurrentMatchToBook(announce = true) {
     return false;
   }
   book.matches.push(matchKey);
+  book.play_by_play = book.play_by_play || [];
+  for (const row of job.play_by_play || []) {
+    book.play_by_play.push({ ...row, _match: matchKey });
+  }
   for (const card of job.cards) {
     book.cards.push({
       ...card,
@@ -1342,7 +1432,20 @@ async function refreshPicklist() {
   if (!res.ok) return;
   state.picklist = await res.json();
   renderPicklist(state.picklist);
+  renderSuggestedAlliance(state.picklist);
   updateScoutbookMeta();
+}
+
+function renderSuggestedAlliance(data) {
+  const el = $("suggested-alliance");
+  if (!el) return;
+  const rows = data?.suggested_alliance || data?.first_round || [];
+  if (!rows.length) {
+    el.textContent = "";
+    return;
+  }
+  const bits = rows.map((row) => `${row.team}${row.why ? ` — ${row.why}` : ""}`);
+  el.textContent = `Suggested alliance: ${bits.join(" · ")}`;
 }
 
 function renderPicklist(data) {
@@ -1371,7 +1474,7 @@ function renderPicklist(data) {
     <li class="${watch.has(row.team) ? "watched" : ""}">
       <span class="rank">#${row.rank}</span>
       <span class="team-n">${escapeHtml(row.team)}</span>
-      <span>${escapeHtml((row.reasons || []).join(" · "))}</span>
+      <span>${escapeHtml(row.why || (row.reasons || [])[0] || "")}</span>
       <span class="score">${Number(row.score).toFixed(1)}</span>
       <button type="button" data-exclude="${row.team}">Mark taken</button>
     </li>
@@ -1545,14 +1648,14 @@ function navigate(view) {
     const match = panel.dataset.view === next;
     panel.classList.toggle("is-active", match);
     if (panel.id === "workspace") {
-      panel.hidden = next !== "studio" && next !== "picklist" && next !== "compare" && next !== "teams";
-      if (next === "picklist") {
+      panel.hidden = next !== "studio" && next !== "picklist" && next !== "compare";
+      if (next === "picklist" || next === "compare") {
+        const more = $("more-tools");
+        if (more) more.open = true;
         $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } else if (next === "compare") {
-        $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        $("cmp-a")?.focus();
+        if (next === "compare") $("cmp-a")?.focus();
       } else if (next === "teams") {
-        $("notes-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        renderTeamPage();
       } else if (next === "studio" && state.job) {
         panel.hidden = false;
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1600,7 +1703,9 @@ function renderSettingsPanel() {
   if (depth) {
     depth.textContent = "Depth & detector status load from /api/trackers when available.";
   }
-  if (depsEl) depsEl.textContent = "Checking installed packages…";
+    if (depsEl) depsEl.textContent = "Checking installed packages…";
+    const scoutEl = $("settings-scout-model");
+    if (scoutEl) scoutEl.textContent = "Local scout model: checking…";
   Promise.all([
     fetch("/api/trackers").then((r) => r.json()).catch(() => ({})),
     fetch("/api/health").then((r) => r.json()).catch(() => ({})),
@@ -1621,7 +1726,101 @@ function renderSettingsPanel() {
         depsEl.classList.remove("warn-text");
       }
     }
+    const model = health.scout_model || trackers.scout_model || {};
+    const scoutLine = $("settings-scout-model");
+    if (scoutLine) {
+      const stateLabel = model.state || (model.installed ? "installed" : "not installed");
+      const cmd = model.install_command || "pip install -r requirements-laya.txt";
+      scoutLine.textContent = `Local scout model: ${stateLabel}. ${model.installed ? "Weights load on first scout." : `Install: ${cmd}`}`;
+    }
   });
+}
+
+function renderTeamPage() {
+  const root = $("team-page");
+  if (!root) return;
+  const book = loadBook();
+  const notes = loadNotes();
+  const groups = new Map();
+  for (const card of book.cards || []) {
+    const team = String(card.team || "");
+    if (!team) continue;
+    if (!groups.has(team)) groups.set(team, []);
+    groups.get(team).push(card);
+  }
+  if (!groups.size) {
+    root.innerHTML = `<div class="empty-state"><h3>No teams in the book</h3><p>Add a match from Analysis Studio. This page lists every robot across those matches.</p></div>`;
+    return;
+  }
+  const plays = book.play_by_play || [];
+  root.innerHTML = [...groups.keys()].sort((a, b) => Number(a) - Number(b)).map((team) => {
+    const cards = groups.get(team);
+    const climbs = cards.filter((c) => c.climb_attempt || c.scout_climb).length;
+    const path = cards.reduce((sum, c) => sum + Number(c.path_length_in || 0), 0);
+    const role = cards.map((c) => c.scout_role).filter(Boolean).pop() || "";
+    const matches = [...new Set(cards.map((c) => c._match).filter(Boolean))];
+    const actions = plays.filter((row) => String(row.team) === team || String(row.robot) === team).slice(0, 6);
+    const actionLine = actions.map((row) => `${Number(row.t).toFixed(0)}s ${row.doing}`).join(" · ");
+    return `<article class="team-card-page">
+      <h3>${escapeHtml(team)} ${role ? `<span class="chip">${escapeHtml(role)}</span>` : ""}</h3>
+      <p class="tool-meta">${matches.length || cards.length} match${(matches.length || cards.length) === 1 ? "" : "es"} · climbs ${climbs} · path ${path.toFixed(0)} in</p>
+      ${notes[team] ? `<p>${escapeHtml(notes[team])}</p>` : ""}
+      ${actionLine ? `<p class="tool-meta">${escapeHtml(actionLine)}</p>` : ""}
+    </article>`;
+  }).join("");
+}
+
+function printMatchSheet() {
+  const job = state.job;
+  if (!job) return;
+  const match = job.match || {};
+  const cards = (job.cards || []).slice(0, 6).map((card) => `
+    <section>
+      <h2>${card.team} · ${card.alliance || ""}</h2>
+      <p>${card.why || card.scout_note || ""}</p>
+      <p>Hub ${card.hub_score_candidates ?? 0} · climb ${card.climb_attempt ? "yes" : "no"} · ${card.scout_role || ""} ${card.scout_climb || ""}</p>
+    </section>`).join("");
+  const plays = (job.play_by_play || []).slice(0, 24).map((row) =>
+    `<li>${Number(row.t).toFixed(1)}s ${row.team || row.robot} ${row.doing} (${row.period})</li>`
+  ).join("");
+  const html = `<!DOCTYPE html><html><head><title>Match sheet</title>
+    <style>
+      body { font-family: sans-serif; color: #111; margin: 24px; }
+      h1 { font-size: 20px; }
+      .cards { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+      section { border: 1px solid #ccc; padding: 8px; }
+      @media print { button { display: none; } }
+    </style></head><body>
+    <h1>${match.key || "Match"} · Blue ${match.alliances?.blue?.score ?? "—"} · Red ${match.alliances?.red?.score ?? "—"}</h1>
+    <div class="cards">${cards}</div>
+    <h2>Play-by-play</h2>
+    <ol>${plays}</ol>
+    </body></html>`;
+  const frame = document.createElement("iframe");
+  frame.style.position = "fixed";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.width = "0";
+  frame.style.height = "0";
+  frame.style.border = "0";
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
+  setTimeout(() => frame.remove(), 1000);
+}
+
+function selectRobot(delta) {
+  const cards = [...document.querySelectorAll("#robot-grid .robot-card")];
+  if (!cards.length) return;
+  const cur = cards.findIndex((card) => card.classList.contains("is-selected"));
+  const next = cur < 0 ? 0 : (cur + delta + cards.length) % cards.length;
+  cards.forEach((card, index) => card.classList.toggle("is-selected", index === next));
+  state.selectedRobot = cards[next].dataset.team || null;
+  cards[next].scrollIntoView({ block: "nearest" });
 }
 
 function initShell() {
@@ -1676,6 +1875,44 @@ function initShell() {
     if (video && Number.isFinite(video.duration)) video.currentTime = next;
     drawField();
     drawTrackOverlay();
+  });
+  $("print-sheet")?.addEventListener("click", () => printMatchSheet());
+  $("cancel-job")?.addEventListener("click", async () => {
+    if (!state.job) return;
+    await fetch(`/api/jobs/${state.job.id}/cancel`, { method: "POST" });
+    refreshJob();
+  });
+  const dropForm = $("start-form");
+  dropForm?.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropForm.classList.add("is-drop");
+  });
+  dropForm?.addEventListener("dragleave", () => dropForm.classList.remove("is-drop"));
+  dropForm?.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropForm.classList.remove("is-drop");
+    const file = event.dataTransfer?.files?.[0];
+    const input = $("video-file");
+    if (!file || !input || typeof DataTransfer === "undefined") return;
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change"));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (state.view !== "studio") return;
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (event.code === "Space") {
+      event.preventDefault();
+      $("play-btn")?.click();
+    } else if (event.key === "n" || event.key === "N") {
+      $("next-uncertain")?.click();
+    } else if (event.key === "ArrowRight") {
+      selectRobot(1);
+    } else if (event.key === "ArrowLeft") {
+      selectRobot(-1);
+    }
   });
   navigate("home");
 }

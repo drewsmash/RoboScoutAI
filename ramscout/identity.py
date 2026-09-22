@@ -108,6 +108,43 @@ def assign_by_start(
     return mapping
 
 
+def _finite(value: Any) -> float | None:
+    """``float(value)`` that returns None for missing or non-numeric fields.
+
+    Invalid projections store ``x``/``y`` as None. Calling ``float(None)``
+    there crashes the job with ``float() argument must be a string or a real
+    number, not 'NoneType'``.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _fragment_geometry(group: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Start/end field position using only samples that actually have one."""
+    if not group:
+        return None
+    points: list[tuple[float, float]] = []
+    for row in group:
+        if row.get("field_valid") is False:
+            continue
+        x, y = _finite(row.get("x")), _finite(row.get("y"))
+        if x is None or y is None:
+            continue
+        points.append((x, y))
+    if not points:
+        return None
+    t0 = _finite(group[0].get("t")) or 0.0
+    t1 = _finite(group[-1].get("t")) or t0
+    return {"t0": t0, "t1": t1, "start": points[0], "end": points[-1], "dur": t1 - t0, "n": len(group)}
+
+
 def track_quality(group: list[dict[str, Any]]) -> float:
     """Score a track: long-lived, actually moving, and inside the field.
 
@@ -306,17 +343,15 @@ def assemble_lanes(
         by_id.setdefault(int(s["track_id"]), []).append(s)
     frags: list[dict[str, Any]] = []
     for tid, group in by_id.items():
-        group.sort(key=lambda r: float(r["t"]))
+        group.sort(key=lambda r: _finite(r.get("t")) or 0.0)
+        geo = _fragment_geometry(group)
+        if geo is None:
+            continue
         frags.append(
             {
                 "tid": tid,
                 "alliance": majority_alliance(group),
-                "t0": float(group[0]["t"]),
-                "t1": float(group[-1]["t"]),
-                "start": (float(group[0]["x"]), float(group[0]["y"])),
-                "end": (float(group[-1]["x"]), float(group[-1]["y"])),
-                "dur": float(group[-1]["t"]) - float(group[0]["t"]),
-                "n": len(group),
+                **geo,
             }
         )
     # Long fragments first within the same start second so a solid track
@@ -370,11 +405,11 @@ def assemble_lanes(
         if tid in dropped or tid not in remap:
             continue
         cut = cut_after.get(tid)
-        if cut is not None and float(s["t"]) >= cut:
+        if cut is not None and (_finite(s.get("t")) or 0.0) >= cut:
             continue
         row = dict(s)
         row["track_id"] = remap[tid]
-        if jump_at.get(tid) is not None and float(s["t"]) == jump_at[tid]:
+        if jump_at.get(tid) is not None and (_finite(s.get("t")) or 0.0) == jump_at[tid]:
             row["lane_jump"] = True
         out.append(row)
     return out
@@ -403,19 +438,18 @@ def stitch_occlusions(
     for sample in samples:
         by_id.setdefault(int(sample["track_id"]), []).append(sample)
     for group in by_id.values():
-        group.sort(key=lambda row: float(row["t"]))
+        group.sort(key=lambda row: _finite(row.get("t")) or 0.0)
 
     fragments: list[dict[str, Any]] = []
     for tid, group in by_id.items():
+        geo = _fragment_geometry(group)
+        if geo is None:
+            continue
         fragments.append(
             {
                 "tid": tid,
                 "alliance": majority_alliance(group),
-                "t0": float(group[0]["t"]),
-                "t1": float(group[-1]["t"]),
-                "start": (float(group[0]["x"]), float(group[0]["y"])),
-                "end": (float(group[-1]["x"]), float(group[-1]["y"])),
-                "n": len(group),
+                **geo,
             }
         )
     fragments.sort(key=lambda item: item["t0"])
@@ -468,7 +502,7 @@ def stitch_occlusions(
     for sample in samples:
         tid = int(sample["track_id"])
         cut = cut_after.get(tid)
-        if cut is not None and float(sample["t"]) >= cut:
+        if cut is not None and (_finite(sample.get("t")) or 0.0) >= cut:
             continue
         row = dict(sample)
         row["track_id"] = root_of.get(tid, tid)
