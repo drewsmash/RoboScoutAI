@@ -10,6 +10,7 @@ dist/
 *.mp4
 .mypy_cache/
 *.onnx
+models/
 packaging/certs/
 *.pt
 __pycache__/

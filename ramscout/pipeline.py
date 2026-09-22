@@ -130,6 +130,8 @@ class Job:
     play_by_play: list[dict[str, Any]] = field(default_factory=list)
     scout_model: dict[str, Any] = field(default_factory=dict)
     cancel_requested: bool = False
+    use_local_scout: bool = True
+    live_tracking: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -185,6 +187,8 @@ class Job:
             "play_by_play": self.play_by_play,
             "scout_model": self.scout_model,
             "cancel_requested": self.cancel_requested,
+            "use_local_scout": self.use_local_scout,
+            "live_tracking": self.live_tracking,
         }
 
 
@@ -292,6 +296,7 @@ def start_job(
     auto_multicam: bool = True,
     top_overview_only: bool = True,
     crop_locked: bool = False,
+    use_local_scout: bool = True,
 ) -> Job:
     from ramscout.crop import CropLockState, OverviewCrop
 
@@ -323,6 +328,7 @@ def start_job(
         google_key=google_key or "",
         ai_gateway_key=ai_gateway_key or "",
         auto_multicam=bool(auto_multicam),
+        use_local_scout=bool(use_local_scout),
     )
     if local_video:
         dest = DATA / job.id
@@ -660,6 +666,19 @@ def _run_real(job: Job) -> None:
         status, mapped = map_track_progress(message, pct)
         STORE.set_progress(job, status, message, mapped)
 
+    last_live = 0.0
+
+    def publish_live(partial: list[dict[str, Any]]) -> None:
+        nonlocal last_live
+        import time
+
+        now = time.monotonic()
+        if now - last_live < 1.4 or not partial:
+            return
+        last_live = now
+        step = max(1, len(partial) // 700)
+        STORE.update(job, samples=list(partial[::step]), live_tracking=True)
+
     ov_pane = layout_for_tracking.overview_pane() if layout_for_tracking is not None else None
     result = track_video(
         video_path,
@@ -670,6 +689,7 @@ def _run_real(job: Job) -> None:
         crop_top=job.crop_top,
         crop_bottom=job.crop_bottom,
         on_progress=track_progress,
+        on_samples=publish_live,
         tracker_mode=job.tracker_mode or "auto",
         openai_key=job.openai_key,
         google_key=job.google_key,
@@ -1047,7 +1067,8 @@ def _reproject_and_scout(job: Job, *, run_model: bool = True, mark_ready: bool =
         }
     # The model sees the play-by-play only, and only after paths exist.
     # Gateway Jev runs only when a key is already saved and local weights are missing.
-    if run_model and is_available(job.ai_gateway_key):
+    want_model = run_model and bool(getattr(job, "use_local_scout", True))
+    if want_model and is_available(job.ai_gateway_key):
         STORE.set_progress(job, "scouting", "Reading the play-by-play", 90)
         team_scouts = {}
         ranked = card_dicts[:6]
@@ -1096,13 +1117,18 @@ def _reproject_and_scout(job: Job, *, run_model: bool = True, mark_ready: bool =
             }
     elif run_model:
         model_skipped = True
+        turned_off = not bool(getattr(job, "use_local_scout", True))
         scout_model = {
-            "installed": False,
+            "installed": False if turned_off else bool(local_available()),
             "ran": False,
             "skipped": True,
             "backend": "none",
             "install_command": INSTALL_COMMAND,
-            "message": "Play-by-play is ready. The local scout model was skipped.",
+            "message": (
+                "Play-by-play is ready. The onboard scout model is turned off in Settings."
+                if turned_off
+                else "Play-by-play is ready. The local scout model was skipped."
+            ),
         }
         STORE.set_progress(job, "scouting", "Reading the play-by-play", 92)
         STORE.set_progress(
@@ -1127,6 +1153,7 @@ def _reproject_and_scout(job: Job, *, run_model: bool = True, mark_ready: bool =
         scout_model=scout_model,
         seeds=_seed_boxes(samples) or job.seeds,
         status=next_status,
+        live_tracking=False if mark_ready else bool(getattr(job, "live_tracking", False)),
     )
     _persist(job)
 
