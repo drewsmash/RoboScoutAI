@@ -20,6 +20,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+INSTALL_COMMAND = "pip install -r requirements-laya.txt"
 LAYA_DEFAULT_REPO = "convaiinnovations/laya"
 LAYA_TYPED_REPO = "convaiinnovations/laya"
 LAYA_TYPED_SUBFOLDER = "typed-decisions"
@@ -78,13 +79,30 @@ def is_available(explicit: str | None = None) -> bool:
 
 
 def backend_status(explicit: str | None = None) -> dict[str, Any]:
+    installed = local_available()
     return {
-        "local": local_available(),
+        "local": installed,
         "local_enabled": local_enabled(),
         "gateway": bool(gateway_api_key(explicit)),
-        "preferred": "laya-local" if local_available() else ("jev-gateway" if gateway_api_key(explicit) else "none"),
+        "preferred": "laya-local" if installed else ("jev-gateway" if gateway_api_key(explicit) else "none"),
         "model": _agent_label or (os.environ.get("LAYA_MODEL") or LAYA_DEFAULT_REPO),
         "error": _agent_error,
+        "installed": installed,
+        "state": "installed" if installed else "not installed",
+        "install_command": INSTALL_COMMAND,
+    }
+
+
+def scout_model_status(explicit: str | None = None) -> dict[str, Any]:
+    """Settings line for the local scout model. Weights are not in the desktop installer."""
+    status = backend_status(explicit)
+    return {
+        "name": "local scout model",
+        "installed": bool(status["installed"]),
+        "state": status["state"],
+        "install_command": INSTALL_COMMAND,
+        "note": "About 800 MB of weights on first use, plus torch. Not packed into RoboScoutAI-Setup.exe.",
+        "gateway_fallback": bool(status["gateway"]) and not status["installed"],
     }
 
 
@@ -411,7 +429,7 @@ def scout_team_actions(
     *,
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """Ask Laya what a team actually did this match (typed multi-question scout card)."""
+    """Ask the local scout model what to write down. ``team_state`` is play-by-play JSON, not video frames."""
     if not is_available(api_key):
         return {"available": False, "answers": {}}
     questions = {
