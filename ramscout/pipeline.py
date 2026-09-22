@@ -78,8 +78,8 @@ class Job:
     frame_path: str | None = None
     overlay: dict[str, Any] | None = None
     game: dict[str, Any] | None = None
-    crop_top: float = 0.10
-    crop_bottom: float = 0.65
+    crop_top: float = 0.02
+    crop_bottom: float = 0.58
     top_overview_only: bool = True
     crop_locked: bool = False
     crop_lock: dict[str, Any] | None = None
@@ -254,8 +254,8 @@ def start_job(
     event_key: str = "",
     match_key: str = "",
     demo: bool = False,
-    crop_top: float = 0.10,
-    crop_bottom: float = 0.65,
+    crop_top: float = 0.02,
+    crop_bottom: float = 0.58,
     local_video: Path | str | None = None,
     tracker_mode: str = "auto",
     openai_key: str = "",
@@ -542,6 +542,7 @@ def _run_real(job: Job) -> None:
                 user_crop_top=job.crop_top,
                 user_crop_bottom=job.crop_bottom,
                 auto=True,
+                locked=bool(getattr(job, "crop_locked", False)),
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
@@ -841,7 +842,7 @@ def apply_browser_tracks(
 ) -> Job:
     """Merge browser potato (JS frame-diff) samples into a finished job."""
     from ramscout.field import FIELD_LENGTH, FIELD_WIDTH
-    from ramscout.geometry import homography_from_corners, project_points
+    from ramscout.geometry import annotate_field_sample, homography_from_corners, project_points
 
     cleaned: list[dict[str, Any]] = []
     for row in raw_samples or []:
@@ -881,14 +882,14 @@ def apply_browser_tracks(
         feet = [[s["px"], s["py"]] for s in cleaned]
         mapped = project_points(feet, H)
         for sample, (mx, my) in zip(cleaned, mapped):
-            sample["x"] = float(np.clip(mx, 0, FIELD_LENGTH))
-            sample["y"] = float(np.clip(my, 0, FIELD_WIDTH))
+            annotate_field_sample(sample, float(mx), float(my))
     except Exception as exc:  # noqa: BLE001
         job.warnings.append(f"Browser potato projection failed: {exc}")
-        # Linear fallback so the UI still gets something.
+        # Linear fallback — still mark out-of-range as unavailable, never clamp to edges.
         for sample in cleaned:
-            sample["x"] = float(np.clip(sample["px"] / max(fw, 1) * FIELD_LENGTH, 0, FIELD_LENGTH))
-            sample["y"] = float(np.clip(sample["py"] / max(fh, 1) * FIELD_WIDTH, 0, FIELD_WIDTH))
+            lx = float(sample["px"]) / max(fw, 1) * FIELD_LENGTH
+            ly = float(sample["py"]) / max(fh, 1) * FIELD_WIDTH
+            annotate_field_sample(sample, lx, ly)
 
     if replace or not job.samples:
         merged = cleaned
@@ -913,12 +914,16 @@ def apply_browser_tracks(
 
 
 def _reproject_and_scout(job: Job) -> None:
+    from ramscout.geometry import is_field_sample_drawable, sanitize_samples_field_coords
+
     samples = list(job.samples)
     if job.src_points and samples:
         try:
             samples = reproject_samples(samples, job.src_points)
         except Exception as exc:  # noqa: BLE001
             job.warnings.append(f"Calibration ignored: {exc}")
+    if samples:
+        sanitize_samples_field_coords(samples)
 
     blue, red = _alliance_teams(job.match)
     if blue or red:
@@ -969,6 +974,8 @@ def _reproject_and_scout(job: Job) -> None:
         for sample in group:
             sample["alliance"] = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else alliance
             sample["team"] = team
+            if not is_field_sample_drawable(sample):
+                continue
             poses.append(
                 Pose(
                     t=float(sample["t"]),

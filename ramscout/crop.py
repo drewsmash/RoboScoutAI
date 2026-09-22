@@ -27,7 +27,9 @@ class OverviewCrop:
     x0: float = 0.0
     y0: float = 0.0
     x1: float = 1.0
-    y1: float = 0.55
+    # Default covers a typical widescreen top overview (~half plus scorebug margin).
+    # 0.52 was cutting the lower carpet/driver-station edge on many Rapid React VODs.
+    y1: float = 0.58
     locked: bool = False
     source: str = "auto"  # auto | user | interval
     t0: float | None = None  # optional time-interval override
@@ -39,7 +41,11 @@ class OverviewCrop:
         x0 = float(np.clip(self.x0, 0.0, 0.98))
         x1 = float(np.clip(self.x1, x0 + 0.02, 1.0))
         y0 = float(np.clip(self.y0, 0.0, 0.95))
-        y1 = float(np.clip(self.y1, y0 + 0.05, 1.0))
+        # Keep at least ~28% of the frame so a short crop cannot amputate the overview.
+        min_height = 0.28
+        y1 = float(np.clip(self.y1, y0 + min_height, 1.0))
+        if y1 - y0 < min_height:
+            y1 = float(np.clip(y0 + min_height, y0 + 0.05, 1.0))
         return OverviewCrop(
             x0=x0,
             y0=y0,
@@ -72,7 +78,7 @@ class OverviewCrop:
             x0=float(raw.get("x0", raw.get("crop_left", 0.0)) or 0.0),
             y0=float(raw.get("y0", raw.get("crop_top", 0.0)) or 0.0),
             x1=float(raw.get("x1", raw.get("crop_right", 1.0)) or 1.0),
-            y1=float(raw.get("y1", raw.get("crop_bottom", 0.55)) or 0.55),
+            y1=float(raw.get("y1", raw.get("crop_bottom", 0.58)) or 0.58),
             locked=bool(raw.get("locked", False)),
             source=str(raw.get("source") or "auto"),
             t0=raw.get("t0"),
@@ -80,6 +86,10 @@ class OverviewCrop:
             confidence=float(raw.get("confidence") or 0.0),
             detail=str(raw.get("detail") or ""),
         ).clamp()
+
+
+# Minimum normalized height for a proposed top-overview crop.
+MIN_OVERVIEW_HEIGHT = 0.32
 
 
 @dataclass
@@ -101,9 +111,14 @@ class FrameCoords:
 def propose_top_overview(
     layout_panes: list[dict[str, Any]] | None = None,
     *,
-    fallback_bottom: float = 0.55,
+    fallback_bottom: float = 0.58,
 ) -> OverviewCrop:
-    """Propose the top widescreen overview crop from a layout decomposition."""
+    """Propose the top widescreen overview crop from a layout decomposition.
+
+    Always covers the full detected overview pane height (never shortens it).
+    When layout is unknown, the fallback bottom defaults high enough for the
+    common stacked broadcast (overview + lower angles).
+    """
     panes = list(layout_panes or [])
     overview = next((p for p in panes if str(p.get("role") or "") == "overview"), None)
     if overview is None and panes:
@@ -114,17 +129,30 @@ def propose_top_overview(
         )
         overview = topish[0]
     if overview is not None:
+        y0 = float(overview.get("crop_top") or 0.0)
+        y1 = float(overview.get("crop_bottom") or fallback_bottom)
+        # Never amputate the overview: enforce a minimum pane height.
+        if y1 - y0 < MIN_OVERVIEW_HEIGHT:
+            y1 = min(1.0, y0 + max(MIN_OVERVIEW_HEIGHT, fallback_bottom - y0))
         return OverviewCrop(
             x0=float(overview.get("crop_left") or 0.0),
-            y0=float(overview.get("crop_top") or 0.0),
+            y0=y0,
             x1=float(overview.get("crop_right") or 1.0),
-            y1=float(overview.get("crop_bottom") or fallback_bottom),
+            y1=y1,
             locked=False,
             source="auto",
             confidence=float(overview.get("confidence") or 0.6),
             detail=str(overview.get("purpose") or overview.get("role") or "overview"),
         ).clamp()
-    return OverviewCrop(0.0, 0.0, 1.0, fallback_bottom, source="auto", confidence=0.3, detail="default top half").clamp()
+    return OverviewCrop(
+        0.0,
+        0.0,
+        1.0,
+        max(fallback_bottom, MIN_OVERVIEW_HEIGHT),
+        source="auto",
+        confidence=0.3,
+        detail="default top widescreen overview",
+    ).clamp()
 
 
 def crop_pixels(crop: OverviewCrop, frame_w: int, frame_h: int) -> tuple[int, int, int, int]:

@@ -178,6 +178,10 @@ def score_samples(samples: list[dict[str, Any]], *, window_s: float, dt_s: float
         "stability": round(stability, 3),
     }
     total = sum(WEIGHTS[k] * parts[k] for k in WEIGHTS)
+    # A broadcast has at most six robots. Dozens of short IDs must not win
+    # the benchmark just because the mean visible count looks plausible.
+    if n_tracks > 8:
+        total *= 8.0 / float(n_tracks)
     parts["total"] = round(float(total), 4)
     parts["tracks"] = n_tracks
     parts["samples"] = len(samples)
