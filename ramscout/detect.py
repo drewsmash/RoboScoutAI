@@ -21,7 +21,14 @@ from typing import Any, Callable
 import numpy as np
 
 from ramscout.field import ALLIANCE_DEPTH, FIELD_LENGTH, FIELD_WIDTH
-from ramscout.geometry import crop_bounds, default_source_points, homography_from_corners, project_points
+from ramscout.geometry import (
+    annotate_field_sample,
+    crop_bounds,
+    default_source_points,
+    homography_from_corners,
+    project_points,
+    sanitize_samples_field_coords,
+)
 from ramscout.identity import balance_alliances, constrain_to_teams, ocr_digits
 from ramscout.trackers.alliance import (
     AllianceCalibrator,
@@ -612,8 +619,6 @@ def _track_video_impl(
                 "t": round(float(t), 3),
                 "frame": frame_index,
                 "track_id": out_tid,
-                "x": float(mx),
-                "y": float(my),
                 "px": float(fx),
                 "py": float(fy),
                 "alliance": alliance,
@@ -624,6 +629,8 @@ def _track_video_impl(
                 "view": "overview",
                 "pane": s.seg.index,
             }
+            # Never clamp bad projections onto the field edge — mark unavailable.
+            annotate_field_sample(sample, float(mx), float(my))
             if det.meta and det.meta.get("alliance_conflict"):
                 sample["alliance_conflict"] = True
                 sample["previous_alliance"] = det.meta.get("previous_alliance")
@@ -689,6 +696,14 @@ def _track_video_impl(
             samples = smooth_samples(samples, dt_hint=dt_s)
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Path smoothing skipped: {exc}")
+    if samples:
+        sanitize_samples_field_coords(samples)
+        invalid_n = sum(1 for s in samples if s.get("field_valid") is False)
+        if invalid_n:
+            warnings.append(
+                f"Dropped {invalid_n} out-of-field / degenerate projections "
+                "(not clamped to corners — paths break instead of spider-webbing)."
+            )
 
     prim_session = sessions.get(pinned_index) or (next(iter(sessions.values())) if sessions else None)
     if prim_session is not None and prim_session.gate is not None:

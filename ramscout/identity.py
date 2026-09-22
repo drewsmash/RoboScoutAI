@@ -82,6 +82,8 @@ def assign_by_start(
     red_ids: list[tuple[float, int]] = []
     unknown_ids: list[tuple[float, int]] = []
     for tid, sample in first.items():
+        if sample.get("field_valid") is False or sample.get("y") is None or sample.get("x") is None:
+            continue
         alliance = sample.get("alliance") if sample.get("alliance") in {"red", "blue"} else None
         if alliance == "blue":
             blue_ids.append((float(sample["y"]), tid))
@@ -111,30 +113,44 @@ def track_quality(group: list[dict[str, Any]]) -> float:
 
     Static blobs (walls, field elements) and perimeter clutter score low even
     when they persist for the whole match; a real robot path scores high.
+    Invalid / out-of-field projections do not count as wall contacts.
     """
     if not group:
         return 0.0
     rows = sorted(group, key=lambda s: float(s.get("t") or 0.0))
-    times = [float(s.get("t") or 0.0) for s in rows]
+    usable = [
+        s
+        for s in rows
+        if s.get("field_valid") is not False
+        and s.get("x") is not None
+        and s.get("y") is not None
+    ]
+    if not usable:
+        return 0.0
+    times = [float(s.get("t") or 0.0) for s in usable]
     span = max(times) - min(times) if len(times) > 1 else 0.0
-    xs = [float(s.get("x") or 0.0) for s in rows]
-    ys = [float(s.get("y") or 0.0) for s in rows]
+    xs = [float(s["x"]) for s in usable]
+    ys = [float(s["y"]) for s in usable]
     path = 0.0
-    for i in range(1, len(rows)):
-        path += float(np.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]))
+    for i in range(1, len(usable)):
+        dt = times[i] - times[i - 1]
+        step = float(np.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]))
+        # Ignore teleports across gaps — they used to inflate junk tracks.
+        if dt <= 1.25 and (dt <= 1e-6 or step / max(dt, 1e-6) <= 300.0):
+            path += step
     extent = 0.0
-    if len(rows) > 1:
+    if len(usable) > 1:
         extent = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys)))
     # Fraction of samples comfortably inside the field (not on the perimeter).
     margin = 12.0
     inside = sum(
         1 for x, y in zip(xs, ys) if margin <= x <= FIELD_LENGTH - margin and margin <= y <= FIELD_WIDTH - margin
     )
-    in_field = inside / max(len(rows), 1)
+    in_field = inside / max(len(usable), 1)
     # Movement factor: 0.35 for a never-moving blob → 1.0 once it has covered
     # a few robot-lengths of field.
     move = 0.35 + 0.65 * min(1.0, (0.5 * path + extent) / 240.0)
-    return float(len(rows) * (0.5 + 0.5 * in_field) * move + 0.5 * span)
+    return float(len(usable) * (0.5 + 0.5 * in_field) * move + 0.5 * span)
 
 
 def keep_top_tracks(samples: list[dict[str, Any]], max_tracks: int = 6) -> list[dict[str, Any]]:

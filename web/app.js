@@ -1018,32 +1018,56 @@ function drawPath(ctx, X, Y, samples, t, color) {
   ctx.beginPath();
   let started = false;
   let lastT = null;
+  let lastX = null;
+  let lastY = null;
+  const breakStroke = () => {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.9;
+    if (started) ctx.stroke();
+    ctx.beginPath();
+    started = false;
+    lastX = null;
+    lastY = null;
+  };
+  const drawable = (sample) => {
+    if (!sample) return false;
+    if (sample.gap || sample.camera_cut) return false;
+    if (sample.field_valid === false) return false;
+    if (sample.x == null || sample.y == null) return false;
+    const x = Number(sample.x);
+    const y = Number(sample.y);
+    return Number.isFinite(x) && Number.isFinite(y);
+  };
   for (const sample of samples) {
     if (sample.t > t) break;
     // Break path across camera cuts / long gaps — do not interpolate through invalid intervals.
     if (lastT != null && sample.t - lastT > 1.25) {
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.9;
-      ctx.stroke();
-      ctx.beginPath();
-      started = false;
+      breakStroke();
     }
-    if (sample.gap || sample.camera_cut) {
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.9;
-      if (started) ctx.stroke();
-      ctx.beginPath();
-      started = false;
+    if (!drawable(sample)) {
+      breakStroke();
       lastT = sample.t;
       continue;
     }
     const px = X(sample.x);
     const py = Y(sample.y);
+    // Teleport guard: physically impossible jumps are gap artifacts, not motion.
+    if (started && lastX != null && lastY != null) {
+      const dx = sample.x - lastX;
+      const dy = sample.y - lastY;
+      const dt = Math.max(sample.t - (lastT ?? sample.t), 1e-3);
+      const speed = Math.hypot(dx, dy) / dt;
+      if (speed > 300) {
+        breakStroke();
+      }
+    }
     if (!started) {
       ctx.moveTo(px, py);
       started = true;
     } else ctx.lineTo(px, py);
     lastT = sample.t;
+    lastX = sample.x;
+    lastY = sample.y;
   }
   if (started) {
     ctx.strokeStyle = color;
@@ -1056,8 +1080,12 @@ function drawPath(ctx, X, Y, samples, t, color) {
 function lastAt(samples, t) {
   let found = null;
   for (const sample of samples) {
-    if (sample.t <= t) found = sample;
-    else break;
+    if (sample.t > t) break;
+    if (sample.field_valid === false) continue;
+    if (sample.x == null || sample.y == null) continue;
+    if (!Number.isFinite(Number(sample.x)) || !Number.isFinite(Number(sample.y))) continue;
+    if (sample.gap || sample.camera_cut) continue;
+    found = sample;
   }
   return found;
 }

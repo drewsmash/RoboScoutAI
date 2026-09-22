@@ -32,6 +32,10 @@ HUB_PARK_RADIUS = 36.0
 CLIMB_DWELL_S = 2.8
 CLIMB_SPEED_IN_S = 10.0
 DEFENSE_DWELL_S = 2.0
+# Do not accumulate path length across long gaps / teleport jumps (camera cuts,
+# invalid projections). ~18 ft/s peak robot speed + margin → ~300 in/s.
+MAX_PATH_SEGMENT_S = 1.25
+MAX_PATH_SEGMENT_SPEED_IN_S = 300.0
 
 
 @dataclass
@@ -142,8 +146,12 @@ def build_cards(
         zone_time: dict[str, float] = defaultdict(float)
         for prev, cur in zip(path, path[1:]):
             dt = max(cur.t - prev.t, 0.0)
-            length += distance((prev.x, prev.y), (cur.x, cur.y))
-            zone_time[zone_name(cur.x, cur.y)] += dt
+            step = distance((prev.x, prev.y), (cur.x, cur.y))
+            # Skip camera-cut / teleport segments so scout cards aren't inflated
+            # by corner spiders and gap interpolations.
+            if dt <= MAX_PATH_SEGMENT_S and (dt <= 1e-6 or step / dt <= MAX_PATH_SEGMENT_SPEED_IN_S):
+                length += step
+                zone_time[zone_name(cur.x, cur.y)] += dt
             pt = [round(cur.x, 1), round(cur.y, 1), round(cur.t, 2)]
             period = period_name(cur.t)
             if period == "auto":

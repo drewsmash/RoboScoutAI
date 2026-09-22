@@ -153,13 +153,34 @@ def _blend_quads(a: list[list[float]], b: list[list[float]], t: float) -> list[l
 def project_detections_bev(
     feet_px: Sequence[Sequence[float]],
     src_points: Sequence[Sequence[float]],
+    *,
+    clamp: bool = False,
 ) -> np.ndarray:
-    """Map pixel foot points through the BEV/homography onto field inches."""
+    """Map pixel foot points through the BEV/homography onto field inches.
+
+    By default returns raw projected inches (may be outside the carpet). Callers
+    that need drawable field coords should run ``annotate_field_sample`` —
+    clamping to the wall is opt-in and discouraged for path rendering.
+    """
+    from ramscout.geometry import annotate_field_sample
+
     H = homography_from_corners(src_points)
     mapped = project_points(feet_px, H)
-    mapped[:, 0] = np.clip(mapped[:, 0], 0, FIELD_LENGTH)
-    mapped[:, 1] = np.clip(mapped[:, 1], 0, FIELD_WIDTH)
-    return mapped
+    if clamp:
+        # Legacy path for callers that still want a wall contact estimate.
+        mapped = mapped.copy()
+        mapped[:, 0] = np.clip(mapped[:, 0], 0, FIELD_LENGTH)
+        mapped[:, 1] = np.clip(mapped[:, 1], 0, FIELD_WIDTH)
+        return mapped
+    # Replace far-outside / non-finite rows with NaN so downstream code cannot
+    # treat them as field-edge positions.
+    out = mapped.astype(np.float64, copy=True)
+    for i, (x, y) in enumerate(out):
+        probe = annotate_field_sample({}, float(x), float(y))
+        if not probe.get("field_valid"):
+            out[i, 0] = np.nan
+            out[i, 1] = np.nan
+    return out
 
 
 def depth_aware_feet(
