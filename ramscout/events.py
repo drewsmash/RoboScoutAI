@@ -33,9 +33,11 @@ CLIMB_DWELL_S = 2.8
 CLIMB_SPEED_IN_S = 10.0
 DEFENSE_DWELL_S = 2.0
 # Do not accumulate path length across long gaps / teleport jumps (camera cuts,
-# invalid projections). ~18 ft/s peak robot speed + margin → ~300 in/s.
+# invalid projections). Peak FRC robot speed is ~20 ft/s; anything faster is a
+# tracker teleport. Also reject single-step jumps longer than ~one robot length×2.
 MAX_PATH_SEGMENT_S = 1.25
-MAX_PATH_SEGMENT_SPEED_IN_S = 300.0
+MAX_PATH_SEGMENT_SPEED_IN_S = 200.0
+MAX_PATH_SEGMENT_IN = 96.0
 
 
 @dataclass
@@ -149,7 +151,11 @@ def build_cards(
             step = distance((prev.x, prev.y), (cur.x, cur.y))
             # Skip camera-cut / teleport segments so scout cards aren't inflated
             # by corner spiders and gap interpolations.
-            if dt <= MAX_PATH_SEGMENT_S and (dt <= 1e-6 or step / dt <= MAX_PATH_SEGMENT_SPEED_IN_S):
+            if (
+                dt <= MAX_PATH_SEGMENT_S
+                and step <= MAX_PATH_SEGMENT_IN
+                and (dt <= 1e-6 or step / dt <= MAX_PATH_SEGMENT_SPEED_IN_S)
+            ):
                 length += step
                 zone_time[zone_name(cur.x, cur.y)] += dt
             pt = [round(cur.x, 1), round(cur.y, 1), round(cur.t, 2)]

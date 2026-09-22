@@ -136,7 +136,7 @@ def track_quality(group: list[dict[str, Any]]) -> float:
         dt = times[i] - times[i - 1]
         step = float(np.hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1]))
         # Ignore teleports across gaps — they used to inflate junk tracks.
-        if dt <= 1.25 and (dt <= 1e-6 or step / max(dt, 1e-6) <= 300.0):
+        if dt <= 1.25 and step <= 96.0 and (dt <= 1e-6 or step / max(dt, 1e-6) <= 200.0):
             path += step
     extent = 0.0
     if len(usable) > 1:

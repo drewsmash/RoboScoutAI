@@ -1055,9 +1055,10 @@ function drawPath(ctx, X, Y, samples, t, color) {
     if (started && lastX != null && lastY != null) {
       const dx = sample.x - lastX;
       const dy = sample.y - lastY;
+      const dist = Math.hypot(dx, dy);
       const dt = Math.max(sample.t - (lastT ?? sample.t), 1e-3);
-      const speed = Math.hypot(dx, dy) / dt;
-      if (speed > 300) {
+      const speed = dist / dt;
+      if (dist > 96 || speed > 200) {
         breakStroke();
       }
     }

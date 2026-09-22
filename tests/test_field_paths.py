@@ -76,6 +76,16 @@ def test_path_length_skips_teleport_gaps():
     assert cards[0].path_length_in > 15
 
 
+def test_path_length_skips_short_but_huge_jumps():
+    poses = [
+        Pose(t=0.0, x=100.0, y=100.0, team="59", alliance="blue", track_id=1),
+        Pose(t=0.2, x=400.0, y=250.0, team="59", alliance="blue", track_id=1),  # 300in in 0.2s
+        Pose(t=0.4, x=410.0, y=250.0, team="59", alliance="blue", track_id=1),
+    ]
+    cards = build_cards(poses, detect_events(poses))
+    assert cards[0].path_length_in < 20
+
+
 def test_crop_covers_overview_height_and_rejects_amputation():
     panes = [
         {
