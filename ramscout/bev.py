@@ -90,13 +90,13 @@ def calibrate_bev(
     method = "depth_trapezoid"
     if field_lines:
         try:
-            from ramscout.fieldlines import alliance_orientation, detect_field_quad, orient_corners
+            from ramscout.fieldlines import alliance_orientation, consensus_field_quad, orient_corners
 
             pane_frames = [crop]
             for extra in extra_frames or []:
                 if extra is not None and extra.shape[:2] == frame_bgr.shape[:2]:
                     pane_frames.append(extra[y0:y1, x0:x1])
-            quad = detect_field_quad(pane_frames, motion_mask=motion_mask)
+            quad = consensus_field_quad(pane_frames, motion_mask=motion_mask)
             cue = alliance_orientation(pane_frames, quad)
             orient_info = cue.as_dict()
             if quad is not None:
@@ -106,9 +106,9 @@ def calibrate_bev(
                     pts = quad_pts
                     method = "field_quad"
                     detail += f" Homography from carpet boundary (conf {quad.confidence:.2f})."
-                elif quad.confidence >= 0.4:
-                    # Blend: keep the depth trapezoid's shape but centre/scale
-                    # it on the carpet quad's extent.
+                elif quad.confidence >= 0.62:
+                    # Blend only a confident carpet quad. A weak fit used to
+                    # pull the depth trapezoid toward a skewed outline.
                     pts = _blend_quads(pts, quad_pts, 0.5)
                     method = "field_quad+depth"
                     detail += f" Depth trapezoid nudged toward carpet boundary (conf {quad.confidence:.2f})."

@@ -83,6 +83,23 @@ def point_in_field(
     return (-margin_in <= x <= field_length + margin_in) and (-margin_in <= y <= field_width + margin_in)
 
 
+def distance_to_corner(
+    x: float,
+    y: float,
+    *,
+    field_length: float = FIELD_LENGTH,
+    field_width: float = FIELD_WIDTH,
+) -> float:
+    """Distance in inches to the nearest field corner."""
+    corners = (
+        (0.0, 0.0),
+        (field_length, 0.0),
+        (field_length, field_width),
+        (0.0, field_width),
+    )
+    return float(min(np.hypot(x - cx, y - cy) for cx, cy in corners))
+
+
 def distance_to_perimeter(
     x: float,
     y: float,
@@ -392,6 +409,13 @@ class FieldGate:
         info["edges"] = edges
         if edges >= 2 or (edges >= 1 and bw > 0.35 * self.crop_w):
             return GateVerdict(False, "edge", 0.0, info)
+        # A box glued to the left, right, or top of the crop that lands in a
+        # field corner is a wall, scorebug, or a bad homography — not a robot
+        # on the carpet. The bottom edge is the near wall, so it stays.
+        e = self.edge_px
+        side_or_top = int(bbox[0] <= e) + int(bbox[2] >= self.crop_w - e) + int(bbox[1] <= e)
+        if side_or_top and distance_to_corner(x_in, y_in, field_length=self.field_length, field_width=self.field_width) < 42.0 and edge_dist < 30.0:
+            return GateVerdict(False, "corner_edge", 0.0, info)
         penalty += 0.08 * edges
 
         energy = self.box_energy(bbox)

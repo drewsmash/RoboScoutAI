@@ -149,3 +149,59 @@ def test_confident_layout_is_not_cut_by_form_crop():
     assert locked.mode == "manual"
     assert abs(bottom_l - 0.52) < 1e-6
     assert abs(top_l - 0.02) < 1e-6
+
+
+def test_perimeter_track_loses_to_shorter_interior_path():
+    from ramscout.identity import keep_top_tracks
+
+    samples = []
+    # Long jitter on the left wall.
+    for i in range(40):
+        samples.append({"track_id": 1, "t": i * 0.2, "x": 4.0 + (i % 3), "y": 140.0, "field_valid": True})
+    # Shorter path through the carpet.
+    for i in range(12):
+        samples.append({"track_id": 2, "t": i * 0.2, "x": 180.0 + i * 12.0, "y": 160.0, "field_valid": True})
+    kept = {s["track_id"] for s in keep_top_tracks(samples, max_tracks=1)}
+    assert kept == {2}
+
+
+def test_skewed_carpet_quad_is_rejected():
+    from ramscout.fieldlines import quad_geometry_ok
+
+    # Far edge tilted and a corner extrapolated past the pane (1920-wide).
+    bad = [[336.0, 332.0], [1615.0, 503.0], [2304.0, 662.0], [108.0, 639.0]]
+    assert quad_geometry_ok(bad, 1920, 740) is False
+    good = [[289.0, 387.0], [1626.0, 403.0], [1861.0, 687.0], [82.0, 666.0]]
+    assert quad_geometry_ok(good, 1920, 740) is True
+
+
+def test_flapping_layout_keeps_one_overview():
+    """A confident stacked overview wins over sideline/grid misreads."""
+    from ramscout.detect import _segments_from_layout
+
+    class Layout:
+        mode = "stacked_top"
+        confidence = 0.98
+        crop_top = 0.0
+        crop_bottom = 0.685
+        crop_left = 0.0
+        crop_right = 1.0
+        timeline = [
+            {"t0": 0.0, "t1": 8.0, "overview": None},
+            {"t0": 8.0, "t1": 26.0, "overview": [0.0, 0.0, 1.0, 0.685]},
+            {"t0": 26.0, "t1": 48.0, "overview": [0.0, 0.189, 1.0, 0.685]},
+            {"t0": 48.0, "t1": 90.0, "overview": [0.0, 0.0, 1.0, 1.0]},
+            {"t0": 90.0, "t1": 110.0, "overview": [0.5, 0.189, 1.0, 0.685]},
+            {"t0": 110.0, "t1": 120.0, "overview": None},
+        ]
+
+    segs = _segments_from_layout(Layout(), 120.0, (0.0, 0.1, 1.0, 0.65))
+    assert segs[0].box is None
+    # The match itself is one pane, not a new tracker every time the
+    # decomposition flickers.
+    match = [s for s in segs if s.box is not None and s.t0 < 110]
+    assert len(match) == 1
+    assert match[0].box[1] <= 0.02
+    assert abs(match[0].box[3] - 0.685) < 0.02
+    assert match[0].t0 == 8.0 and match[0].t1 == 110.0
+    assert segs[-1].box is None

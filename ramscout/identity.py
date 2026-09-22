@@ -141,8 +141,9 @@ def track_quality(group: list[dict[str, Any]]) -> float:
     extent = 0.0
     if len(usable) > 1:
         extent = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys)))
-    # Fraction of samples comfortably inside the field (not on the perimeter).
-    margin = 12.0
+    # Fraction of samples comfortably inside the carpet. A track that hugs the
+    # wall for its whole life is clutter even if it jitters for a long time.
+    margin = 18.0
     inside = sum(
         1 for x, y in zip(xs, ys) if margin <= x <= FIELD_LENGTH - margin and margin <= y <= FIELD_WIDTH - margin
     )
@@ -150,7 +151,8 @@ def track_quality(group: list[dict[str, Any]]) -> float:
     # Movement factor: 0.35 for a never-moving blob → 1.0 once it has covered
     # a few robot-lengths of field.
     move = 0.35 + 0.65 * min(1.0, (0.5 * path + extent) / 240.0)
-    return float(len(usable) * (0.5 + 0.5 * in_field) * move + 0.5 * span)
+    inside_weight = 0.08 + 0.92 * in_field
+    return float(len(usable) * inside_weight * move + 0.4 * span * inside_weight)
 
 
 def keep_top_tracks(samples: list[dict[str, Any]], max_tracks: int = 6) -> list[dict[str, Any]]:

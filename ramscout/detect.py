@@ -106,6 +106,53 @@ class _PaneSession:
         return max(self.y1 - self.y0, 1)
 
 
+def _box_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax1 - ax0) * max(0.0, ay1 - ay0)
+    area_b = max(0.0, bx1 - bx0) * max(0.0, by1 - by0)
+    return inter / max(area_a + area_b - inter, 1e-6)
+
+
+def _box_contains(outer: tuple[float, float, float, float], inner: tuple[float, float, float, float], tol: float = 0.04) -> bool:
+    return (
+        inner[0] >= outer[0] - tol
+        and inner[2] <= outer[2] + tol
+        and inner[1] >= outer[1] - tol
+        and inner[3] <= outer[3] + tol
+    )
+
+
+def _canonical_overview(layout: Any) -> tuple[float, float, float, float] | None:
+    """Full-width stacked overview, when the primary layout is confident.
+
+    Per-segment decomposition often invents a sideline band or a half-width
+    grid on a feed that is one top field camera the whole match. Tracking
+    should keep that pane instead of resetting on every false cut.
+    """
+    if layout is None:
+        return None
+    mode = str(getattr(layout, "mode", "") or "")
+    conf = float(getattr(layout, "confidence", 0.0) or 0.0)
+    if mode not in {"stacked_top", "stacked_sides"} or conf < 0.7:
+        return None
+    top = getattr(layout, "crop_top", None)
+    bottom = getattr(layout, "crop_bottom", None)
+    if top is None or bottom is None:
+        return None
+    left = float(getattr(layout, "crop_left", 0.0) or 0.0)
+    right = float(getattr(layout, "crop_right", 1.0) or 1.0)
+    top_f, bot_f = float(top), float(bottom)
+    if right - left < 0.85 or bot_f - top_f < 0.40:
+        return None
+    return (left, top_f, right, bot_f)
+
+
 def _segments_from_layout(
     layout: Any,
     duration: float,
@@ -115,13 +162,35 @@ def _segments_from_layout(
     timeline = list(getattr(layout, "timeline", None) or []) if layout is not None else []
     if not timeline:
         return [_Segment(0.0, max(duration, 0.0) or 1e9, default_box, 0)]
+    raw: list[tuple[float, float, tuple[float, float, float, float] | None]] = []
+    for item in timeline:
+        t0 = float(item.get("t0") or 0.0)
+        t1 = float(item.get("t1") or duration)
+        ov = item.get("overview")
+        box = tuple(float(v) for v in ov) if ov and len(ov) == 4 else None
+        raw.append((t0, t1, box))
+    canonical = _canonical_overview(layout)
+    if canonical is not None:
+        snapped: list[tuple[float, float, tuple[float, float, float, float] | None]] = []
+        for t0, t1, box in raw:
+            if box is None:
+                snapped.append((t0, t1, None))
+                continue
+            if _box_contains(canonical, box) or _box_contains(box, canonical) or _box_iou(box, canonical) >= 0.30:
+                snapped.append((t0, t1, canonical))
+            else:
+                snapped.append((t0, t1, box))
+        raw = snapped
+    merged: list[tuple[float, float, tuple[float, float, float, float] | None]] = []
+    for t0, t1, box in raw:
+        if merged and merged[-1][2] == box and abs(merged[-1][1] - t0) < 0.05:
+            pt0, _pt1, pbox = merged[-1]
+            merged[-1] = (pt0, t1, pbox)
+        else:
+            merged.append((t0, t1, box))
     segs: list[_Segment] = []
     boxes: list[tuple[float, float, float, float]] = []
-    for raw in timeline:
-        t0 = float(raw.get("t0") or 0.0)
-        t1 = float(raw.get("t1") or duration)
-        ov = raw.get("overview")
-        box = tuple(float(v) for v in ov) if ov and len(ov) == 4 else None
+    for t0, t1, box in merged:
         idx = 0
         if box is not None:
             match = next((i for i, b in enumerate(boxes) if all(abs(a - c) <= 0.03 for a, c in zip(a_b(b), a_b(box)))), None)
@@ -843,7 +912,7 @@ def _sample_segment_frames(
     *,
     skip: np.ndarray | None = None,
     count: int = 6,
-    span_s: float = 60.0,
+    span_s: float = 20.0,
 ) -> list[np.ndarray]:
     """Grab a few frames spread over the segment (temporal median for the
     carpet model) and put the capture back where it was."""
