@@ -57,6 +57,14 @@ hiddenimports = [
     "anyio._backends._asyncio",
     "httpx",
     "multipart",
+    "python_multipart",
+    "PIL",
+    "PIL.Image",
+    "numpy",
+    "scipy",
+    "cv2",
+    "onnxruntime",
+    "openpyxl",
     "yt_dlp",
     "ramscout",
     "ramscout.trackers",
@@ -79,19 +87,28 @@ hiddenimports += collect_submodules("ramscout")
 hiddenimports += collect_submodules("roboscout_manager")
 hiddenimports += collect_submodules("webview")
 
+# These are required at runtime. The freeze must contain them; a missing
+# package used to be swallowed and the installed app then failed mid-track.
+REQUIRED_FREEZE = ("cv2", "numpy", "scipy", "PIL", "onnxruntime", "openpyxl")
 binaries = []
-tmp_datas, tmp_binaries, tmp_hidden = collect_all("cv2")
-datas += tmp_datas
-binaries += tmp_binaries
-hiddenimports += tmp_hidden
-for _pkg in ("onnxruntime", "scipy"):
+_missing_freeze: list[str] = []
+for _pkg in REQUIRED_FREEZE:
     try:
         tmp_datas, tmp_binaries, tmp_hidden = collect_all(_pkg)
-    except Exception:  # noqa: BLE001 — optional in the freeze
+    except Exception as exc:  # noqa: BLE001
+        _missing_freeze.append(f"{_pkg}: {exc}")
+        continue
+    if not (tmp_datas or tmp_binaries or tmp_hidden):
+        _missing_freeze.append(f"{_pkg}: collect_all returned nothing")
         continue
     datas += tmp_datas
     binaries += tmp_binaries
     hiddenimports += tmp_hidden
+if _missing_freeze:
+    raise SystemExit(
+        "Desktop build is missing required packages (install requirements-desktop.txt first):\n  "
+        + "\n  ".join(_missing_freeze)
+    )
 
 a = Analysis(
     [str(ROOT / "desktop" / "main.py")],
