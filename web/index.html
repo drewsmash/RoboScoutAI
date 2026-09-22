@@ -67,7 +67,7 @@
         <span>Or upload a downloaded VOD (preferred if YouTube blocks)</span>
         <input id="video-file" name="video_file" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv" />
       </label>
-      <p class="hint" id="upload-hint">Upload skips YouTube entirely. Keep a YouTube URL only if you want title/team metadata from the listing.</p>
+      <p class="hint" id="upload-hint">Upload skips YouTube entirely. You can also drop a video file on this card. Keep a YouTube URL only if you want title/team metadata from the listing.</p>
       <p class="hint" id="cookies-status" hidden></p>
       <div class="composer-row">
         <label class="field">
@@ -109,7 +109,7 @@
             <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · only if local Laya is not installed" autocomplete="off" />
           </label>
         </div>
-        <p class="tool-meta">Scout verification uses <strong>Laya</strong> on this machine when installed (<code>pip install laya</code> — ~10× faster than cloud Jev). Without local weights, an AI Gateway key falls back to <code>typesafe-ai/jev</code>. Multi-view detection runs separately on the overview and each angle shot, then correlates them.</p>
+        <p class="tool-meta">Tracking stays local. After the paths exist, the app writes a play-by-play and only then asks the local scout model what to write down. Install it with <code>pip install -r requirements-laya.txt</code> (about 800 MB, not inside the Setup exe). A saved gateway key is used only when those weights are missing.</p>
         <div class="composer-row">
           <label class="field grow">
             <span>Overview crop (top widescreen)</span>
@@ -159,6 +159,17 @@
     <div class="match-library" id="match-library"></div>
   </section>
 
+  <section class="view-panel teams-view" id="teams-view" data-view="teams" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Teams</p>
+        <h2>Team pages</h2>
+      </div>
+    </header>
+    <p class="tool-meta">Every match in the scout book for a team: climbs, path, role, and your notes.</p>
+    <div class="team-page" id="team-page"></div>
+  </section>
+
   <section class="view-panel settings-view" id="settings-view" data-view="settings" hidden>
     <header class="section-head">
       <div>
@@ -175,6 +186,7 @@
         <h3>Models</h3>
         <p class="tool-meta" id="settings-depth">Loading detector / depth status…</p>
         <p class="tool-meta" id="settings-deps">Checking installed packages…</p>
+        <p class="tool-meta" id="settings-scout-model">Local scout model: checking…</p>
         <p class="tool-meta">Packaged detection uses ONNX Runtime. Ultralytics is for training/export only — the app does not require it at runtime. See <code>docs/INSTALL.md</code>.</p>
       </article>
       <article class="tool-block">
@@ -195,7 +207,8 @@
         <h2 id="studio-heading">Match analysis</h2>
       </div>
       <div class="studio-actions">
-        <button type="button" class="btn tonal small" id="next-uncertain" title="Jump to next uncertain moment">Next uncertain</button>
+        <button type="button" class="btn tonal small" id="next-uncertain" title="Jump to next uncertain moment (n)">Next uncertain</button>
+        <button type="button" class="btn tonal small" id="print-sheet">Print sheet</button>
         <button type="button" class="btn tonal small" id="correct-team-btn">Correct team</button>
       </div>
     </header>
@@ -208,10 +221,17 @@
       </div>
       <div class="progress-main">
         <div class="progress-copy">
-          <div class="progress-status" id="progress-status">Starting…</div>
-          <div class="progress-message" id="progress-message"></div>
+          <div>
+            <div class="progress-status" id="progress-status">Starting…</div>
+            <div class="progress-message" id="progress-message"></div>
+          </div>
+          <div class="progress-metrics">
+            <div class="progress-percent" id="progress-percent">0%</div>
+            <div class="progress-eta" id="progress-eta"></div>
+            <button type="button" class="btn tonal small" id="cancel-job" hidden>Cancel</button>
+          </div>
         </div>
-        <div class="progress-track" aria-hidden="true">
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track">
           <div class="progress-fill" id="progress-fill"></div>
           <div class="progress-shimmer"></div>
         </div>
@@ -304,27 +324,40 @@
       </article>
     </section>
 
-    <section>
+    <section class="pbp-section" id="pbp-section">
       <header class="section-head">
-        <h2>Robots</h2>
-        <p>Paths are per team. Hub / defense / climb calls are motion heuristics — confirm before pick lists.</p>
-      </header>
-      <div class="robot-grid" id="robot-grid"></div>
-    </section>
-
-    <section>
-      <header class="section-head">
-        <h2>Auto-scout timeline</h2>
+        <div>
+          <h2>Play-by-play</h2>
+          <p>Robot, time, field position, and what they were doing. This list exists before the scout model runs.</p>
+        </div>
         <div class="export-row">
           <a class="btn tonal small" id="export-json" href="#">Export JSON</a>
           <a class="btn tonal small" id="export-csv" href="#">Export CSV</a>
           <button type="button" class="btn tonal small" id="add-match-book">Add match to scout book</button>
         </div>
       </header>
-      <div class="timeline" id="timeline"></div>
-      <ul class="warnings" id="warnings"></ul>
+      <ol class="play-by-play" id="play-by-play"></ol>
     </section>
 
+    <section>
+      <header class="section-head">
+        <h2>Robots</h2>
+        <p id="robots-lede">Six cards from the play-by-play. Role and climb fill in when the local model answers.</p>
+      </header>
+      <p class="suggested-alliance" id="suggested-alliance"></p>
+      <div class="robot-grid" id="robot-grid"></div>
+    </section>
+
+    <ul class="warnings" id="warnings"></ul>
+
+    <details class="more-tools" id="more-tools">
+      <summary>More tools</summary>
+    <section class="timeline-section">
+      <header class="section-head">
+        <h2>Auto-scout timeline</h2>
+      </header>
+      <div class="timeline" id="timeline"></div>
+    </section>
     <section class="scout-tools" id="scout-tools">
       <header class="section-head">
         <h2>Pick list &amp; scout book</h2>
@@ -500,6 +533,7 @@
         </div>
       </div>
     </section>
+    </details>
   </main>
 
   <footer class="foot">

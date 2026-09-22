@@ -53,6 +53,9 @@ def _normalize_card(card: dict[str, Any]) -> dict[str, Any] | None:
     )
 
     reasons: list[str] = []
+    why = str(card.get("why") or "").strip()
+    if why:
+        reasons.append(why)
     if hubs_pm >= 3:
         reasons.append(f"{hubs_pm:.1f} hub dwells/match")
     if climb_rate >= 0.5:
@@ -75,6 +78,7 @@ def _normalize_card(card: dict[str, Any]) -> dict[str, Any] | None:
         "defense_s_per_match": round(defense_pm, 1),
         "path_in_per_match": round(path_pm, 0),
         "reasons": reasons,
+        "why": why or (reasons[0] if reasons else ""),
         "card": card,
     }
 
@@ -101,12 +105,17 @@ def suggest_picks(
     """Suggest first / second / third round style picks from ranked cards."""
     taken = {int(t) for t in (already_picked or [])}
     ranked = [r for r in draft_scores(cards) if r["team"] not in taken][: max(1, limit)]
+    top = ranked[:3]
     return {
         "ranked": ranked,
-        "first_round": ranked[:3],
+        "first_round": top,
         "second_round": ranked[3:6],
         "third_round": ranked[6:9],
         "excluded": sorted(taken),
+        "suggested_alliance": [
+            {"team": row["team"], "why": row.get("why") or (row.get("reasons") or [""])[0]}
+            for row in top
+        ],
     }
 
 
@@ -205,6 +214,10 @@ def aggregate_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "path_length_in": sum(float(c.get("path_length_in") or 0) for c in group),
                 "max_speed_in_s": max((float(c.get("max_speed_in_s") or 0) for c in group), default=0),
                 "collection_time_s": sum(float(c.get("collection_time_s") or 0) for c in group),
+                "why": next((str(c.get("why")) for c in reversed(group) if c.get("why")), ""),
+                "scout_role": next((c.get("scout_role") for c in reversed(group) if c.get("scout_role")), ""),
+                "scout_climb": next((c.get("scout_climb") for c in reversed(group) if c.get("scout_climb")), ""),
+                "trust_carpet": next((c.get("trust_carpet") for c in reversed(group) if c.get("trust_carpet") is not None), None),
             }
         )
     return merged

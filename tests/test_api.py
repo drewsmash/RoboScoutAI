@@ -51,6 +51,11 @@ def test_demo_job_returns_scout_cards():
     assert len(job["cards"]) == 6
     assert job["match"]["key"] == "2026nhdur_qm12"
     assert any(event["type"] == "hub_score_candidate" for event in job["events"])
+    assert job["play_by_play"]
+    assert {"robot", "team", "t", "x", "y", "period", "doing", "alliance"} <= set(job["play_by_play"][0])
+    sheet = client.get("/")
+    assert "progress-percent" in sheet.text
+    assert "play-by-play" in sheet.text
     assert job["match"]["source"]["scores"] == "video"
     assert job["game"]["field_image"].endswith("2026.png")
     field = client.get("/static/fields/2026.png")

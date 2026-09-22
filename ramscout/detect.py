@@ -264,10 +264,10 @@ def track_video(
     mode_req = "motion" if motion_only else (tracker_mode or "auto").strip().lower()
     selection: dict[str, Any] | None = None
     if mode_req == "auto" and benchmark:
+        from ramscout.tracker_pref import load_last_tracker, save_last_tracker
         from ramscout.trackers.selection import select_tracker_mode
 
-        selection = select_tracker_mode(
-            video_path,
+        select_kwargs = dict(
             homography=homography,
             src_points=src_points,
             model_path=model_path,
@@ -290,6 +290,18 @@ def track_video(
             benchmark_s=benchmark_s,
             on_progress=on_progress,
         )
+        saved = load_last_tracker()
+        selection = None
+        if saved:
+            if on_progress:
+                on_progress(f"Auto mode: checking saved tracker '{saved}'…", 0.0)
+            selection = select_tracker_mode(video_path, candidates=[saved], **select_kwargs)
+            saved_total = float(((selection.get("scores") or {}).get(saved) or {}).get("total") or 0.0)
+            if saved_total <= 0.0:
+                selection = None
+        if selection is None:
+            selection = select_tracker_mode(video_path, **select_kwargs)
+        save_last_tracker(str(selection.get("chosen") or ""), scores=selection.get("scores"))
         mode_req = selection["chosen"]
     result = _track_video_impl(
         video_path,

@@ -47,6 +47,23 @@ DATA = jobs_dir()
 ProgressFn = Callable[[str, float], None]
 
 
+class JobCancelled(BaseException):
+    """Raised when the user cancels a running analysis. Not an Exception, so stage handlers do not swallow it."""
+
+
+def map_track_progress(message: str, pct: float) -> tuple[str, float]:
+    """Put tracker tryout and the overview pass on ranges that do not overlap.
+
+    Tryout occupies 38–50. The overview track occupies 50–78. A new pass therefore
+    cannot start again at the bottom of the previous range.
+    """
+    text = (message or "").lower()
+    fraction = max(0.0, min(100.0, float(pct))) / 100.0
+    if text.startswith("auto mode"):
+        return "tryout", 38.0 + fraction * 12.0
+    return "tracking", 50.0 + fraction * 28.0
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -110,6 +127,9 @@ class Job:
     auto_multicam: bool = True
     edited_events: bool = False
     media_source: str = "youtube"  # upload | youtube | demo
+    play_by_play: list[dict[str, Any]] = field(default_factory=list)
+    scout_model: dict[str, Any] = field(default_factory=dict)
+    cancel_requested: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -162,6 +182,9 @@ class Job:
             "edited_events": self.edited_events,
             "media_source": self.media_source,
             "identities": self.identities,
+            "play_by_play": self.play_by_play,
+            "scout_model": self.scout_model,
+            "cancel_requested": self.cancel_requested,
         }
 
 
@@ -221,6 +244,11 @@ class JobStore:
                 setattr(job, key, value)
 
     def set_progress(self, job: Job, status: str, message: str, progress: float) -> None:
+        if getattr(job, "cancel_requested", False) and status not in {"cancelled", "error", "ready"}:
+            raise JobCancelled("Analysis cancelled.")
+        progress = float(progress)
+        if status not in {"error", "cancelled"}:
+            progress = max(progress, float(job.progress or 0.0))
         stages = list(getattr(job, "thinking_stages", None) or [])
         # Dedupe consecutive identical status ticks so the panel stays readable.
         if stages and stages[-1].get("status") == status and stages[-1].get("message") == message:
@@ -336,6 +364,9 @@ def _run_job(job_id: str) -> None:
             _run_demo(job)
             return
         _run_real(job)
+    except JobCancelled:
+        log.info("Job %s cancelled", job_id)
+        STORE.update(job, status="cancelled", message="Cancelled.", error=None)
     except Exception as exc:  # noqa: BLE001
         log.exception("Job %s failed", job_id)
         STORE.update(job, status="error", error=str(exc), message=str(exc), progress=0)
@@ -503,7 +534,7 @@ def _run_real(job: Job) -> None:
 
     dest = DATA / job.id
     if job.video_path and Path(job.video_path).is_file():
-        STORE.set_progress(job, "downloading", "Using uploaded match video…", 45)
+        STORE.set_progress(job, "downloading", "Using uploaded match video…", 28)
         video_path = Path(job.video_path)
     elif job.video_path:
         raise RuntimeError(
@@ -514,7 +545,7 @@ def _run_real(job: Job) -> None:
         STORE.set_progress(job, "downloading", "Downloading the match video…", 25)
 
         def dl_progress(message: str, pct: float) -> None:
-            STORE.set_progress(job, "downloading", message, 25 + pct * 0.25)
+            STORE.set_progress(job, "downloading", message, 16 + float(pct) * 0.12)
 
         try:
             video_path = download_video(job.url, dest, on_progress=dl_progress)
@@ -524,7 +555,7 @@ def _run_real(job: Job) -> None:
             raise RuntimeError(str(exc)) from exc
         STORE.update(job, video_path=str(video_path))
 
-    STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 52)
+    STORE.set_progress(job, "resolving", "Reading the on-screen scorebug…", 30)
     reading = read_overlay_from_video(video_path, existing=reading, year=hints.year or reading.year)
     # Keep FIRST/TBA teams if overlay OCR did not recover them.
     video_match = merge_tba(match_from_overlay(reading), tba_match or video_match)
@@ -535,8 +566,16 @@ def _run_real(job: Job) -> None:
         try:
             from ramscout.multicam import analyze_video, apply_layout
 
-            STORE.set_progress(job, "views", "Sectioning camera angles…", 53)
-            layout = analyze_video(job.video_path)
+            def layout_progress(message: str, pct: float) -> None:
+                STORE.set_progress(
+                    job,
+                    "views",
+                    message or "Camera layout…",
+                    30.0 + max(0.0, min(100.0, float(pct))) * 0.08,
+                )
+
+            STORE.set_progress(job, "views", "Sectioning camera angles…", 30)
+            layout = analyze_video(job.video_path, on_progress=layout_progress)
             top, bottom, chosen = apply_layout(
                 layout,
                 user_crop_top=job.crop_top,
@@ -546,42 +585,6 @@ def _run_real(job: Job) -> None:
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
-            # When classical layout confidence is middling, ask Laya (local) / Jev.
-            try:
-                from ramscout.laya import classify_camera_layout, is_available
-
-                conf = float(getattr(chosen, "confidence", 0.0) or 0.0)
-                if is_available(job.ai_gateway_key) and 0.35 <= conf < 0.78:
-                    STORE.set_progress(job, "views", "Laya classifying camera layout…", 54)
-                    jev_mode, jev_conf, jev_notes = classify_camera_layout(
-                        {
-                            "classical_mode": chosen.mode,
-                            "classical_confidence": conf,
-                            "classical_detail": chosen.detail,
-                            "split_y": chosen.split_y,
-                            "split_x": chosen.split_x,
-                            "pane_count": len(chosen.panes or []),
-                            "pane_roles": [getattr(p, "role", "") for p in (chosen.panes or [])],
-                        },
-                        api_key=job.ai_gateway_key,
-                    )
-                    warnings.extend(jev_notes)
-                    if jev_mode and jev_conf >= 0.55:
-                        if jev_mode == chosen.mode:
-                            chosen.confidence = float(min(0.95, max(conf, jev_conf)))
-                            chosen.detail = (
-                                f"{chosen.detail} · Laya agrees ({jev_conf:.2f})"
-                            )
-                            warnings.append(
-                                f"Laya confirmed camera layout={jev_mode}."
-                            )
-                        else:
-                            warnings.append(
-                                f"Laya suggests layout={jev_mode} "
-                                f"({jev_conf:.2f}) vs classical {chosen.mode} — keeping classical panes."
-                            )
-            except Exception as jev_exc:  # noqa: BLE001
-                warnings.append(f"Laya camera layout skipped: {jev_exc}")
             views = {
                 "mode": chosen.mode,
                 "panes": [p.as_dict() for p in (chosen.panes or [])],
@@ -647,14 +650,15 @@ def _run_real(job: Job) -> None:
             warnings.append(f"Multi-camera detect skipped: {exc}")
             STORE.update(job, warnings=warnings)
 
-    STORE.set_progress(job, "tracking", "Depth → BEV calibration, then tracking overview…", 55)
+    STORE.set_progress(job, "tryout", "Choosing the local tracker…", 38)
     model = find_local_model(models_dirs()) or ensure_detector_weights()
     team_numbers = []
     if video_match:
         team_numbers = [str(v["team_number"]) for v in video_match.get("teams", {}).values() if v.get("team_number")]
 
     def track_progress(message: str, pct: float) -> None:
-        STORE.set_progress(job, "tracking", message, 55 + pct * 0.25)
+        status, mapped = map_track_progress(message, pct)
+        STORE.set_progress(job, status, message, mapped)
 
     ov_pane = layout_for_tracking.overview_pane() if layout_for_tracking is not None else None
     result = track_video(
@@ -700,6 +704,47 @@ def _run_real(job: Job) -> None:
             "For stronger detection: install ultralytics, or add an OpenAI / Google API key."
         )
 
+    assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
+    for sample in samples:
+        if sample.get("team"):
+            assignments[str(sample["track_id"])] = str(sample["team"])
+        else:
+            tid = str(sample.get("track_id"))
+            if tid in assignments:
+                sample["team"] = assignments[tid]
+
+    src_points = job.src_points
+    if src_points is None:
+        src_points = result.get("src_points")
+    if src_points is None:
+        fw, fh = result["frame_size"]
+        src_points = default_source_points(fw, fh, job.crop_top, job.crop_bottom).tolist()
+
+    STORE.update(
+        job,
+        samples=samples,
+        assignments=assignments,
+        warnings=warnings,
+        used_model=bool(result.get("used_model")),
+        frame_size=result.get("frame_size") or [1280, 720],
+        frame_path=str(frame_path),
+        src_points=src_points,
+        seeds=_seed_boxes(samples),
+        tracker_strategies=list(result.get("strategies") or []),
+        source_hits=dict(result.get("source_hits") or {}),
+        bev=dict(result.get("bev") or {}),
+        tracker_mode=str(result.get("tracker_mode") or job.tracker_mode),
+        tracker_selection=result.get("tracker_selection"),
+        depth_backends=result.get("depth_backends"),
+        gaps=list(result.get("gaps") or []),
+        layout_switches=list(result.get("layout_switches") or []),
+        identities=identities,
+    )
+    # Field, cards, and play-by-play render before side cameras or the scout model.
+    STORE.set_progress(job, "playbyplay", "Writing the play-by-play…", 80)
+    _reproject_and_scout(job, run_model=False, mark_ready=False)
+    STORE.set_progress(job, "playbyplay", "Field paths are on the studio.", 84)
+
     # Side / lower cameras: detect each pane separately, then correlate with overview.
     side_cues: list[dict[str, Any]] = []
     pane_detections: list[dict[str, Any]] = []
@@ -723,16 +768,16 @@ def _run_real(job: Job) -> None:
             panes=panes,
         )
         if layout_obj.panes:
-            STORE.set_progress(job, "side_views", "Detecting robots in each camera pane…", 80)
+            STORE.set_progress(job, "side_views", "Detecting robots in each camera pane…", 86)
 
             def pane_progress(message: str, pct: float) -> None:
-                STORE.set_progress(job, "side_views", message, 80 + pct * 0.06)
+                STORE.set_progress(job, "side_views", message, 86 + float(pct) * 0.02)
 
             pane_result = detect_all_panes(video_path, layout_obj, on_progress=pane_progress)
             pane_detections = list(pane_result.get("detections") or [])
             warnings.extend(pane_result.get("warnings") or [])
 
-            STORE.set_progress(job, "side_views", "Correlating side views with overview tracks…", 86)
+            STORE.set_progress(job, "side_views", "Correlating side views with overview tracks…", 88)
             corr = correlate_views(samples, pane_detections)
             view_links = corr
             correlated_cues = list(corr.get("side_cues") or [])
@@ -741,7 +786,7 @@ def _run_real(job: Job) -> None:
             if layout_obj.side_panes():
 
                 def side_progress(message: str, pct: float) -> None:
-                    STORE.set_progress(job, "side_views", message, 87 + pct * 0.03)
+                    STORE.set_progress(job, "side_views", message, 88 + float(pct) * 0.02)
 
                 mv = process_side_views(video_path, layout_obj, on_progress=side_progress)
                 warnings.extend(mv.warnings or [])
@@ -774,11 +819,6 @@ def _run_real(job: Job) -> None:
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"Side-view / multi-pane processing skipped: {exc}")
 
-    assignments = {str(k): v for k, v in assign_by_start(samples, blue, red).items()} if samples else {}
-    # Prefer OCR team labels when present.
-    for sample in samples:
-        if sample.get("team"):
-            assignments[str(sample["track_id"])] = str(sample["team"])
     if side_cues:
         try:
             from ramscout.correlate import attach_teams_to_cues
@@ -787,35 +827,8 @@ def _run_real(job: Job) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    src_points = job.src_points
-    if src_points is None:
-        src_points = result.get("src_points")
-    if src_points is None:
-        fw, fh = result["frame_size"]
-        src_points = default_source_points(fw, fh, job.crop_top, job.crop_bottom).tolist()
-
-    STORE.update(
-        job,
-        samples=samples,
-        assignments=assignments,
-        warnings=warnings,
-        used_model=bool(result.get("used_model")),
-        frame_size=result.get("frame_size") or [1280, 720],
-        frame_path=str(frame_path),
-        src_points=src_points,
-        seeds=_seed_boxes(samples),
-        tracker_strategies=list(result.get("strategies") or []),
-        source_hits=dict(result.get("source_hits") or {}),
-        bev=dict(result.get("bev") or {}),
-        tracker_mode=str(result.get("tracker_mode") or job.tracker_mode),
-        tracker_selection=result.get("tracker_selection"),
-        depth_backends=result.get("depth_backends"),
-        gaps=list(result.get("gaps") or []),
-        layout_switches=list(result.get("layout_switches") or []),
-        side_cues=side_cues,
-        identities=identities,
-    )
-    _reproject_and_scout(job)
+    STORE.update(job, samples=samples, assignments=assignments, warnings=warnings, side_cues=side_cues)
+    _reproject_and_scout(job, run_model=True, mark_ready=False)
     STORE.set_progress(job, "ready", "Auto-scout complete.", 100)
 
 
@@ -913,7 +926,7 @@ def apply_browser_tracks(
     return job
 
 
-def _reproject_and_scout(job: Job) -> None:
+def _reproject_and_scout(job: Job, *, run_model: bool = True, mark_ready: bool = True) -> None:
     from ramscout.geometry import is_field_sample_drawable, sanitize_samples_field_coords
 
     samples = list(job.samples)
@@ -1009,74 +1022,111 @@ def _reproject_and_scout(job: Job) -> None:
             from ramscout.event_editor import cards_from_events
 
             card_dicts = cards_from_events(card_dicts, event_dicts)
-        # Optional Laya (local) / Jev (gateway) verification of heuristic scout events.
-        try:
-            from ramscout.laya import is_available, scout_team_actions, verify_scout_events
-
-            if is_available(job.ai_gateway_key):
-                STORE.set_progress(job, "scouting", "Laya verifying scout events…", 94)
-                event_dicts, jev_notes = verify_scout_events(
-                    event_dicts,
-                    match=job.match,
-                    cards=card_dicts,
-                    api_key=job.ai_gateway_key,
-                )
-                if jev_notes:
-                    warnings = list(job.warnings or [])
-                    warnings.extend(jev_notes)
-                    STORE.update(job, warnings=warnings)
-                from ramscout.event_editor import cards_from_events
-
-                card_dicts = cards_from_events(card_dicts, event_dicts)
-
-                # Per-team scout inference — what each robot actually did.
-                STORE.set_progress(job, "scouting", "Laya scouting each team…", 96)
-                team_scouts: dict[str, Any] = {}
-                for card in card_dicts[:6]:
-                    team = str(card.get("team") or "")
-                    if not team:
-                        continue
-                    team_events = [e for e in event_dicts if str(e.get("team")) == team]
-                    state = {
-                        "team": team,
-                        "alliance": card.get("alliance"),
-                        "nickname": card.get("nickname"),
-                        "summary": card,
-                        "events": team_events[:12],
-                        "match": {"key": (job.match or {}).get("key")},
-                    }
-                    scout = scout_team_actions(state, api_key=job.ai_gateway_key)
-                    if scout.get("available"):
-                        team_scouts[team] = scout
-                        answers = scout.get("answers") or {}
-                        # Attach a short role label onto the card for the UI.
-                        role = (answers.get("role") or {}).get("choice")
-                        if role:
-                            card["scout_role"] = role
-                        climb = (answers.get("climb") or {}).get("choice")
-                        if climb:
-                            card["scout_climb"] = climb
-                if team_scouts:
-                    STORE.update(job, team_scouts=team_scouts)
-                    warnings = list(job.warnings or [])
-                    warnings.append(f"Laya scouted {len(team_scouts)} team(s) on-machine.")
-                    STORE.update(job, warnings=warnings)
-        except Exception as jev_exc:  # noqa: BLE001
-            warnings = list(job.warnings or [])
-            warnings.append(f"Laya verification skipped: {jev_exc}")
-            STORE.update(job, warnings=warnings)
         card_dicts = enrich_cards_with_tba(card_dicts, job.match)
     except Exception as exc:  # noqa: BLE001
         warnings = list(job.warnings or [])
         warnings.append(f"TBA card enrich skipped: {exc}")
         STORE.update(job, warnings=warnings)
+
+    from ramscout.laya import INSTALL_COMMAND, is_available, local_available, scout_team_actions
+    from ramscout.playbyplay import annotate_cards, build_play_by_play
+
+    play_rows = build_play_by_play(samples, event_dicts)
+    team_scouts: dict[str, Any] = dict(job.team_scouts or {})
+    model_skipped = False
+    scout_model = dict(job.scout_model or {})
+    if not run_model:
+        scout_model = {
+            "installed": bool(local_available()),
+            "ran": False,
+            "skipped": False,
+            "pending": True,
+            "backend": "none",
+            "install_command": INSTALL_COMMAND,
+            "message": "Play-by-play is ready.",
+        }
+    # The model sees the play-by-play only, and only after paths exist.
+    # Gateway Jev runs only when a key is already saved and local weights are missing.
+    if run_model and is_available(job.ai_gateway_key):
+        STORE.set_progress(job, "scouting", "Reading the play-by-play", 90)
+        team_scouts = {}
+        ranked = card_dicts[:6]
+        for index, card in enumerate(ranked):
+            team = str(card.get("team") or "")
+            if not team:
+                continue
+            STORE.set_progress(
+                job,
+                "scouting",
+                "Reading the play-by-play",
+                90 + 8.0 * index / max(len(ranked), 1),
+            )
+            rows = [
+                row
+                for row in play_rows
+                if str(row.get("team") or "") == team or str(row.get("robot") or "") == team
+            ][:80]
+            state = {"team": team, "alliance": card.get("alliance"), "play_by_play": rows}
+            api_key = None if local_available() else job.ai_gateway_key
+            scout = scout_team_actions(state, api_key=api_key)
+            if scout.get("available"):
+                team_scouts[team] = scout
+        model_skipped = not bool(team_scouts)
+        backend = "laya-local" if local_available() else "jev-gateway"
+        if team_scouts:
+            scout_model = {
+                "installed": bool(local_available()),
+                "ran": True,
+                "skipped": False,
+                "backend": next(iter(team_scouts.values())).get("backend") or backend,
+                "install_command": INSTALL_COMMAND,
+                "message": f"Scouted {len(team_scouts)} robot(s) from the play-by-play.",
+            }
+            warnings = list(job.warnings or [])
+            warnings.append(scout_model["message"])
+            STORE.update(job, warnings=warnings)
+        else:
+            scout_model = {
+                "installed": bool(local_available()),
+                "ran": False,
+                "skipped": True,
+                "backend": backend,
+                "install_command": INSTALL_COMMAND,
+                "message": "Play-by-play is ready. The local scout model was skipped.",
+            }
+    elif run_model:
+        model_skipped = True
+        scout_model = {
+            "installed": False,
+            "ran": False,
+            "skipped": True,
+            "backend": "none",
+            "install_command": INSTALL_COMMAND,
+            "message": "Play-by-play is ready. The local scout model was skipped.",
+        }
+        STORE.set_progress(job, "scouting", "Reading the play-by-play", 92)
+        STORE.set_progress(
+            job,
+            "scouting",
+            "Play-by-play is ready. Local scout model was skipped.",
+            98,
+        )
+
+    annotate_cards(card_dicts, samples, play_rows, team_scouts, model_skipped=model_skipped)
+    ready_statuses = {"ready", "scouting", "tracking", "side_views", "views", "playbyplay", "tryout"}
+    next_status = job.status
+    if mark_ready and job.status in ready_statuses:
+        next_status = "ready"
     STORE.update(
         job,
         samples=samples,
         events=event_dicts,
         cards=card_dicts,
+        play_by_play=play_rows,
+        team_scouts=team_scouts if run_model else job.team_scouts,
+        scout_model=scout_model,
         seeds=_seed_boxes(samples) or job.seeds,
-        status="ready" if job.status in {"ready", "scouting", "tracking", "side_views", "views"} else job.status,
+        status=next_status,
     )
     _persist(job)
 
@@ -1145,5 +1195,22 @@ def export_csv(job: Job) -> str:
         detail = json.dumps(event.get("detail") or "")
         lines.append(
             f"{event.get('team')},{event.get('type')},{event.get('t')},{event.get('zone')},{event.get('confidence')},{detail}"
+        )
+    lines.append("")
+    lines.append("robot,team,t,x,y,period,doing,alliance")
+    for row in job.play_by_play or []:
+        lines.append(
+            ",".join(
+                [
+                    str(row.get("robot") or ""),
+                    str(row.get("team") or ""),
+                    str(row.get("t") or ""),
+                    str(row.get("x") if row.get("x") is not None else ""),
+                    str(row.get("y") if row.get("y") is not None else ""),
+                    str(row.get("period") or ""),
+                    json.dumps(row.get("doing") or ""),
+                    str(row.get("alliance") or ""),
+                ]
+            )
         )
     return "\n".join(lines) + "\n"

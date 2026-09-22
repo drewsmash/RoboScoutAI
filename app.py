@@ -146,6 +146,7 @@ def health() -> dict:
         "install": list(deps.get("install") or []),
         "detector": deps.get("detector") or {},
         "notes": list(deps.get("notes") or []),
+        "scout_model": _scout_model_status(),
     }
 
 
@@ -297,6 +298,7 @@ def trackers() -> dict:
             "required": deps.get("required") or [],
             "optional": deps.get("optional") or [],
         },
+        "scout_model": _scout_model_status(),
         "env_hints": {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY or GEMINI_API_KEY",
@@ -425,6 +427,32 @@ async def create_job_upload(
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
+    return job.public()
+
+
+def _scout_model_status() -> dict:
+    try:
+        from ramscout.laya import scout_model_status
+
+        return scout_model_status()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "name": "local scout model",
+            "installed": False,
+            "state": "not installed",
+            "install_command": "pip install -r requirements-laya.txt",
+            "error": str(exc),
+        }
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    job = STORE.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job.")
+    if job.status in {"ready", "error", "cancelled"}:
+        return job.public()
+    STORE.update(job, cancel_requested=True, message="Cancelling…")
     return job.public()
 
 

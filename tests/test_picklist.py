@@ -63,6 +63,14 @@ def test_suggest_picks_excludes_taken_teams():
     assert 59 not in [r["team"] for r in picks["ranked"]]
     assert picks["excluded"] == [59]
     assert len(picks["first_round"]) <= 3
+    assert "suggested_alliance" in picks
+
+
+def test_pick_why_comes_from_the_card():
+    cards = [{**SAMPLE_CARDS[0], "why": "Model: scorer, climb climb"}]
+    ranked = draft_scores(cards)
+    assert ranked[0]["reasons"][0] == "Model: scorer, climb climb"
+    assert ranked[0]["why"] == "Model: scorer, climb climb"
 
 
 def test_aggregate_cards_merges_matches():
