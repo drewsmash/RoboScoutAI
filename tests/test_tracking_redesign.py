@@ -28,9 +28,12 @@ def test_propose_top_overview_from_layout_panes():
         {"role": "red_side", "crop_left": 0.5, "crop_top": 0.52, "crop_right": 1.0, "crop_bottom": 1.0},
     ]
     crop = propose_top_overview(panes)
-    assert crop.y1 <= 0.5
+    # Must cover the full detected overview pane (never shorten it).
+    assert abs(crop.y1 - 0.48) < 1e-6
+    assert crop.y0 <= 0.02 + 1e-6
     assert crop.source == "auto"
     assert crop.y0 < crop.y1
+    assert crop.y1 - crop.y0 >= 0.28
 
 
 def test_coordinate_roundtrip_video_crop():

@@ -23,8 +23,21 @@ def test_reproject_samples_maps_pixel_feet():
     src = default_source_points(1920, 1080)
     samples = [{"px": float(src[0][0]), "py": float(src[0][1]), "x": 99.0, "y": 99.0}]
     out = reproject_samples(samples, src.tolist())
+    assert out[0]["field_valid"] is True
     assert out[0]["x"] < 5
     assert out[0]["y"] < 5
     corner = [{"px": float(src[1][0]), "py": float(src[1][1]), "x": 0.0, "y": 0.0}]
     out2 = reproject_samples(corner, src.tolist())
+    assert out2[0]["field_valid"] is True
     assert abs(out2[0]["x"] - FIELD_LENGTH) < 8
+
+
+def test_reproject_samples_marks_outside_unavailable():
+    src = default_source_points(1920, 1080)
+    samples = [{"px": 1.0, "py": 1.0}]
+    out = reproject_samples(samples, src.tolist())
+    assert out[0]["field_valid"] is False
+    assert out[0]["x"] is None
+    assert out[0]["y"] is None
+    # Explicitly not clamped to the (0,0) corner as a valid pose.
+    assert not (out[0].get("x") == 0 and out[0].get("y") == 0 and out[0].get("field_valid"))

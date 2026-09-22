@@ -105,15 +105,39 @@ def smooth_samples(
             else:
                 runs[-1].append(i)
         for run in runs:
-            ts = np.array([float(samples[i]["t"]) for i in run])
-            zs = np.array([[float(samples[i]["x"]), float(samples[i]["y"])] for i in run])
-            pos, vel = rts_smooth(ts, zs, q_accel=q_accel, r_meas=r_meas)
-            for j, i in enumerate(run):
-                row = out[i]
-                row.setdefault("x_raw", float(samples[i]["x"]))
-                row.setdefault("y_raw", float(samples[i]["y"]))
-                row["x"] = float(pos[j, 0])
-                row["y"] = float(pos[j, 1])
-                row["speed_in_s"] = round(float(np.hypot(vel[j, 0], vel[j, 1])), 1)
-                row["smoothed"] = True
+            # Skip invalid / unavailable field samples — do not interpolate them in.
+            usable = [
+                i
+                for i in run
+                if samples[i].get("field_valid") is not False
+                and samples[i].get("x") is not None
+                and samples[i].get("y") is not None
+                and np.isfinite(float(samples[i]["x"]))
+                and np.isfinite(float(samples[i]["y"]))
+            ]
+            if len(usable) < 2:
+                continue
+            # Further split when consecutive usable samples jump across a gap
+            # that previously contained invalid projections.
+            subruns: list[list[int]] = [[usable[0]]]
+            for i in usable[1:]:
+                prev = subruns[-1][-1]
+                if float(samples[i]["t"]) - float(samples[prev]["t"]) > max_gap_s:
+                    subruns.append([i])
+                else:
+                    subruns[-1].append(i)
+            for sub in subruns:
+                if len(sub) < 2:
+                    continue
+                ts = np.array([float(samples[i]["t"]) for i in sub])
+                zs = np.array([[float(samples[i]["x"]), float(samples[i]["y"])] for i in sub])
+                pos, vel = rts_smooth(ts, zs, q_accel=q_accel, r_meas=r_meas)
+                for j, i in enumerate(sub):
+                    row = out[i]
+                    row.setdefault("x_raw", float(samples[i]["x"]))
+                    row.setdefault("y_raw", float(samples[i]["y"]))
+                    row["x"] = float(pos[j, 0])
+                    row["y"] = float(pos[j, 1])
+                    row["speed_in_s"] = round(float(np.hypot(vel[j, 0], vel[j, 1])), 1)
+                    row["smoothed"] = True
     return out

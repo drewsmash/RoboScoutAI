@@ -385,29 +385,26 @@ def apply_layout(
     user_crop_top: float | None = None,
     user_crop_bottom: float | None = None,
     auto: bool = True,
+    locked: bool = False,
 ) -> tuple[float, float, CameraLayout]:
-    """Return overview crop bounds, honoring manual crops unless auto multi-cam wins."""
-    if not auto:
-        top = 0.10 if user_crop_top is None else float(user_crop_top)
-        bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
-        manual = CameraLayout("manual", top, bottom, 1.0, "Using manual crop bounds.")
-        manual.panes = [_single_overview(top, bottom)]
-        return top, bottom, manual
+    """Return overview crop bounds.
 
-    # If the user already widened/narrowed away from defaults, respect them.
-    defaults = (abs((user_crop_top or 0.10) - 0.10) < 0.011) and (
-        abs((user_crop_bottom or 0.65) - 0.65) < 0.011
-    )
-    if user_crop_top is not None and user_crop_bottom is not None and not defaults:
+    A confident stacked layout wins over the form's numeric crop so the top
+    widescreen pane is not cut short. ``locked=True`` (or ``auto=False``)
+    keeps the user's rectangle.
+    """
+    if not auto or locked:
+        top = 0.0 if user_crop_top is None else float(user_crop_top)
+        bottom = 0.70 if user_crop_bottom is None else float(user_crop_bottom)
         manual = CameraLayout(
             "manual",
-            float(user_crop_top),
-            float(user_crop_bottom),
+            top,
+            bottom,
             1.0,
-            "Using manual crop bounds (multi-camera auto-detect skipped).",
+            "Using locked crop bounds." if locked else "Using manual crop bounds.",
         )
-        manual.panes = [_single_overview(float(user_crop_top), float(user_crop_bottom))]
-        return float(user_crop_top), float(user_crop_bottom), manual
+        manual.panes = [_single_overview(top, bottom)]
+        return top, bottom, manual
 
     if layout.mode in {"stacked_top", "stacked_sides"} and layout.confidence >= 0.5:
         if not layout.panes:
@@ -418,8 +415,8 @@ def apply_layout(
         # A full-frame single camera still gets the classic scorebug-aware
         # crop unless a scorebug was located explicitly.
         if layout.mode == "single" and ov.crop_top <= 0.01 and ov.crop_bottom >= 0.99:
-            top = 0.10 if user_crop_top is None else float(user_crop_top)
-            bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
+            top = 0.0 if user_crop_top is None else float(user_crop_top)
+            bottom = 0.70 if user_crop_bottom is None else float(user_crop_bottom)
             bug = layout.scorebug
             if bug:
                 # Keep the field; cut only the band the scorebug occupies.
@@ -432,8 +429,8 @@ def apply_layout(
             return top, bottom, layout
         return ov.crop_top, ov.crop_bottom, layout
 
-    top = 0.10 if user_crop_top is None else float(user_crop_top)
-    bottom = 0.65 if user_crop_bottom is None else float(user_crop_bottom)
+    top = 0.0 if user_crop_top is None else float(user_crop_top)
+    bottom = 0.70 if user_crop_bottom is None else float(user_crop_bottom)
     if not layout.panes:
         layout.panes = [_single_overview(top, bottom)]
     return top, bottom, layout

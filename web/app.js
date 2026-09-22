@@ -101,20 +101,12 @@ function loadTbaKey() {
   const openai = storageGet("openaiKey", "") || "";
   const google = storageGet("googleKey", "") || "";
   const gateway = storageGet("aiGatewayKey", "") || "";
-  const mode = storageGet("trackerMode", "") || "auto";
   if ($("openai-key")) $("openai-key").value = openai;
   if ($("google-key")) $("google-key").value = google;
   if ($("ai-gateway-key")) $("ai-gateway-key").value = gateway;
-  if ($("tracker-mode") && [...$("tracker-mode").options].some((o) => o.value === mode)) {
-    $("tracker-mode").value = mode;
-  }
 }
 
 $("google-key")?.addEventListener("change", () => {
-  const key = $("google-key")?.value.trim() || "";
-  if (key && $("tracker-mode") && ["auto", "hybrid"].includes($("tracker-mode").value)) {
-    // Keep hybrid — it already prefers Gemini when keyed. Do not force gemini-only.
-  }
   saveScoutKeys();
 });
 
@@ -123,12 +115,12 @@ function saveScoutKeys() {
   if ($("openai-key")) storageSet("openaiKey", $("openai-key").value.trim());
   if ($("google-key")) storageSet("googleKey", $("google-key").value.trim());
   if ($("ai-gateway-key")) storageSet("aiGatewayKey", $("ai-gateway-key").value.trim());
-  if ($("tracker-mode")) storageSet("trackerMode", $("tracker-mode").value);
 }
 
 function trackerPayload() {
   return {
-    tracker_mode: $("tracker-mode")?.value || "auto",
+    // Always the best available method. Manual tracker selection was removed.
+    tracker_mode: "auto",
     auto_multicam: $("auto-multicam")?.checked !== false,
     top_overview_only: $("top-overview-only")?.checked !== false,
     crop_locked: Boolean(state.cropLocked),
@@ -1018,32 +1010,57 @@ function drawPath(ctx, X, Y, samples, t, color) {
   ctx.beginPath();
   let started = false;
   let lastT = null;
+  let lastX = null;
+  let lastY = null;
+  const breakStroke = () => {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.9;
+    if (started) ctx.stroke();
+    ctx.beginPath();
+    started = false;
+    lastX = null;
+    lastY = null;
+  };
+  const drawable = (sample) => {
+    if (!sample) return false;
+    if (sample.gap || sample.camera_cut) return false;
+    if (sample.field_valid === false) return false;
+    if (sample.x == null || sample.y == null) return false;
+    const x = Number(sample.x);
+    const y = Number(sample.y);
+    return Number.isFinite(x) && Number.isFinite(y);
+  };
   for (const sample of samples) {
     if (sample.t > t) break;
     // Break path across camera cuts / long gaps — do not interpolate through invalid intervals.
     if (lastT != null && sample.t - lastT > 1.25) {
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.9;
-      ctx.stroke();
-      ctx.beginPath();
-      started = false;
+      breakStroke();
     }
-    if (sample.gap || sample.camera_cut) {
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.9;
-      if (started) ctx.stroke();
-      ctx.beginPath();
-      started = false;
+    if (!drawable(sample)) {
+      breakStroke();
       lastT = sample.t;
       continue;
     }
     const px = X(sample.x);
     const py = Y(sample.y);
+    // Teleport guard: physically impossible jumps are gap artifacts, not motion.
+    if (started && lastX != null && lastY != null) {
+      const dx = sample.x - lastX;
+      const dy = sample.y - lastY;
+      const dist = Math.hypot(dx, dy);
+      const dt = Math.max(sample.t - (lastT ?? sample.t), 1e-3);
+      const speed = dist / dt;
+      if (dist > 96 || speed > 200) {
+        breakStroke();
+      }
+    }
     if (!started) {
       ctx.moveTo(px, py);
       started = true;
     } else ctx.lineTo(px, py);
     lastT = sample.t;
+    lastX = sample.x;
+    lastY = sample.y;
   }
   if (started) {
     ctx.strokeStyle = color;
@@ -1056,8 +1073,12 @@ function drawPath(ctx, X, Y, samples, t, color) {
 function lastAt(samples, t) {
   let found = null;
   for (const sample of samples) {
-    if (sample.t <= t) found = sample;
-    else break;
+    if (sample.t > t) break;
+    if (sample.field_valid === false) continue;
+    if (sample.x == null || sample.y == null) continue;
+    if (!Number.isFinite(Number(sample.x)) || !Number.isFinite(Number(sample.y))) continue;
+    if (sample.gap || sample.camera_cut) continue;
+    found = sample;
   }
   return found;
 }
@@ -1186,40 +1207,18 @@ function escapeHtml(value) {
 loadTbaKey();
 
 async function loadTrackerAvailability() {
-  const select = $("tracker-mode");
   const note = $("tracker-availability");
-  if (!select) return;
+  if (!note) return;
   try {
     const res = await fetch("/api/trackers");
     if (!res.ok) return;
     const data = await res.json();
-    const byId = Object.fromEntries((data.modes || []).map((m) => [m.id, m]));
-    const known = new Set([...select.options].map((o) => o.value));
-    for (const mode of data.modes || []) {
-      if (!known.has(mode.id)) {
-        const opt = document.createElement("option");
-        opt.value = mode.id;
-        select.appendChild(opt);
-      }
-    }
-    for (const opt of select.options) {
-      const mode = byId[opt.value];
-      if (!mode) continue;
-      let label = mode.label;
-      if (mode.status === "fallback") label += ` · needs ${mode.missing.join("/")} → OpenCV fallback`;
-      else if (mode.status === "partial") label += ` · without ${mode.missing.join("/")}`;
-      else if (opt.value !== "auto" && opt.value !== "potato") label += " · ready";
-      opt.textContent = label;
-      opt.title = mode.description || "";
-    }
-    const strategies = (data.strategies || []).map((s) => `${s.name}${s.available ? " ✓" : " ✗"}`);
-    const depth = data.depth?.active ? `depth: ${data.depth.active}` : "";
-    if (note) {
-      note.hidden = false;
-      note.textContent = `Available on this machine: ${strategies.join(", ")}${depth ? ` · ${depth}` : ""}.`;
-    }
+    const ready = (data.strategies || []).filter((s) => s.available).map((s) => s.name);
+    const depth = data.depth?.active ? `depth ${data.depth.active}` : "";
+    note.hidden = false;
+    note.textContent = `Using best available: ${ready.join(", ") || "OpenCV"}${depth ? ` · ${depth}` : ""}.`;
   } catch (_err) {
-    /* offline UI still works with the static list */
+    /* offline UI still works */
   }
 }
 loadTrackerAvailability();

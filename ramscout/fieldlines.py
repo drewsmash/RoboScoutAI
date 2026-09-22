@@ -318,6 +318,41 @@ def _is_convex(q: Sequence[Sequence[float]]) -> bool:
     return all(s == signs[0] for s in signs) and signs[0] != 0
 
 
+def quad_geometry_ok(quad: Sequence[Sequence[float]], width: float, height: float) -> bool:
+    """True when a carpet quad looks like a broadcast field, not a line-fit blow-up.
+
+    Bad fits on this kind of VOD extrapolate a corner off the pane and tilt the
+    far edge. Those homographies paint every blob into a field corner.
+    """
+    if len(quad) != 4 or width < 8 or height < 8:
+        return False
+    tl, tr, br, bl = (np.array(p, dtype=np.float64) for p in quad)
+    if not (tl[0] < tr[0] - 4 and bl[0] < br[0] - 4):
+        return False
+    if not (tl[1] < bl[1] - 4 and tr[1] < br[1] - 4):
+        return False
+    top_w = float(abs(tr[0] - tl[0]))
+    bot_w = float(abs(br[0] - bl[0]))
+    if top_w < 0.35 * width or bot_w < 0.35 * width:
+        return False
+    # Far and near edges stay close to horizontal. A rolled broadcast is still
+    # well under this; a diverging line fit is not.
+    if abs(float(tr[1] - tl[1])) > 0.12 * top_w:
+        return False
+    if abs(float(br[1] - bl[1])) > 0.10 * max(bot_w, 1.0):
+        return False
+    top_mid = 0.5 * float(tl[0] + tr[0])
+    bot_mid = 0.5 * float(bl[0] + br[0])
+    if abs(top_mid - bot_mid) > 0.28 * width:
+        return False
+    # A few percent of overhang is perspective. A corner on the ±20 % clamp
+    # means the intersection was extrapolated off the picture.
+    for x, y in (tl, tr, br, bl):
+        if x < -0.06 * width or x > 1.06 * width or y < -0.06 * height or y > 1.08 * height:
+            return False
+    return True
+
+
 def detect_field_quad(
     frames: Sequence[np.ndarray] | np.ndarray,
     *,
@@ -367,7 +402,12 @@ def detect_field_quad(
         [cx + (x - cx) * (1.0 + 2 * grow / max(abs(x - cx) * 2, 1.0)), cy + (y - cy) * (1.0 + 2 * grow / max(abs(y - cy) * 2, 1.0))]
         for x, y in quad
     ]
+    unclipped = [list(p) for p in quad]
     quad = [[float(np.clip(x, -0.2 * sw, 1.2 * sw)), float(np.clip(y, -0.2 * sh, 1.2 * sh))] for x, y in quad]
+    # Clamping moved a corner: the edge lines missed the pane. Do not invent
+    # a field corner on the clamp boundary.
+    if any(abs(a - b) > 1.5 for p, q in zip(unclipped, quad) for a, b in zip(p, q)):
+        return None
     area = _quad_area(quad)
     area_frac = area / float(sh * sw)
     top_w = abs(quad[1][0] - quad[0][0])
@@ -384,6 +424,8 @@ def detect_field_quad(
     # wider than the far edge. Allow a near-orthographic overhead (ratio ~1).
     persp = bot_w / max(top_w, 1.0)
     if persp < 0.8:
+        return None
+    if not quad_geometry_ok(quad, float(sw), float(sh)):
         return None
     # How much of the fitted quad is actually carpet component (robots and
     # field elements are filled, so a clean field approaches 1).
@@ -406,6 +448,54 @@ def detect_field_quad(
         mask_frac=mask_frac,
         hull_points=int(np.count_nonzero(comp)),
     )
+
+
+def consensus_field_quad(
+    frames: Sequence[np.ndarray] | np.ndarray,
+    *,
+    motion_mask: np.ndarray | None = None,
+) -> FieldQuad | None:
+    """Carpet quad agreed across frames.
+
+    A temporal median of mixed shots (or one unlucky frame) can fit a skewed
+    quad that still scores a high inlier ratio. Fitting each frame and keeping
+    the ones that agree avoids that.
+    """
+    if isinstance(frames, np.ndarray) and frames.ndim == 3:
+        frames = [frames]
+    frames = [f for f in frames if f is not None and getattr(f, "size", 0)]
+    if not frames:
+        return None
+    found: list[FieldQuad] = []
+    h0, w0 = frames[0].shape[:2]
+    for fr in frames:
+        mask = motion_mask if fr.shape[:2] == (h0, w0) else None
+        quad = detect_field_quad(fr, motion_mask=mask)
+        if quad is not None and quad.confidence >= 0.5:
+            found.append(quad)
+    if len(found) >= 2:
+        med = np.median(np.stack([np.asarray(q.corners, dtype=np.float64) for q in found]), axis=0)
+        keep: list[FieldQuad] = []
+        for quad in found:
+            rms = float(np.sqrt(np.mean((np.asarray(quad.corners) - med) ** 2)))
+            if rms <= 0.08 * w0:
+                keep.append(quad)
+        use = keep or found
+        med = np.median(np.stack([np.asarray(q.corners, dtype=np.float64) for q in use]), axis=0)
+        if quad_geometry_ok(med.tolist(), float(w0), float(h0)):
+            conf = float(np.median([q.confidence for q in use]))
+            if len(use) >= 2:
+                conf = min(0.95, conf + 0.04)
+            return FieldQuad(
+                corners=[[float(x), float(y)] for x, y in med],
+                area_frac=float(np.median([q.area_frac for q in use])),
+                confidence=conf,
+                detail=f"Consensus carpet quad from {len(use)} frame(s). " + use[0].detail,
+                mask_frac=float(np.median([q.mask_frac for q in use])),
+            )
+    if len(found) == 1:
+        return found[0]
+    return detect_field_quad(frames, motion_mask=motion_mask)
 
 
 def alliance_orientation(frames: Sequence[np.ndarray] | np.ndarray, quad: FieldQuad | None = None) -> OrientationCue:

@@ -75,8 +75,10 @@ def test_calibrate_bev_returns_four_corners():
         cal.src_points,
     )
     assert mapped.shape == (2, 2)
-    assert 0 <= mapped[0][0] <= FIELD_LENGTH
-    assert 0 <= mapped[0][1] <= FIELD_WIDTH
+    # Corners may sit a hair outside 0 due to float noise — must NOT be clamped to the wall.
+    assert -1.0 <= mapped[0][0] <= FIELD_LENGTH + 1.0
+    assert -1.0 <= mapped[0][1] <= FIELD_WIDTH + 1.0
+    assert abs(mapped[0][0]) < 5.0 and abs(mapped[0][1]) < 5.0
     warped, H = warp_crop_to_bev(frame[36:252, :])
     assert warped.shape[0] > 0 and warped.shape[1] > 0
     assert H.shape == (3, 3)

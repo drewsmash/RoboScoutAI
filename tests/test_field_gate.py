@@ -63,6 +63,16 @@ def test_gate_rejects_perimeter_wall_segment():
     assert verdict.reason in {"perimeter_wall", "footprint_huge"}
 
 
+def test_gate_rejects_corner_blob_on_crop_edge():
+    gate = _gate()
+    # Left edge of the crop, short box. Default homography maps the left
+    # border of the trapezoid toward a field corner.
+    det = Detection(9, [0, 200, 36, 248], "motion", 0.7)
+    verdict = gate.evaluate(det)
+    assert not verdict.keep
+    assert verdict.reason in {"corner_edge", "outside_field", "edge", "footprint_tiny"}
+
+
 def test_gate_rejects_box_outside_field_polygon():
     gate = _gate()
     # Foot well below the near boundary → projects outside the field + margin.

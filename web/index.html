@@ -91,25 +91,7 @@
       </div>
       <details class="advanced" open>
         <summary>Tracking &amp; field crop</summary>
-        <div class="composer-row">
-          <label class="field grow">
-            <span>Tracking mode</span>
-            <select id="tracker-mode" name="tracker_mode">
-              <option value="auto" selected>Auto (benchmark all) — recommended</option>
-              <option value="hybrid">Hybrid cascade</option>
-              <option value="gemini">Google Gemini (sparse keyframes)</option>
-              <option value="potato">Potato — no AI (OpenCV only)</option>
-              <option value="local">Local only (OpenCV + YOLO)</option>
-              <option value="motion">Motion blobs (no detector)</option>
-              <option value="color">Bumper color + motion</option>
-              <option value="yolo">YOLO neural</option>
-              <option value="openai">OpenAI Vision (sparse)</option>
-              <option value="cloud">Cloud ensemble</option>
-              <option value="all">Everything available</option>
-            </select>
-          </label>
-        </div>
-        <p class="tool-meta" id="tracker-help">Auto runs every available strategy set on the first ~12 s (motion, bumper color, optical flow, YOLO if installed, Gemini/OpenAI if keyed), scores them on robot count, 3v3 balance, persistence, in-field ratio and speed plausibility, and tracks the match with the winner. Modes needing a key or package are marked in the list.</p>
+        <p class="tool-meta" id="tracker-help">Tracking always uses the best method available on this machine — local detectors and OpenCV first, cloud models only when a key is already saved. There is no manual tracker to pick.</p>
         <p class="tool-meta" id="tracker-availability" hidden></p>
         <div class="composer-row">
           <label class="field grow">
@@ -145,14 +127,14 @@
           </label>
           <label class="field">
             <span>Crop bottom</span>
-            <input id="crop-bottom" name="crop_bottom" type="number" min="0.25" max="1" step="0.01" value="0.52" />
+            <input id="crop-bottom" name="crop_bottom" type="number" min="0.25" max="1" step="0.01" value="0.70" />
           </label>
           <label class="check field">
             <span>Propose from layout</span>
             <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
           </label>
         </div>
-        <p class="tool-meta">Robot tracking runs only inside the locked overview crop. Side angle shots never create robot identities in this mode. Drag handles appear in Analysis Studio after the first frame.</p>
+        <p class="tool-meta">With “Propose from layout” on, the detected top widescreen pane is used in full (this broadcast’s overview is often ~70% of the frame). Lock crop only when you want the numbers above to override that. Side cameras never create robot identities.</p>
       </details>
       <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RoboScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
     </form>
