@@ -6,15 +6,17 @@ On Windows this binary is not run directly by users: ``RoboScoutAI.exe`` (the
 manager, see ``manager.spec``) installs it side-by-side under
 ``%LOCALAPPDATA%\\RoboScoutAI\\app\\<version>\\`` and launches it with ``--managed``.
 
-Keeps the freeze lean by excluding torch/ultralytics; neural depth **and** the
-packaged robot detector ship via onnxruntime (Depth Anything V2 Small weights
-download on first use; place ``models/robot.onnx`` for FRC detection when
-available). Demo mode, overlay OCR, YouTube ingest and the manager-driven
-updater all work. Train with Ultralytics in a source tree, then export ONNX.
+Onboard AI ships in this freeze: Laya (torch + transformers) and the Depth
+Anything V2 Small ONNX file under ``models/``. Release builds set
+``ROBOSCOUT_REQUIRE_ONBOARD_AI=1`` so a missing Laya/torch install fails.
+Ultralytics stays excluded. UPX is off because it crashes torch. Place
+``models/robot.onnx`` for FRC detection when available. Demo mode, overlay
+OCR, YouTube ingest and the manager-driven updater all work.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +44,9 @@ _channel = ROOT / "release-artifacts" / "update-channel.txt"
 if _channel.is_file():
     datas.append((str(_channel), "."))
 datas += collect_data_files("yt_dlp")
+_models = ROOT / "models"
+if _models.is_dir() and any(_models.iterdir()):
+    datas.append((str(_models), "models"))
 
 hiddenimports = [
     "uvicorn.logging",
@@ -81,6 +86,9 @@ hiddenimports = [
     "desktop.app_window",
     "app",
     "webview",
+    "laya",
+    "torch",
+    "transformers",
 ]
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("ramscout")
@@ -110,6 +118,33 @@ if _missing_freeze:
         + "\n  ".join(_missing_freeze)
     )
 
+# Laya + torch + transformers are the onboard scout runtime. Local pytest can
+# compile this spec without them; the release workflow requires them.
+ONBOARD_AI = ("laya", "torch", "transformers")
+_require_ai = (os.environ.get("ROBOSCOUT_REQUIRE_ONBOARD_AI") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+_missing_ai: list[str] = []
+for _pkg in ONBOARD_AI:
+    try:
+        tmp_datas, tmp_binaries, tmp_hidden = collect_all(_pkg)
+    except Exception as exc:  # noqa: BLE001
+        _missing_ai.append(f"{_pkg}: {exc}")
+        continue
+    if not (tmp_datas or tmp_binaries or tmp_hidden):
+        _missing_ai.append(f"{_pkg}: collect_all returned nothing")
+        continue
+    datas += tmp_datas
+    binaries += tmp_binaries
+    hiddenimports += tmp_hidden
+if _require_ai and _missing_ai:
+    raise SystemExit(
+        "Desktop build is missing onboard AI (pip install torch and requirements-laya.txt):\n  "
+        + "\n  ".join(_missing_ai)
+    )
+
 a = Analysis(
     [str(ROOT / "desktop" / "main.py")],
     pathex=[str(ROOT)],
@@ -126,9 +161,6 @@ a = Analysis(
         "jupyter",
         "notebook",
         "pytest",
-        "torch",
-        "torchvision",
-        "torchaudio",
         "ultralytics",
         "tensorboard",
     ],
@@ -151,7 +183,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     # Console build: the manager launches it with CREATE_NO_WINDOW and captures
