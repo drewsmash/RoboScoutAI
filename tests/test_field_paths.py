@@ -118,3 +118,34 @@ def test_drawable_breaks_on_gap_flag():
     assert not is_field_sample_drawable({"x": 10, "y": 10, "gap": True})
     assert not is_field_sample_drawable({"x": 10, "y": 10, "camera_cut": True})
     assert is_field_sample_drawable({"x": 10, "y": 10, "field_valid": True})
+
+
+def test_confident_layout_is_not_cut_by_form_crop():
+    """Form crop numbers must not shrink a detected widescreen overview."""
+    from ramscout.multicam import CameraLayout, CameraPane, apply_layout
+
+    layout = CameraLayout(
+        mode="stacked_top",
+        crop_top=0.0,
+        crop_bottom=0.685,
+        confidence=0.98,
+        detail="overview to 0.685",
+        split_y=0.685,
+        panes=[
+            CameraPane(role="overview", crop_top=0.0, crop_bottom=0.685),
+            CameraPane(role="overview_alt", crop_top=0.685, crop_bottom=1.0),
+        ],
+    )
+    top, bottom, chosen = apply_layout(
+        layout, user_crop_top=0.02, user_crop_bottom=0.52, auto=True, locked=False
+    )
+    assert chosen.mode == "stacked_top"
+    assert bottom >= 0.68
+    assert top <= 0.01
+
+    top_l, bottom_l, locked = apply_layout(
+        layout, user_crop_top=0.02, user_crop_bottom=0.52, auto=True, locked=True
+    )
+    assert locked.mode == "manual"
+    assert abs(bottom_l - 0.52) < 1e-6
+    assert abs(top_l - 0.02) < 1e-6

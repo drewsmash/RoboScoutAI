@@ -542,6 +542,7 @@ def _run_real(job: Job) -> None:
                 user_crop_top=job.crop_top,
                 user_crop_bottom=job.crop_bottom,
                 auto=True,
+                locked=bool(getattr(job, "crop_locked", False)),
             )
             warnings = list(job.warnings or [])
             warnings.append(chosen.detail)
