@@ -151,6 +151,35 @@ def test_confident_layout_is_not_cut_by_form_crop():
     assert abs(top_l - 0.02) < 1e-6
 
 
+def test_missing_field_position_does_not_crash_stitch():
+    """Invalid projections store x/y as None. Stitching must not call float(None)."""
+    from ramscout.identity import assemble_lanes, stitch_occlusions
+
+    samples = [
+        {"track_id": 1, "t": 0.0, "x": None, "y": None, "field_valid": False, "alliance": "red"},
+        {"track_id": 1, "t": 0.2, "x": 120.0, "y": 80.0, "field_valid": True, "alliance": "red"},
+        {"track_id": 1, "t": 0.5, "x": 140.0, "y": 90.0, "field_valid": True, "alliance": "red"},
+        {"track_id": 1, "t": 0.8, "x": 150.0, "y": 95.0, "field_valid": True, "alliance": "red"},
+        {"track_id": 1, "t": 1.1, "x": 160.0, "y": 100.0, "field_valid": True, "alliance": "red"},
+        {"track_id": 2, "t": 1.0, "x": None, "y": None, "field_valid": False, "alliance": "blue"},
+    ]
+    stitched = stitch_occlusions(samples)
+    assert len(stitched) == 6
+    assembled = assemble_lanes(stitched)
+    assert all(s["track_id"] != 2 for s in assembled)
+    assert any(s["track_id"] == 1 for s in assembled)
+
+
+def test_desktop_spec_bundles_required_packages():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "packaging" / "app.spec").read_text(encoding="utf-8")
+    for name in ("cv2", "numpy", "scipy", "PIL", "onnxruntime", "openpyxl"):
+        assert name in text
+    assert "optional in the freeze" not in text
+    assert "SystemExit" in text
+
+
 def test_perimeter_track_loses_to_shorter_interior_path():
     from ramscout.identity import keep_top_tracks
 

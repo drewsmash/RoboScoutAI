@@ -167,7 +167,14 @@ def _segments_from_layout(
         t0 = float(item.get("t0") or 0.0)
         t1 = float(item.get("t1") or duration)
         ov = item.get("overview")
-        box = tuple(float(v) for v in ov) if ov and len(ov) == 4 else None
+        box = None
+        if ov and len(ov) == 4:
+            try:
+                coords = tuple(float(v) for v in ov)
+            except (TypeError, ValueError):
+                coords = None
+            if coords is not None and all(np.isfinite(v) for v in coords):
+                box = coords
         raw.append((t0, t1, box))
     canonical = _canonical_overview(layout)
     if canonical is not None:

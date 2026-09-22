@@ -43,6 +43,25 @@ def _configure_logging() -> None:
     )
 
 
+def _log_bundled_packages() -> None:
+    """Required libraries ship inside the desktop exe. Say so if one is missing."""
+    try:
+        from ramscout.deps import check_deps
+
+        report = check_deps(include_optional=False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not check bundled packages: %s", exc)
+        return
+    if report.get("ok"):
+        log.info("Required Python packages are present in this app.")
+        return
+    missing = ", ".join(report.get("missing_required") or [])
+    log.error(
+        "Required packages are missing from this app (%s). Reinstall RoboScoutAI-Setup.exe from the latest release.",
+        missing or "unknown",
+    )
+
+
 def _maybe_check_updates(auto_apply: bool) -> None:
     try:
         info = check_for_update()
@@ -134,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         args.skip_update_check = True
 
     _configure_logging()
+    _log_bundled_packages()
     jobs_dir()  # ensure writable data path exists
     if not web_dir().is_dir():
         log.error("Web assets missing at %s", web_dir())
