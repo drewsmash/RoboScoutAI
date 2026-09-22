@@ -57,14 +57,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -U pip wheel
-          # Slim freeze set — skip ultralytics/torch so CI stays fast and artifacts stay downloadable.
           python -m pip install -r requirements-desktop.txt
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-laya.txt
+          python packaging/fetch_onboard_ai.py
 
       - name: Build app + manager + Setup + manifest (signs when WINDOWS_CERT_* secrets exist)
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          ROBOSCOUT_REQUIRE_ONBOARD_AI: "1"
         run: pwsh packaging/build_windows.ps1 -SkipInstall -Commit "${{ github.sha }}"
 
       - name: Smoke-test manager exe
@@ -112,8 +115,13 @@ jobs:
         run: |
           python -m pip install -U pip wheel
           python -m pip install -r requirements-desktop.txt
+          python -m pip install torch
+          python -m pip install -r requirements-laya.txt
+          python packaging/fetch_onboard_ai.py
 
       - name: Build with PyInstaller
+        env:
+          ROBOSCOUT_REQUIRE_ONBOARD_AI: "1"
         run: |
           python -m PyInstaller --noconfirm --clean packaging/app.spec
           mv dist/RoboScoutAI-app dist/RoboScoutAI

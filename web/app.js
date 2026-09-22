@@ -120,7 +120,6 @@ function saveScoutKeys() {
 
 function trackerPayload() {
   return {
-    // Always the best available method. Manual tracker selection was removed.
     tracker_mode: "auto",
     auto_multicam: $("auto-multicam")?.checked !== false,
     top_overview_only: $("top-overview-only")?.checked !== false,
@@ -128,6 +127,7 @@ function trackerPayload() {
     openai_key: $("openai-key")?.value.trim() || "",
     google_key: $("google-key")?.value.trim() || "",
     ai_gateway_key: $("ai-gateway-key")?.value.trim() || "",
+    use_local_scout: $("use-local-scout")?.checked !== false,
   };
 }
 
@@ -157,8 +157,8 @@ $("start-form").addEventListener("submit", async (event) => {
     tba_key: $("tba-key").value.trim(),
     event_key: $("event-key").value.trim(),
     match_key: $("match-key").value.trim(),
-    crop_top: Number($("crop-top").value || 0.1),
-    crop_bottom: Number($("crop-bottom").value || 0.65),
+    crop_top: Number($("crop-top")?.value || 0.02),
+    crop_bottom: Number($("crop-bottom")?.value || 0.7),
     ...trackerPayload(),
     demo: false,
     file,
@@ -254,6 +254,7 @@ async function createJob(payload) {
     form.append("auto_multicam", payload.auto_multicam === false ? "false" : "true");
     form.append("top_overview_only", payload.top_overview_only === false ? "false" : "true");
     form.append("crop_locked", payload.crop_locked ? "true" : "false");
+    form.append("use_local_scout", payload.use_local_scout === false ? "false" : "true");
     res = await fetch("/api/jobs/upload", { method: "POST", body: form });
   } else {
     const { file: _file, ...body } = payload;
@@ -438,6 +439,7 @@ function renderJob(job) {
   renderWarnings(job);
   drawField();
   drawTrackOverlay();
+  syncLiveTracking(job);
   if (job.status === "ready") {
     updateScoutbookMeta();
     refreshPicklist();
@@ -572,8 +574,8 @@ function renderRobots(job) {
     btn.addEventListener("click", () => {
       addCurrentMatchToBook(false);
       refreshPicklist();
-      $("cmp-a").value = String(btn.dataset.pick);
-      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if ($("cmp-a")) $("cmp-a").value = String(btn.dataset.pick);
+      navigate("picklist");
     });
   });
   grid.querySelectorAll("[data-watch]").forEach((btn) => {
@@ -581,9 +583,9 @@ function renderRobots(job) {
   });
   grid.querySelectorAll("[data-note]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      $("note-team").value = String(btn.dataset.note);
-      $("note-text").focus();
-      $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if ($("note-team")) $("note-team").value = String(btn.dataset.note);
+      navigate("compare");
+      $("note-text")?.focus();
     });
   });
   grid.querySelectorAll(".team-input").forEach((input) => {
@@ -1628,13 +1630,153 @@ function initScoutTools() {
   refreshPicklist();
 }
 
+let liveRaf = 0;
+
+function syncLiveTracking(job) {
+  const veil = $("live-veil");
+  const running = Boolean(job) && !["ready", "error", "cancelled", "queued"].includes(job.status);
+  if (veil) veil.hidden = !running;
+  if (running) {
+    if (!liveRaf) liveRaf = requestAnimationFrame(drawLiveTrack);
+  } else if (liveRaf) {
+    cancelAnimationFrame(liveRaf);
+    liveRaf = 0;
+  }
+}
+
+function drawLiveTrack(now) {
+  const canvas = $("live-canvas");
+  const veil = $("live-veil");
+  if (!canvas || !veil || veil.hidden) {
+    liveRaf = 0;
+    return;
+  }
+  const stage = canvas.parentElement;
+  const w = canvas.width = Math.max(320, stage.clientWidth || 640);
+  const h = canvas.height = Math.max(180, stage.clientHeight || 320);
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  const t = now / 1000;
+  const scan = (t * 90) % h;
+  const fade = ctx.createLinearGradient(0, scan - 28, 0, scan + 8);
+  fade.addColorStop(0, "rgba(168, 199, 250, 0)");
+  fade.addColorStop(1, "rgba(168, 199, 250, 0.28)");
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, Math.max(0, scan - 28), w, 36);
+  const groups = new Map();
+  for (const sample of state.job?.samples || []) {
+    if (sample.x == null || sample.y == null || sample.field_valid === false) continue;
+    const key = String(sample.team || sample.track_id || "");
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(sample);
+  }
+  if (groups.size) {
+    const sx = w / FIELD.L;
+    const sy = h / FIELD.W;
+    ctx.lineWidth = 2.5;
+    for (const pts of groups.values()) {
+      pts.sort((a, b) => Number(a.t) - Number(b.t));
+      const color = allianceColor(resolveAlliance(pts[0].alliance));
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      pts.forEach((point, index) => {
+        const x = Number(point.x) * sx;
+        const y = Number(point.y) * sy;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      const last = pts[pts.length - 1];
+      const pulse = 7 + Math.sin(t * 4 + pts.length) * 2;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(Number(last.x) * sx, Number(last.y) * sy, pulse, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    const colors = ["#8ab4f8", "#f28b82", "#8ab4f8", "#f28b82", "#d7e3f8", "#fbbf24"];
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 6; i += 1) {
+      const speed = 36 + i * 14;
+      const x = ((t * speed + i * 90) % (w - 36)) + 18;
+      const y = h * (0.22 + i * 0.1) + Math.sin(t * 1.3 + i) * 16;
+      ctx.strokeStyle = colors[i];
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath();
+      ctx.moveTo(Math.max(12, x - 48), y + Math.sin(t + i) * 8);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = colors[i];
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "rgba(11, 13, 16, 0.72)";
+  ctx.fillRect(10, 10, 132, 26);
+  ctx.fillStyle = "#f8fafc";
+  ctx.font = "600 12px IBM Plex Sans, sans-serif";
+  ctx.fillText(groups.size ? "Tracking live" : "Watching the field", 20, 28);
+  liveRaf = requestAnimationFrame(drawLiveTrack);
+}
+
+function applyStoredSettings() {
+  const motion = storageGet("motion", "full");
+  document.documentElement.dataset.motion = motion;
+  if ($("motion-select")) $("motion-select").value = motion;
+  if ($("motion-chip")) $("motion-chip").textContent = `Motion: ${motion}`;
+  const setNum = (id, key, fallback) => {
+    const el = $(id);
+    if (el && storageGet(key, "") !== "") el.value = storageGet(key, fallback);
+  };
+  setNum("crop-top", "cropTop", "0.02");
+  setNum("crop-bottom", "cropBottom", "0.70");
+  if ($("top-overview-only")) $("top-overview-only").checked = storageGet("topOverview", "1") !== "0";
+  if ($("auto-multicam")) $("auto-multicam").checked = storageGet("autoMulticam", "1") !== "0";
+  if ($("use-local-scout")) $("use-local-scout").checked = storageGet("useLocalScout", "1") !== "0";
+  state.cropLocked = storageGet("cropLocked", "0") === "1";
+  const status = $("crop-lock-status");
+  const lockBtn = $("crop-lock-btn");
+  if (status) status.textContent = state.cropLocked ? "Locked · top overview" : "Auto · unlocked";
+  if (lockBtn) lockBtn.textContent = state.cropLocked ? "Unlock crop" : "Lock crop";
+}
+
+function persistSettings() {
+  if ($("motion-select")) {
+    const motion = $("motion-select").value || "full";
+    storageSet("motion", motion);
+    document.documentElement.dataset.motion = motion;
+    if ($("motion-chip")) $("motion-chip").textContent = `Motion: ${motion}`;
+  }
+  if ($("crop-top")) storageSet("cropTop", $("crop-top").value);
+  if ($("crop-bottom")) storageSet("cropBottom", $("crop-bottom").value);
+  if ($("top-overview-only")) storageSet("topOverview", $("top-overview-only").checked ? "1" : "0");
+  if ($("auto-multicam")) storageSet("autoMulticam", $("auto-multicam").checked ? "1" : "0");
+  if ($("use-local-scout")) storageSet("useLocalScout", $("use-local-scout").checked ? "1" : "0");
+  storageSet("cropLocked", state.cropLocked ? "1" : "0");
+  saveScoutKeys();
+  const note = $("settings-saved");
+  if (note) {
+    note.hidden = false;
+    note.textContent = "Saved. The next analysis uses these.";
+  }
+}
+
 const VIEW_TITLES = {
   home: "Analyze a match",
   matches: "Match library",
-  studio: "Analysis Studio",
+  studio: "Field",
+  playbook: "Play-by-play",
+  robots: "Robots",
   teams: "Teams",
   compare: "Compare",
   picklist: "Pick List",
+  tools: "Tools",
   settings: "Settings",
 };
 
@@ -1647,30 +1789,15 @@ function navigate(view) {
   document.querySelectorAll(".view-panel").forEach((panel) => {
     const match = panel.dataset.view === next;
     panel.classList.toggle("is-active", match);
-    if (panel.id === "workspace") {
-      panel.hidden = next !== "studio" && next !== "picklist" && next !== "compare";
-      if (next === "picklist" || next === "compare") {
-        const more = $("more-tools");
-        if (more) more.open = true;
-        $("scout-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        if (next === "compare") $("cmp-a")?.focus();
-      } else if (next === "teams") {
-        renderTeamPage();
-      } else if (next === "studio" && state.job) {
-        panel.hidden = false;
-        panel.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    } else if (panel.dataset.view) {
-      panel.hidden = !match;
-    }
+    panel.hidden = !match;
   });
   const title = $("topbar-title");
   if (title) title.textContent = VIEW_TITLES[next] || "RoboScoutAI";
-  if (next === "home") {
-    $("composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
   if (next === "matches") renderMatchLibrary();
+  if (next === "teams") renderTeamPage();
   if (next === "settings") renderSettingsPanel();
+  if (next === "picklist" || next === "compare") refreshPicklist();
+  if (next === "studio" && state.job) syncLiveTracking(state.job);
 }
 
 function renderMatchLibrary() {
@@ -1731,7 +1858,8 @@ function renderSettingsPanel() {
     if (scoutLine) {
       const stateLabel = model.state || (model.installed ? "installed" : "not installed");
       const cmd = model.install_command || "pip install -r requirements-laya.txt";
-      scoutLine.textContent = `Local scout model: ${stateLabel}. ${model.installed ? "Weights load on first scout." : `Install: ${cmd}`}`;
+      const onboard = model.note || (model.installed ? "Laya is onboard and runs after tracking." : `Install: ${cmd}`);
+      scoutLine.textContent = `Local scout model: ${stateLabel}. ${onboard}`;
     }
   });
 }
@@ -1838,6 +1966,7 @@ function initShell() {
     const btn = $("crop-lock-btn");
     if (status) status.textContent = state.cropLocked ? "Locked · top overview" : "Auto · unlocked";
     if (btn) btn.textContent = state.cropLocked ? "Unlock crop" : "Lock crop";
+    persistSettings();
   });
   $("motion-chip")?.addEventListener("click", () => {
     const order = ["full", "reduced", "off"];
@@ -1846,10 +1975,50 @@ function initShell() {
     document.documentElement.dataset.motion = next;
     storageSet("motion", next);
     $("motion-chip").textContent = `Motion: ${next}`;
+    if ($("motion-select")) $("motion-select").value = next;
   });
-  const savedMotion = storageGet("motion", "full");
-  document.documentElement.dataset.motion = savedMotion;
-  if ($("motion-chip")) $("motion-chip").textContent = `Motion: ${savedMotion}`;
+  applyStoredSettings();
+  ["motion-select", "crop-top", "crop-bottom", "top-overview-only", "auto-multicam", "use-local-scout", "tba-key", "openai-key", "google-key", "ai-gateway-key"].forEach((id) => {
+    $(id)?.addEventListener("change", () => persistSettings());
+  });
+  $("settings-save")?.addEventListener("click", () => persistSettings());
+  $("home-open-settings")?.addEventListener("click", () => navigate("settings"));
+  $("settings-clear-book")?.addEventListener("click", () => {
+    if (!window.confirm("Clear scout book and exclusions?")) return;
+    saveBook({ matches: [], cards: [], play_by_play: [] });
+    saveJson(EXCLUDE_KEY, []);
+    refreshPicklist();
+    renderTeamPage();
+  });
+  $("settings-check-update")?.addEventListener("click", async () => {
+    const el = $("settings-update-status");
+    if (el) el.textContent = "Checking…";
+    try {
+      const res = await fetch("/api/updates/check");
+      const update = await res.json();
+      const label = update.latest_version || update.current_version || "this build";
+      if (el) {
+        el.textContent = update.available
+          ? `Update ${label} is available. Install update to apply it.`
+          : `You're on the latest (${update.current_version || label}).`;
+      }
+      if (update.available) {
+        const chip = $("update-chip");
+        if (chip) {
+          chip.hidden = false;
+          chip.dataset.canApply = update.can_apply ? "1" : "0";
+          chip.textContent = `Update ${label}`;
+        }
+      }
+    } catch (_err) {
+      if (el) el.textContent = "Could not reach the update check.";
+    }
+  });
+  $("settings-apply-update")?.addEventListener("click", () => {
+    const chip = $("update-chip");
+    if (chip && !chip.hidden) chip.click();
+    else $("settings-check-update")?.click();
+  });
   $("next-uncertain")?.addEventListener("click", () => {
     const job = state.job;
     if (!job) return;

@@ -98,6 +98,7 @@ class StartRequest(BaseModel):
     auto_multicam: bool = True
     top_overview_only: bool = True
     crop_locked: bool = False
+    use_local_scout: bool = True
 
 
 
@@ -324,7 +325,12 @@ def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
 @app.post("/api/jobs")
 def create_job(body: StartRequest) -> dict:
     if body.demo:
-        job = start_job(url=body.url or "demo://sample", demo=True, tba_key=body.tba_key)
+        job = start_job(
+            url=body.url or "demo://sample",
+            demo=True,
+            tba_key=body.tba_key,
+            use_local_scout=bool(body.use_local_scout),
+        )
         return job.public()
     if not body.url.strip():
         raise HTTPException(400, "Paste a YouTube match video URL or upload a local file.")
@@ -347,6 +353,7 @@ def create_job(body: StartRequest) -> dict:
         auto_multicam=bool(body.auto_multicam),
         top_overview_only=bool(body.top_overview_only),
         crop_locked=bool(body.crop_locked),
+        use_local_scout=bool(body.use_local_scout),
     )
     return job.public()
 
@@ -367,6 +374,7 @@ async def create_job_upload(
     auto_multicam: bool = Form(True),
     top_overview_only: bool = Form(True),
     crop_locked: bool = Form(False),
+    use_local_scout: bool = Form(True),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
     suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -414,6 +422,7 @@ async def create_job_upload(
             auto_multicam=bool(auto_multicam),
             top_overview_only=bool(top_overview_only),
             crop_locked=bool(crop_locked),
+            use_local_scout=bool(use_local_scout),
         )
     except HTTPException:
         tmp_path.unlink(missing_ok=True)

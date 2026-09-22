@@ -10,6 +10,13 @@ cd "$ROOT"
 python3 -m pip install -U pip wheel
 python3 -m pip install -r requirements.txt
 python3 -m pip install -r requirements-desktop.txt
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  python3 -m pip install torch
+else
+  python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+fi
+python3 -m pip install -r requirements-laya.txt
+python3 packaging/fetch_onboard_ai.py
 
 rm -rf build dist
 python3 -m PyInstaller --noconfirm --clean packaging/app.spec
