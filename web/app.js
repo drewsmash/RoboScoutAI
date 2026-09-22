@@ -167,7 +167,16 @@ $("start-form").addEventListener("submit", async (event) => {
 
 $("demo-btn").addEventListener("click", async () => {
   saveScoutKeys();
-  await createJob({ url: "", tba_key: $("tba-key").value.trim(), demo: true });
+  await createJob({
+    url: "",
+    tba_key: $("tba-key").value.trim(),
+    event_key: $("event-key").value.trim(),
+    match_key: $("match-key").value.trim(),
+    crop_top: Number($("crop-top")?.value || 0.02),
+    crop_bottom: Number($("crop-bottom")?.value || 0.7),
+    ...trackerPayload(),
+    demo: true,
+  });
 });
 
 $("play-btn").addEventListener("click", () => {

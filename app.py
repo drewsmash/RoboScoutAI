@@ -325,10 +325,22 @@ def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
 @app.post("/api/jobs")
 def create_job(body: StartRequest) -> dict:
     if body.demo:
+        sent = getattr(body, "model_fields_set", None) or getattr(body, "__fields_set__", set())
         job = start_job(
             url=body.url or "demo://sample",
             demo=True,
             tba_key=body.tba_key,
+            event_key=body.event_key.strip(),
+            match_key=body.match_key.strip(),
+            crop_top=body.crop_top if "crop_top" in sent else 0.02,
+            crop_bottom=body.crop_bottom if "crop_bottom" in sent else 0.58,
+            tracker_mode=body.tracker_mode.strip() or "auto",
+            openai_key=body.openai_key.strip(),
+            google_key=body.google_key.strip(),
+            ai_gateway_key=body.ai_gateway_key.strip(),
+            auto_multicam=bool(body.auto_multicam),
+            top_overview_only=bool(body.top_overview_only),
+            crop_locked=bool(body.crop_locked),
             use_local_scout=bool(body.use_local_scout),
         )
         return job.public()
