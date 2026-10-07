@@ -94,16 +94,31 @@ def backend_status(explicit: str | None = None) -> dict[str, Any]:
 
 
 def scout_model_status(explicit: str | None = None) -> dict[str, Any]:
-    """Settings line for the local scout model. Weights are not in the desktop installer."""
+    """Settings line for the onboard scout model packed into the desktop build."""
     status = backend_status(explicit)
     return {
         "name": "local scout model",
         "installed": bool(status["installed"]),
         "state": status["state"],
         "install_command": INSTALL_COMMAND,
-        "note": "About 800 MB of weights on first use, plus torch. Not packed into RoboScoutAI-Setup.exe.",
+        "note": (
+            "Laya and the depth model ship inside the desktop app. "
+            "Turn the model off in Settings to skip it after tracking."
+        ),
         "gateway_fallback": bool(status["gateway"]) and not status["installed"],
     }
+
+
+def _prepare_bundled_cache() -> None:
+    """Point Hugging Face at weights shipped next to the frozen app."""
+    from ramscout.paths import bundle_root
+
+    cache = bundle_root() / "models" / "hf"
+    if not cache.is_dir():
+        return
+    os.environ.setdefault("HF_HOME", str(cache))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(cache / "hub"))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(cache / "hub"))
 
 
 def _load_local_agent() -> Any:
@@ -116,6 +131,7 @@ def _load_local_agent() -> Any:
         try:
             import laya
 
+            _prepare_bundled_cache()
             os.environ.setdefault("USE_TF", "0")
             repo = (os.environ.get("LAYA_MODEL") or LAYA_DEFAULT_REPO).strip()
             sub = (os.environ.get("LAYA_SUBFOLDER") or "").strip()

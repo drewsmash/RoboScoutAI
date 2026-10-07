@@ -32,6 +32,17 @@ def test_index_serves_dark_ui():
     assert "color-scheme" in res.text
     assert "upload" in res.text.lower()
     assert "update-chip" in res.text
+    assert 'data-view="playbook"' in res.text
+    assert 'data-view="settings"' in res.text
+    assert 'id="use-local-scout"' in res.text
+
+
+def test_demo_job_honors_local_scout_setting():
+    created = client.post("/api/jobs", json={"demo": True, "use_local_scout": False})
+    assert created.status_code == 200
+    body = created.json()
+    assert body["use_local_scout"] is False
+    assert body["live_tracking"] is False
 
 
 def test_demo_job_returns_scout_cards():

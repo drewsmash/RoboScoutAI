@@ -98,6 +98,7 @@ class StartRequest(BaseModel):
     auto_multicam: bool = True
     top_overview_only: bool = True
     crop_locked: bool = False
+    use_local_scout: bool = True
 
 
 
@@ -324,7 +325,24 @@ def _normalize_crop(crop_top: float, crop_bottom: float) -> tuple[float, float]:
 @app.post("/api/jobs")
 def create_job(body: StartRequest) -> dict:
     if body.demo:
-        job = start_job(url=body.url or "demo://sample", demo=True, tba_key=body.tba_key)
+        sent = getattr(body, "model_fields_set", None) or getattr(body, "__fields_set__", set())
+        job = start_job(
+            url=body.url or "demo://sample",
+            demo=True,
+            tba_key=body.tba_key,
+            event_key=body.event_key.strip(),
+            match_key=body.match_key.strip(),
+            crop_top=body.crop_top if "crop_top" in sent else 0.02,
+            crop_bottom=body.crop_bottom if "crop_bottom" in sent else 0.58,
+            tracker_mode=body.tracker_mode.strip() or "auto",
+            openai_key=body.openai_key.strip(),
+            google_key=body.google_key.strip(),
+            ai_gateway_key=body.ai_gateway_key.strip(),
+            auto_multicam=bool(body.auto_multicam),
+            top_overview_only=bool(body.top_overview_only),
+            crop_locked=bool(body.crop_locked),
+            use_local_scout=bool(body.use_local_scout),
+        )
         return job.public()
     if not body.url.strip():
         raise HTTPException(400, "Paste a YouTube match video URL or upload a local file.")
@@ -347,6 +365,7 @@ def create_job(body: StartRequest) -> dict:
         auto_multicam=bool(body.auto_multicam),
         top_overview_only=bool(body.top_overview_only),
         crop_locked=bool(body.crop_locked),
+        use_local_scout=bool(body.use_local_scout),
     )
     return job.public()
 
@@ -367,6 +386,7 @@ async def create_job_upload(
     auto_multicam: bool = Form(True),
     top_overview_only: bool = Form(True),
     crop_locked: bool = Form(False),
+    use_local_scout: bool = Form(True),
 ) -> dict:
     """Analyze an already-downloaded match VOD (bypasses YouTube bot checks)."""
     suffix = Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -414,6 +434,7 @@ async def create_job_upload(
             auto_multicam=bool(auto_multicam),
             top_overview_only=bool(top_overview_only),
             crop_locked=bool(crop_locked),
+            use_local_scout=bool(use_local_scout),
         )
     except HTTPException:
         tmp_path.unlink(missing_ok=True)

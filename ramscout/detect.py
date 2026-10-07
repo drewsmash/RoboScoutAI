@@ -229,6 +229,7 @@ def track_video(
     crop_top: float = 0.10,
     crop_bottom: float = 0.65,
     on_progress: ProgressFn | None = None,
+    on_samples: Callable[[list], None] | None = None,
     motion_only: bool = False,
     tracker_mode: str = "auto",
     openai_key: str = "",
@@ -314,6 +315,7 @@ def track_video(
         crop_top=crop_top,
         crop_bottom=crop_bottom,
         on_progress=on_progress,
+        on_samples=on_samples,
         tracker_mode=mode_req,
         openai_key=openai_key,
         google_key=google_key,
@@ -357,6 +359,7 @@ def _track_video_impl(
     crop_top: float,
     crop_bottom: float,
     on_progress: ProgressFn | None,
+    on_samples: Any = None,
     tracker_mode: str,
     openai_key: str,
     google_key: str,
@@ -729,6 +732,8 @@ def _track_video_impl(
         s.frames += 1
         processed += 1
         frame_index += 1
+        if on_samples and processed and processed % 24 == 0:
+            on_samples(samples)
         if on_progress and total:
             on_progress("Tracking robots…", min(99.0, 100.0 * (frame_index - first_frame_index) / max(total - first_frame_index, 1)))
 

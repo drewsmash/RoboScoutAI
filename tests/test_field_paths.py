@@ -178,6 +178,11 @@ def test_desktop_spec_bundles_required_packages():
         assert name in text
     assert "optional in the freeze" not in text
     assert "SystemExit" in text
+    excludes = text.split("excludes=[", 1)[1].split("]", 1)[0]
+    assert '"torch"' not in excludes
+    assert "laya" in text
+    assert "upx=False" in text
+    assert "ONBOARD_AI" in text
 
 
 def test_perimeter_track_loses_to_shorter_interior_path():

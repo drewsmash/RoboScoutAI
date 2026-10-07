@@ -108,6 +108,10 @@ Write-Host "== RoboScoutAI Windows build: version=$Version channel=$Channel min_
 if (-not $SkipInstall) {
     python -m pip install -U pip wheel
     python -m pip install -r requirements-desktop.txt
+    python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+    python -m pip install -r requirements-laya.txt
+    python packaging/fetch_onboard_ai.py
+    if ($LASTEXITCODE -ne 0) { throw "fetch_onboard_ai.py failed" }
 }
 
 if (-not $NoClean) {

@@ -104,7 +104,16 @@ def _module_missing(name: str) -> str | None:
 
 
 def onnx_model_path() -> Path:
-    return models_dir() / _ONNX_LOCAL_NAME
+    """Prefer a downloaded user copy, then the model packed into the desktop app."""
+    user = models_dir() / _ONNX_LOCAL_NAME
+    if user.is_file() and user.stat().st_size >= _ONNX_MIN_BYTES:
+        return user
+    from ramscout.paths import bundle_root
+
+    bundled = bundle_root() / "models" / _ONNX_LOCAL_NAME
+    if bundled.is_file() and bundled.stat().st_size >= _ONNX_MIN_BYTES:
+        return bundled
+    return user
 
 
 def onnx_model_cached() -> bool:

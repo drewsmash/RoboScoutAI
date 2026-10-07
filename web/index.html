@@ -32,10 +32,13 @@
       <nav class="sidebar-nav">
         <button type="button" class="nav-item is-active" data-nav="home"><span class="nav-ico" aria-hidden="true">⌂</span><span>Home</span></button>
         <button type="button" class="nav-item" data-nav="matches"><span class="nav-ico" aria-hidden="true">▣</span><span>Matches</span></button>
-        <button type="button" class="nav-item" data-nav="studio"><span class="nav-ico" aria-hidden="true">▶</span><span>Analysis Studio</span></button>
+        <button type="button" class="nav-item" data-nav="studio"><span class="nav-ico" aria-hidden="true">▶</span><span>Field</span></button>
+        <button type="button" class="nav-item" data-nav="playbook"><span class="nav-ico" aria-hidden="true">≡</span><span>Play-by-play</span></button>
+        <button type="button" class="nav-item" data-nav="robots"><span class="nav-ico" aria-hidden="true">⬡</span><span>Robots</span></button>
+        <button type="button" class="nav-item" data-nav="picklist" id="nav-scoutbook"><span class="nav-ico" aria-hidden="true">☰</span><span>Pick List</span></button>
         <button type="button" class="nav-item" data-nav="teams"><span class="nav-ico" aria-hidden="true">◎</span><span>Teams</span></button>
         <button type="button" class="nav-item" data-nav="compare"><span class="nav-ico" aria-hidden="true">⇄</span><span>Compare</span></button>
-        <button type="button" class="nav-item" data-nav="picklist" id="nav-scoutbook"><span class="nav-ico" aria-hidden="true">☰</span><span>Pick List</span></button>
+        <button type="button" class="nav-item" data-nav="tools"><span class="nav-ico" aria-hidden="true">▦</span><span>Tools</span></button>
         <button type="button" class="nav-item" data-nav="settings"><span class="nav-ico" aria-hidden="true">⚙</span><span>Settings</span></button>
       </nav>
       <div class="sidebar-foot">
@@ -71,10 +74,6 @@
       <p class="hint" id="cookies-status" hidden></p>
       <div class="composer-row">
         <label class="field">
-          <span>TBA auth key</span>
-          <input id="tba-key" name="tba_key" type="password" placeholder="Optional · saved in this browser" />
-        </label>
-        <label class="field">
           <span>Event key</span>
           <input id="event-key" name="event_key" placeholder="2026nhdur" />
         </label>
@@ -89,54 +88,8 @@
         </button>
         <button type="button" class="btn tonal" id="demo-btn">Try a sample match</button>
       </div>
-      <details class="advanced" open>
-        <summary>Tracking &amp; field crop</summary>
-        <p class="tool-meta" id="tracker-help">Tracking always uses the best method available on this machine — local detectors and OpenCV first, cloud models only when a key is already saved. There is no manual tracker to pick.</p>
-        <p class="tool-meta" id="tracker-availability" hidden></p>
-        <div class="composer-row">
-          <label class="field grow">
-            <span>OpenAI API key</span>
-            <input id="openai-key" name="openai_key" type="password" placeholder="Optional · sk-… · saved in this browser" autocomplete="off" />
-          </label>
-          <label class="field grow">
-            <span>Google / Gemini API key</span>
-            <input id="google-key" name="google_key" type="password" placeholder="Optional · saved in this browser" autocomplete="off" />
-          </label>
-        </div>
-        <div class="composer-row">
-          <label class="field grow">
-            <span>AI Gateway key (optional cloud fallback)</span>
-            <input id="ai-gateway-key" name="ai_gateway_key" type="password" placeholder="Optional · only if local Laya is not installed" autocomplete="off" />
-          </label>
-        </div>
-        <p class="tool-meta">Tracking stays local. After the paths exist, the app writes a play-by-play and only then asks the local scout model what to write down. Install it with <code>pip install -r requirements-laya.txt</code> (about 800 MB, not inside the Setup exe). A saved gateway key is used only when those weights are missing.</p>
-        <div class="composer-row">
-          <label class="field grow">
-            <span>Overview crop (top widescreen)</span>
-            <div class="crop-lock-row">
-              <label class="check tight"><input id="top-overview-only" name="top_overview_only" type="checkbox" checked /> Top overview only</label>
-              <button type="button" class="btn tonal small" id="crop-lock-btn" title="Lock the proposed top crop">Lock crop</button>
-              <span class="chip ghost" id="crop-lock-status">Auto · unlocked</span>
-            </div>
-          </label>
-        </div>
-        <div class="composer-row">
-          <label class="field">
-            <span>Crop top</span>
-            <input id="crop-top" name="crop_top" type="number" min="0" max="0.45" step="0.01" value="0.02" />
-          </label>
-          <label class="field">
-            <span>Crop bottom</span>
-            <input id="crop-bottom" name="crop_bottom" type="number" min="0.25" max="1" step="0.01" value="0.70" />
-          </label>
-          <label class="check field">
-            <span>Propose from layout</span>
-            <input id="auto-multicam" name="auto_multicam" type="checkbox" checked />
-          </label>
-        </div>
-        <p class="tool-meta">With “Propose from layout” on, the detected top widescreen pane is used in full (this broadcast’s overview is often ~70% of the frame). Lock crop only when you want the numbers above to override that. Side cameras never create robot identities.</p>
-      </details>
-      <p class="hint">Use a posted match VOD, not a live stream. Multi-angle broadcasts usually put the correctly oriented field camera on top — leave auto top-camera crop on. If YouTube blocks the cloud download, <strong>upload the file you already saved</strong> (best fix). For desktop cookies: put <code>cookies.txt</code> next to the EXE, in <code>%APPDATA%\RoboScoutAI\cookies.txt</code>, or set <code>YTDLP_COOKIES</code>. Export with a browser extension such as “Get cookies.txt LOCALLY”. Scores come from the broadcast overlay when possible. Action counts are motion estimates.</p>
+      <p class="hint" id="tracker-help">Tracking uses the best local method, then the onboard scout model reads the play-by-play. Crop, keys, and that model are in Settings. <button type="button" class="btn tonal small" id="home-open-settings">Open settings</button></p>
+      <p class="hint">Use a posted match VOD, not a live stream. If YouTube blocks the download, upload the file. Cookies can live next to the EXE, in <code>%APPDATA%\RoboScoutAI\cookies.txt</code>, or in <code>YTDLP_COOKIES</code>.</p>
     </form>
     <div class="yt-help" id="yt-help" hidden>
       <strong>YouTube download blocked.</strong>
@@ -170,32 +123,68 @@
     <div class="team-page" id="team-page"></div>
   </section>
 
-  <section class="view-panel settings-view" id="settings-view" data-view="settings" hidden>
+  <section class="view-panel settings-view page" id="settings-view" data-view="settings" hidden>
     <header class="section-head">
       <div>
         <p class="eyebrow">Settings</p>
-        <h2>Analysis &amp; models</h2>
+        <h2>What the next match uses</h2>
       </div>
+      <button type="button" class="btn primary small" id="settings-save">Save</button>
     </header>
+    <p class="settings-saved" id="settings-saved" hidden>Saved. The next analysis uses these.</p>
     <div class="settings-grid">
       <article class="tool-block">
-        <h3>General</h3>
-        <p class="tool-meta">Motion preference cycles via the Motion chip in the top bar (Full / Reduced / Off).</p>
+        <h3>Motion</h3>
+        <label class="field">
+          <span>Interface motion</span>
+          <select id="motion-select">
+            <option value="full">Full</option>
+            <option value="reduced">Reduced</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
       </article>
       <article class="tool-block">
-        <h3>Models</h3>
+        <h3>Onboard model</h3>
+        <label class="check"><input type="checkbox" id="use-local-scout" checked /> Use Laya after tracking</label>
+        <p class="tool-meta" id="settings-scout-model">Local scout model: checking…</p>
         <p class="tool-meta" id="settings-depth">Loading detector / depth status…</p>
         <p class="tool-meta" id="settings-deps">Checking installed packages…</p>
-        <p class="tool-meta" id="settings-scout-model">Local scout model: checking…</p>
-        <p class="tool-meta">Packaged detection uses ONNX Runtime. Ultralytics is for training/export only — the app does not require it at runtime. See <code>docs/INSTALL.md</code>.</p>
+        <p class="tool-meta" id="tracker-availability" hidden></p>
       </article>
       <article class="tool-block">
-        <h3>Cloud</h3>
-        <p class="tool-meta">Cloud repair and training remain optional. Routine tracking stays local.</p>
+        <h3>Keys</h3>
+        <label class="field"><span>TBA auth key</span><input id="tba-key" type="password" placeholder="Optional · saved in this browser" autocomplete="off" /></label>
+        <label class="field"><span>OpenAI API key</span><input id="openai-key" type="password" placeholder="Optional · sk-…" autocomplete="off" /></label>
+        <label class="field"><span>Google / Gemini API key</span><input id="google-key" type="password" placeholder="Optional" autocomplete="off" /></label>
+        <label class="field"><span>AI Gateway key</span><input id="ai-gateway-key" type="password" placeholder="Only if Laya weights are missing" autocomplete="off" /></label>
+      </article>
+      <article class="tool-block">
+        <h3>Field crop</h3>
+        <label class="check"><input id="top-overview-only" type="checkbox" checked /> Top overview only</label>
+        <label class="check"><input id="auto-multicam" type="checkbox" checked /> Propose the crop from the broadcast layout</label>
+        <div class="composer-row">
+          <label class="field"><span>Crop top</span><input id="crop-top" type="number" min="0" max="0.45" step="0.01" value="0.02" /></label>
+          <label class="field"><span>Crop bottom</span><input id="crop-bottom" type="number" min="0.25" max="1" step="0.01" value="0.70" /></label>
+        </div>
+        <div class="crop-lock-row">
+          <button type="button" class="btn tonal small" id="crop-lock-btn">Lock crop</button>
+          <span class="chip ghost" id="crop-lock-status">Auto · unlocked</span>
+        </div>
+        <p class="tool-meta">Lock crop when these numbers should beat the detected widescreen pane. Side cameras never create robot identities.</p>
       </article>
       <article class="tool-block">
         <h3>Updates</h3>
-        <p class="tool-meta">Desktop updates install from the git release channel when managed by Setup.</p>
+        <div class="composer-actions tight">
+          <button type="button" class="btn tonal small" id="settings-check-update">Check for updates</button>
+          <button type="button" class="btn tonal small" id="settings-apply-update">Install update</button>
+        </div>
+        <p class="tool-meta" id="settings-update-status">Desktop updates install from the release channel.</p>
+      </article>
+      <article class="tool-block">
+        <h3>Scout book</h3>
+        <button type="button" class="btn tonal small" id="settings-clear-book">Clear scout book</button>
+        <p class="tool-meta">Removes saved matches and pick ranks in this browser. Notes stay until you clear them on Teams.</p>
       </article>
     </div>
   </section>
@@ -311,7 +300,12 @@
             <span id="time-label">0.0s</span>
           </div>
         </header>
-        <canvas id="field-canvas" width="1302" height="636"></canvas>
+        <div class="field-stage">
+          <canvas id="field-canvas" width="1302" height="636"></canvas>
+          <div class="live-veil" id="live-veil" hidden>
+            <canvas id="live-canvas" aria-hidden="true"></canvas>
+          </div>
+        </div>
         <div class="legend">
           <span><i class="swatch red"></i> Red</span>
           <span><i class="swatch blue"></i> Blue</span>
@@ -324,40 +318,49 @@
       </article>
     </section>
 
-    <section class="pbp-section" id="pbp-section">
-      <header class="section-head">
-        <div>
-          <h2>Play-by-play</h2>
-          <p>Robot, time, field position, and what they were doing. This list exists before the scout model runs.</p>
-        </div>
-        <div class="export-row">
-          <a class="btn tonal small" id="export-json" href="#">Export JSON</a>
-          <a class="btn tonal small" id="export-csv" href="#">Export CSV</a>
-          <button type="button" class="btn tonal small" id="add-match-book">Add match to scout book</button>
-        </div>
-      </header>
-      <ol class="play-by-play" id="play-by-play"></ol>
-    </section>
-
-    <section>
-      <header class="section-head">
-        <h2>Robots</h2>
-        <p id="robots-lede">Six cards from the play-by-play. Role and climb fill in when the local model answers.</p>
-      </header>
-      <p class="suggested-alliance" id="suggested-alliance"></p>
-      <div class="robot-grid" id="robot-grid"></div>
-    </section>
-
     <ul class="warnings" id="warnings"></ul>
+  </main>
 
-    <details class="more-tools" id="more-tools">
-      <summary>More tools</summary>
+  <section class="view-panel page" id="playbook-view" data-view="playbook" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Play-by-play</p>
+        <h2>What each robot did</h2>
+      </div>
+      <div class="export-row">
+        <a class="btn tonal small" id="export-json" href="#">Export JSON</a>
+        <a class="btn tonal small" id="export-csv" href="#">Export CSV</a>
+        <button type="button" class="btn tonal small" id="add-match-book">Add match to scout book</button>
+      </div>
+    </header>
+    <ol class="play-by-play" id="play-by-play"><li><span>Analyze a match from Home. This page fills in as robots are tracked.</span></li></ol>
     <section class="timeline-section">
       <header class="section-head">
         <h2>Auto-scout timeline</h2>
       </header>
       <div class="timeline" id="timeline"></div>
     </section>
+  </section>
+
+  <section class="view-panel page" id="robots-view" data-view="robots" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Robots</p>
+        <h2>Six robot cards</h2>
+      </div>
+    </header>
+    <p class="tool-meta" id="robots-lede">Role and climb fill in when the onboard model answers.</p>
+    <p class="suggested-alliance" id="suggested-alliance"></p>
+    <div class="robot-grid" id="robot-grid"><div class="empty-state"><h3>No robots yet</h3><p>Open Field while a match is tracking, then come back here for the six cards.</p></div></div>
+  </section>
+
+  <section class="view-panel page" id="picklist-view" data-view="picklist" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Pick list</p>
+        <h2>Draft board</h2>
+      </div>
+    </header>
     <section class="scout-tools" id="scout-tools">
       <header class="section-head">
         <h2>Pick list &amp; scout book</h2>
@@ -378,7 +381,18 @@
           <div class="pick-rounds" id="pick-rounds"></div>
           <ol class="pick-ranked" id="pick-ranked"></ol>
         </div>
+      </div>
+    </section>
+  </section>
 
+  <section class="view-panel page" id="compare-view" data-view="compare" hidden>
+    <header class="section-head">
+      <div>
+        <p class="eyebrow">Compare</p>
+        <h2>Alliance</h2>
+      </div>
+    </header>
+    <div class="tools-layout">
         <div class="tool-block">
           <h3>Alliance compare</h3>
           <div class="composer-row compact">
@@ -404,8 +418,9 @@
           <ul class="notes-list" id="notes-list"></ul>
         </div>
       </div>
-    </section>
+  </section>
 
+  <section class="view-panel page" id="tools-view" data-view="tools" hidden>
     <section class="suite-panel" id="suite-panel">
       <header class="section-head">
         <h2>Scout suite</h2>
@@ -533,8 +548,7 @@
         </div>
       </div>
     </section>
-    </details>
-  </main>
+  </section>
 
   <footer class="foot">
     Built for FRC scouting · Not affiliated with FIRST · Scores are read from the match video when possible
